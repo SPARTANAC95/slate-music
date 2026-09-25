@@ -1,0 +1,38 @@
+{
+  "name": "slate-music",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Your music. In its own space. An offline Windows music player.",
+  "author": "SPARTANAC95",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "tauri": "tauri",
+    "dev:app": "tauri dev",
+    "build:app": "node tools/build.mjs",
+    "test": "vitest run",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:ui": "node tools/qa.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-updater": "^2.12.0",
+    "@tanstack/react-virtual": "^3.13.12",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4",
+    "playwright": "^1.55.0"
+  }
+}
