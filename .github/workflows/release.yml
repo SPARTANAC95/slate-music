@@ -19,6 +19,9 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
+      # Historical tags predate .gitattributes; Tauri rewrites Cargo.toml with LF.
+      - name: Keep checkout line endings stable
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref || github.ref }}

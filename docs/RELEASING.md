@@ -20,6 +20,8 @@ Released artifacts are immutable. The workflow refuses to overwrite an existing 
 
 To verify hosted compilation and signing for an existing version, manually run **Signed Windows release** from `main`, set `source_ref` to its tag (for example `v1.0.1`), and leave `verify_only` enabled. This runs tests, builds and signs the exact tagged source, and uploads the results as a workflow artifact. Publication is skipped. For a new release, push its version tag normally; publication verifies that the tag points to the exact built commit.
 
+The release checkout uses LF line endings, including for historical tags. Tauri rewrites `Cargo.toml` with LF during packaging; a CRLF checkout can otherwise appear dirty despite an empty content diff. Source cleanliness is checked both before packaging and while preparing the manifest. Dependency versions remain locked.
+
 ## Local release fallback
 
 ```powershell
