@@ -57,7 +57,7 @@ Raw AAC has limited seeking support. Opus, WMA, APE, DSD and protected files are
 
 ## Built, run, and checked on Windows
 
-Validation includes native playback and seeking, measured gapless sample continuity, queue behavior, restart recovery, folder changes, real Spotify matching, installer/reinstaller checks and a production **1.0.0 → 1.0.1** update retaining the library and paused session. Hosted Windows tests and signed installer verification also passed.
+Version **1.0.2** passed 19 TypeScript tests, 18 native Rust tests, 14 main interface scenarios and 11 focused regression scenarios. Validation includes real playback and seeking, measured gapless continuity, queue/search behavior, restart recovery, folder changes, real Spotify matching and installer/reinstaller checks. Production **1.0.0 → 1.0.1 → 1.0.2** upgrades retained the library and paused session. GitHub Actions tested, built, signed and published the latest installer; its public download and installed upgrade were verified.
 
 The [validation report](docs/VALIDATION.md) records the evidence and remaining limits. Test results describe what was checked, not a guarantee for every device or music file.
 

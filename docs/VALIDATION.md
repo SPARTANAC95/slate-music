@@ -20,7 +20,11 @@ Version 1.0.2 was built and run as a native Windows application. Personal music 
 
 The public website also passed desktop, tablet and 390/320-pixel mobile inspection, screenshot switching, FAQ keyboard operation, reduced-motion behavior, no-JavaScript fallback and asset/link checks. Its public images contain a fictional demonstration collection, not the owner's library. [Website deployment passed](https://github.com/SPARTANAC95/slate-music/actions/runs/36192376775).
 
-The signed local installer built successfully. Hosted publication and the production 1.0.1 → 1.0.2 upgrade are recorded separately after those operations complete. The retained evidence below describes the earlier release and is not presented as new testing of every scenario in 1.0.2.
+[Windows CI passed](https://github.com/SPARTANAC95/slate-music/actions/runs/36195182608), including 19 TypeScript tests and 15 portable Rust tests. [The hosted release workflow passed](https://github.com/SPARTANAC95/slate-music/actions/runs/36195182896): it built source commit `934c5c5a8433e1b59b7a83fd5c7e34c54022e91f`, signed the installer using the encrypted Actions secret and published [version 1.0.2](https://github.com/SPARTANAC95/slate-music/releases/tag/v1.0.2). Anonymous download, checksums, the installed app's trusted signing key, signed version, tamper rejection and the production update endpoint were verified. The published installer is 6,852,980 bytes; its SHA-256 is `3355fcf8fe7ae7a593349fb213808be85dd74d87bc4751314037edff605f8f63`.
+
+The installed 1.0.1 client downloaded and verified that public artifact while native playback continued. Installation remained disabled until paused and required confirmation. It installed and relaunched 1.0.2 with all 615 tracks, playlists/virtual albums, favorites, queue, original position and volume, transport settings, folders, preferences and encrypted Spotify connection preserved. Audio stayed paused, and the new client's latest-version check succeeded.
+
+The retained evidence below describes the earlier release and is not presented as new testing of every scenario in 1.0.2.
 
 ## Earlier 1.0.1 validation
 
@@ -71,7 +75,7 @@ An initial packaging failure was reproduced and fixed: a CRLF checkout appeared 
 
 ## Limits
 
-- The production 1.0.0 → 1.0.1 upgrade was exercised. Interrupted downloads, forced power loss during installation and rollback from a broken future release have not been exhaustively tested.
+- Production 1.0.0 → 1.0.1 and 1.0.1 → 1.0.2 upgrades were exercised. Interrupted downloads, forced power loss during installation and rollback from a broken future release have not been exhaustively tested.
 - Offline validation disabled the WebView network while using native local playback; the physical network adapter was not disconnected. The native audio and SQLite paths perform no network requests. Spotify and update requests intentionally require connectivity.
 - Physical hardware media keys, device unplug/replug recovery, every possible codec/encoder variant, 100,000-track performance and long-duration unattended endurance have not been exhaustively tested.
 - Raw ADTS AAC has limited seeking support. Opus, WMA, APE, protected files, multichannel, exclusive mode and bit-perfect output are not supported. Output is mixed at 48 kHz stereo.
