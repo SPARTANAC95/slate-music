@@ -251,7 +251,7 @@ export default function SettingsPanel({
         <button disabled={!!busy} onClick={() => run('backup', () => invoke('export_backup'))}>
           Export favorites and playlists
         </button>
-        <p className="fine-print">Slate Music 1.0.0 · Built for your own collection.</p>
+        <p className="fine-print">Slate Music 1.0.1 · Built for your own collection.</p>
       </section>
       {message && (
         <p className="inline-error" role="alert">

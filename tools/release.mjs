@@ -74,12 +74,19 @@ async function main() {
   }
   const releaseDir = path.resolve(process.env.SLATE_RELEASE_DIR || '../release');
   fs.mkdirSync(releaseDir, { recursive: true });
-  const installer = `Slate Music_${version}_x64-setup.exe`;
+  const installer = `Slate-Music_${version}_x64-setup.exe`;
   if (command === 'prepare') {
     const head = git(['rev-parse', 'HEAD']);
     if (git(['status', '--porcelain']))
       throw Error('Commit all source changes before preparing a release');
-    const from = path.join('src-tauri', 'target', 'release', 'bundle', 'nsis', installer);
+    const from = path.join(
+      'src-tauri',
+      'target',
+      'release',
+      'bundle',
+      'nsis',
+      `Slate Music_${version}_x64-setup.exe`,
+    );
     for (const ext of ['', '.sig'])
       fs.copyFileSync(from + ext, path.join(releaseDir, installer + ext));
     const signature = fs.readFileSync(from + '.sig', 'utf8').trim();

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1 — 2026-09-25
+
+- Use stable hyphenated release asset names so updater download URLs match GitHub's stored filenames.
+- Retain the same updater signing key and persistent data format.
+
 ## 1.0.0 — 2026-09-25
 
 First Windows release of Slate Music.
