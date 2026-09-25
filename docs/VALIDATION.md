@@ -1,4 +1,4 @@
-# Validation — 1.0.0
+# Validation — 1.0.1
 
 Tested on Windows x64, September 25, 2026. This report distinguishes measured behavior from implementation claims. Original music files were only read; synthetic fixtures and disposable profiles were kept outside the repository.
 
@@ -27,6 +27,9 @@ Tested on Windows x64, September 25, 2026. This report distinguishes measured be
 | Reinstallation | Installer returned 0; the full closed SQLite database retained the exact same SHA-256 hash |
 | Update verification | Actual Tauri updater accepted a signed installer, rejected modified bytes and rejected a changed version in the manifest |
 | Production update safeguards | Production build rejects the debug-only update fixture command; production configuration uses HTTPS and requires the signed version |
+| Published download | Anonymous 1.0.1 download succeeded; SHA-256 matched the locally built installer byte for byte |
+| Real production upgrade | Installed 1.0.0 downloaded and signature-verified published 1.0.1 while playback continued. Installation stayed disabled until paused; after confirmation the installer ran and relaunched 1.0.1 |
+| State after upgrade | All 615 tracks, collections, queue, current song, position, folders, settings and encrypted Spotify connection survived; audio remained paused; latest-version check succeeded |
 | UI inspection | Actual screenshots inspected at 1440×940 and compact 880×620, plus album, songs, queue, settings and mini-player. Hero spacing and compact sidebar clipping fixed |
 | Dependency audit | `npm audit --omit=dev` reported no known production dependency vulnerabilities at test time |
 
@@ -34,9 +37,13 @@ The real-library interface scenarios are in `tools/qa.mjs`. They require a runni
 
 Native fixture tests can be run with `SLATE_AUDIO_FIXTURES` pointing to generated fixtures and `SLATE_TEST_LIBRARY` pointing to a read-only real library, then `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --include-ignored`. Fixture filenames are documented in the test code. Continuous integration runs the portable subset without private music or credentials.
 
+## Release automation
+
+The public source and version tags were pushed successfully. Both GitHub Actions workflows were dispatched, but GitHub refused to start their jobs: “The job was not started because your account is locked due to a billing issue.” No CI test result is claimed. The owner explicitly authorized the updater key to be stored in encrypted Actions secrets; configuration is complete, but the account billing lock must be resolved before hosted automation can run. Releases 1.0.0 and 1.0.1 were signed and published from the tested local Windows build. The failed run is [visible here](https://github.com/SPARTANAC95/slate-music/actions/runs/36182039043).
+
 ## Limits
 
-- A true upgrade from a previously published version to a newer production version cannot be demonstrated for this first release. Signed download verification and same-version installer data preservation were exercised separately.
+- The production 1.0.0 → 1.0.1 upgrade was exercised. Interrupted downloads, forced power loss during installation and rollback from a broken future release have not been exhaustively tested.
 - Offline validation disabled the WebView network while using native local playback; the physical network adapter was not disconnected. The native audio and SQLite paths perform no network requests. Spotify and update requests intentionally require connectivity.
 - Physical hardware media keys, device unplug/replug recovery, every possible codec/encoder variant, 100,000-track performance and long-duration unattended endurance have not been exhaustively tested.
 - Raw ADTS AAC has limited seeking support. Opus, WMA, APE, protected files, multichannel, exclusive mode and bit-perfect output are not supported. Output is mixed at 48 kHz stereo.
