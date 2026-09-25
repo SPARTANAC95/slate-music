@@ -52,7 +52,7 @@ export function rankTrack(remote: SpotifyTrack, local: Track) {
   const kindsA = a.kinds.filter((v) => v !== 'remaster'),
     kindsB = b.kinds.filter((v) => v !== 'remaster');
   const conflict = kindsA.join('|') !== kindsB.join('|');
-  const detailConflict = (kindsA.length > 0 || kindsB.length > 0) && a.detail !== b.detail;
+  const detailConflict = (a.kinds.length > 0 || b.kinds.length > 0) && a.detail !== b.detail;
   const remasterMismatch = a.kinds.includes('remaster') !== b.kinds.includes('remaster');
   let score = title * 0.58 + artist * 0.28 + duration * 0.14;
   if (conflict) score -= 0.45;

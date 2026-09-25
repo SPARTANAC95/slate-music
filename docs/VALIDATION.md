@@ -1,4 +1,28 @@
-# Validation — 1.0.1
+# Validation — 1.0.2
+
+## September 26 reliability pass
+
+Version 1.0.2 was built and run as a native Windows application. Personal music was read only; file removal/return tests used synthetic fixtures in a disposable folder. Test profiles and personal-library screenshots remain outside the public repository.
+
+| Check | Result |
+|---|---|
+| TypeScript and frontend | 19 tests passed; TypeScript and Vite production build passed |
+| Native audio, queue and library | All 18 Rust tests passed, including three local-fixture tests; every one of the 615 real FLAC files decoded and sought successfully |
+| Final native application | All 14 main scenarios in `tools/qa.mjs` passed |
+| Queue interface | Five additional scenarios passed: filtered removal; filtered move/play; duplicate occurrence selection and highlighting; append-to-empty playback; Recently played sorting |
+| Restored queue | Removing the restored current entry selected the correct paused replacement; explicit Play loaded it successfully |
+| Missing files and watcher | Five additional scenarios passed: failed replacement preserved current playback; missing file appeared correctly in the saved-match editor; returning file retained favorite and confirmed match; rescan bursts and a new file were handled; a short-file transition advanced the queue |
+| Restart persistence | Queue, current track, playback position, favorites, collections and transport settings survived; audio stayed paused |
+| Windows audio output | Per-process meter returned 30 nonzero samples, peak 0.1483 at application volume 0.15; signal output was measured, not subjective listening quality |
+| Updater regression tests | Verified downloaded artifact survives later checks; failed checks cannot reuse stale artifacts; operations are serialized; download/install failures can be retried |
+| Matching regressions | Different remaster details require review; unavailable saved matches display missing without overwriting their confirmed identity |
+| Visual inspection | Inspected final queue, missing-match, Home and compact-window screenshots; controls and content remained visible |
+
+The public website also passed desktop, tablet and 390/320-pixel mobile inspection, screenshot switching, FAQ keyboard operation, reduced-motion behavior, no-JavaScript fallback and asset/link checks. Its public images contain a fictional demonstration collection, not the owner's library. [Website deployment passed](https://github.com/SPARTANAC95/slate-music/actions/runs/36192376775).
+
+The signed local installer built successfully. Hosted publication and the production 1.0.1 → 1.0.2 upgrade are recorded separately after those operations complete. The retained evidence below describes the earlier release and is not presented as new testing of every scenario in 1.0.2.
+
+## Earlier 1.0.1 validation
 
 Tested on Windows x64, September 25, 2026. This report distinguishes measured behavior from implementation claims. Original music files were only read; synthetic fixtures and disposable profiles were kept outside the repository.
 

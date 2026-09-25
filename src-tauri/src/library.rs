@@ -6,7 +6,7 @@ use lofty::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -28,6 +28,7 @@ pub struct ScanStatus {
 pub struct Library {
     pub status: Mutex<ScanStatus>,
     busy: AtomicBool,
+    pending: AtomicBool,
     pub watchers: Mutex<Vec<notify::RecommendedWatcher>>,
 }
 impl Library {
@@ -35,8 +36,17 @@ impl Library {
         Self {
             status: Mutex::new(ScanStatus::default()),
             busy: AtomicBool::new(false),
+            pending: AtomicBool::new(false),
             watchers: Mutex::new(Vec::new()),
         }
+    }
+    fn request_scan(&self) -> bool {
+        self.pending.store(true, Ordering::SeqCst);
+        !self.busy.swap(true, Ordering::SeqCst)
+    }
+    fn continue_scan(&self) -> bool {
+        self.busy.store(false, Ordering::SeqCst);
+        self.pending.load(Ordering::SeqCst) && !self.busy.swap(true, Ordering::SeqCst)
     }
 }
 pub fn id_for(path: &Path) -> String {
@@ -159,6 +169,10 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
         ..Default::default()
     };
     let known = db.tracks().unwrap_or_default();
+    let known_by_id: HashMap<_, _> = known
+        .iter()
+        .map(|track| (track.id.as_str(), track))
+        .collect();
     for folder in db.folders() {
         let root = Path::new(&folder);
         let mut seen = HashSet::new();
@@ -205,7 +219,7 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
             if !db.unchanged(&id, mtime, meta.len()) {
                 match read_track(path, &folder, db) {
                     Ok(mut t) => {
-                        if let Some(old) = known.iter().find(|o| o.id == id) {
+                        if let Some(old) = known_by_id.get(id.as_str()) {
                             t.added = old.added;
                         }
                         if let Err(e) = db.upsert(&t, mtime) {
@@ -244,20 +258,23 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
     status
 }
 pub fn start_scan(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
-    if lib.busy.swap(true, Ordering::SeqCst) {
+    if !lib.request_scan() {
         return;
     }
     *lib.status.lock().unwrap() = ScanStatus {
         scanning: true,
         ..Default::default()
     };
-    std::thread::spawn(move || {
+    std::thread::spawn(move || loop {
+        lib.pending.store(false, Ordering::SeqCst);
         scan(&db, |s| {
             *lib.status.lock().unwrap() = s.clone();
             let _ = app.emit("scan", s);
         });
-        lib.busy.store(false, Ordering::SeqCst);
         let _ = app.emit("library-changed", ());
+        if !lib.continue_scan() {
+            break;
+        }
     });
 }
 pub fn watch(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
@@ -294,6 +311,18 @@ pub fn watch(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scan_requests_arriving_during_a_scan_are_not_dropped() {
+        let library = Library::new();
+        assert!(library.request_scan());
+        library.pending.store(false, Ordering::SeqCst);
+        assert!(!library.request_scan());
+        assert!(!library.request_scan());
+        assert!(library.continue_scan());
+        library.pending.store(false, Ordering::SeqCst);
+        assert!(!library.continue_scan());
+        assert!(library.request_scan());
+    }
     #[test]
     fn incremental_scan_missing_and_returning_file() {
         let d = tempfile::tempdir().unwrap();

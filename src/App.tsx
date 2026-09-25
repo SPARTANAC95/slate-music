@@ -50,6 +50,7 @@ import {
   entryFrom,
   normalize,
   playable,
+  queueEntries,
   time,
 } from './library';
 import { Art, Empty, IconButton, Modal, TrackTable } from './components';
@@ -96,6 +97,7 @@ export default function App() {
     [page, setPage] = useState<Page>('Home'),
     [query, setQuery] = useState(''),
     [sort, setSort] = useState('title'),
+    [recentSort, setRecentSort] = useState('recent'),
     [filter, setFilter] = useState('all'),
     [selectedAlbum, setSelectedAlbum] = useState(''),
     [selectedArtist, setSelectedArtist] = useState(''),
@@ -248,7 +250,13 @@ export default function App() {
     () => tracks.filter((t) => t.lastPlayed > 0).sort((a, b) => b.lastPlayed - a.lastPlayed),
     [tracks],
   );
+  const visibleQueue = useMemo(
+    () => (page === 'Queue' ? queueEntries(pb?.queue || [], trackMap, deferredQuery) : []),
+    [page, pb?.queue, trackMap, deferredQuery],
+  );
+  const sortMode = page === 'Recently played' ? recentSort : sort;
   const shownTracks = useMemo(() => {
+    if (page === 'Queue') return visibleQueue.map((entry) => entry.track);
     let result =
       page === 'Favorites'
         ? tracks.filter((t) => t.favorite)
@@ -260,9 +268,7 @@ export default function App() {
               ? tracks.filter((t) => t.albumArtist === selectedArtist)
               : page === 'Collection' && collection
                 ? playable(collection, tracks)
-                : page === 'Queue'
-                  ? pb?.queue.map((id) => trackMap.get(id)).filter((t): t is Track => !!t) || []
-                  : tracks;
+                : tracks;
     if (deferredQuery)
       result = result.filter((t) =>
         normalize(`${t.title} ${t.artist} ${t.album}`).includes(normalize(deferredQuery)),
@@ -272,22 +278,24 @@ export default function App() {
     if (filter === 'lossless')
       result = result.filter((t) => ['FLAC', 'WAV', 'AIF', 'AIFF'].includes(t.format));
     if (filter === 'duplicates') result = result.filter((t) => duplicateIds.has(t.id));
-    if (['Songs', 'Favorites'].includes(page) || deferredQuery) {
+    if (['Songs', 'Favorites', 'Recently played'].includes(page) || deferredQuery) {
       result = [...result].sort((a, b) =>
-        sort === 'artist'
-          ? a.artist.localeCompare(b.artist) ||
-            a.album.localeCompare(b.album) ||
-            a.disc - b.disc ||
-            a.track - b.track
-          : sort === 'album'
-            ? a.album.localeCompare(b.album) || a.disc - b.disc || a.track - b.track
-            : sort === 'added'
-              ? b.added - a.added
-              : sort === 'duration'
-                ? b.duration - a.duration
-                : sort === 'plays'
-                  ? b.playCount - a.playCount
-                  : a.title.localeCompare(b.title),
+        sortMode === 'recent'
+          ? b.lastPlayed - a.lastPlayed
+          : sortMode === 'artist'
+            ? a.artist.localeCompare(b.artist) ||
+              a.album.localeCompare(b.album) ||
+              a.disc - b.disc ||
+              a.track - b.track
+            : sortMode === 'album'
+              ? a.album.localeCompare(b.album) || a.disc - b.disc || a.track - b.track
+              : sortMode === 'added'
+                ? b.added - a.added
+                : sortMode === 'duration'
+                  ? b.duration - a.duration
+                  : sortMode === 'plays'
+                    ? b.playCount - a.playCount
+                    : a.title.localeCompare(b.title),
       );
     }
     return result;
@@ -302,8 +310,9 @@ export default function App() {
     trackMap,
     deferredQuery,
     filter,
-    sort,
+    sortMode,
     duplicateIds,
+    visibleQueue,
   ]);
   function navigate(p: Page) {
     setPage(p);
@@ -399,6 +408,9 @@ export default function App() {
       }
       compact={compact}
       queue={isQueue}
+      rowIndices={isQueue ? visibleQueue.map((entry) => entry.index) : undefined}
+      currentIndex={isQueue ? pb?.cursor : undefined}
+      queueLength={isQueue ? pb?.queue.length : undefined}
       onMove={(from, to) => command('move', { from, to })}
       onRemove={(i) => command('remove', i)}
     />
@@ -423,7 +435,7 @@ export default function App() {
         className="play-button"
         aria-label={pb?.playing ? 'Pause' : 'Play'}
         onClick={() => command('toggle')}
-        disabled={!pb?.currentId}
+        disabled={!pb?.queue.length}
       >
         {pb?.playing ? (
           <Pause size={22} fill="currentColor" />
@@ -653,12 +665,12 @@ export default function App() {
             <Search size={17} />
             <input
               ref={searchRef}
-              placeholder="Search your music"
-              aria-label="Search your music"
+              placeholder={page === 'Queue' ? 'Search queue' : 'Search your music'}
+              aria-label={page === 'Queue' ? 'Search queue' : 'Search your music'}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
-                if (page !== 'Songs') {
+                if (page !== 'Songs' && page !== 'Queue') {
                   setPage('Songs');
                   setFilter('all');
                 }
@@ -1074,9 +1086,14 @@ export default function App() {
                   </div>
                   <select
                     aria-label="Sort songs"
-                    value={sort}
-                    onChange={(e) => setSort(e.target.value)}
+                    value={sortMode}
+                    onChange={(e) =>
+                      page === 'Recently played'
+                        ? setRecentSort(e.target.value)
+                        : setSort(e.target.value)
+                    }
                   >
+                    {page === 'Recently played' && <option value="recent">Last played</option>}
                     <option value="title">Title</option>
                     <option value="artist">Artist</option>
                     <option value="album">Album order</option>
@@ -1387,7 +1404,7 @@ export default function App() {
               <div className="button-row">
                 <button
                   className="primary"
-                  disabled={pb.playing}
+                  disabled={pb.playing || updater.busy}
                   onClick={() =>
                     task(async () => {
                       await command('pause');

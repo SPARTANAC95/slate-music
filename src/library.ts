@@ -49,11 +49,24 @@ export const entryFrom = (t: Track): Entry => ({
   duration: t.duration,
   status: t.missing ? 'missing' : 'available',
 });
+export function entryStatus(entry: Entry, tracks: Map<string, Track>): Entry['status'] {
+  const track = entry.trackId ? tracks.get(entry.trackId) : undefined;
+  return entry.status === 'available' && (!track || track.missing) ? 'missing' : entry.status;
+}
 export function playable(c: Collection, tracks: Track[]): Track[] {
   const map = new Map(tracks.map((t) => [t.id, t]));
   return c.entries.flatMap((e) => {
     const t = e.trackId ? map.get(e.trackId) : null;
     return e.status === 'available' && t && !t.missing ? [t] : [];
+  });
+}
+export function queueEntries(ids: string[], tracks: Map<string, Track>, query = '') {
+  const needle = normalize(query);
+  return ids.flatMap((id, index) => {
+    const track = tracks.get(id);
+    return track && normalize(`${track.title} ${track.artist} ${track.album}`).includes(needle)
+      ? [{ track, index }]
+      : [];
   });
 }
 export function duplicates(tracks: Track[]): Set<string> {

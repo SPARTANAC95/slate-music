@@ -3,6 +3,7 @@ use rand::seq::SliceRandom;
 use rodio::{source::UniformSourceIterator, Decoder, OutputStreamBuilder, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs::File,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -86,6 +87,26 @@ pub struct RenderState {
     pub next_attempt: Option<(u64, usize)>,
 }
 impl RenderState {
+    fn remove_queued(&mut self, index: usize) {
+        let cursor = self.snapshot().cursor;
+        self.state.queue.remove(index);
+        let next_cursor = cursor
+            .saturating_sub(usize::from(index < cursor))
+            .min(self.state.queue.len().saturating_sub(1));
+        self.state.cursor = next_cursor;
+        if let Some(deck) = self.current.as_mut() {
+            deck.index = next_cursor;
+        }
+        self.state.current_id = self.state.queue.get(next_cursor).cloned();
+        if index == cursor && self.current.is_none() {
+            self.state.position = 0.;
+            self.state.duration = 0.;
+            self.state.playing = false;
+        }
+        self.next = None;
+        self.epoch += 1;
+        self.next_attempt = None;
+    }
     fn snapshot(&self) -> Playback {
         let mut s = self.state.clone();
         if let Some(d) = &self.current {
@@ -123,7 +144,12 @@ impl RenderState {
             return 0.;
         };
         if let Some(mut sample) = current.source.next() {
-            let fade = self.state.crossfade.min(current.duration / 2.).max(0.);
+            let fade = self
+                .state
+                .crossfade
+                .min(current.duration / 2.)
+                .min(self.next.as_ref().map(|d| d.duration / 2.).unwrap_or(0.))
+                .max(0.);
             let remaining = current.duration - current.position();
             if fade > 0. && remaining <= fade {
                 if let Some(next) = self.next.as_mut() {
@@ -182,9 +208,25 @@ impl Engine {
         let mut state: Playback = serde_json::from_value(db.get("session")).unwrap_or_default();
         state.playing = false;
         state.engine_ready = false;
+        state.system_controls = false;
         state.error = None;
         state.volume = state.volume.clamp(0., 1.);
         state.crossfade = state.crossfade.clamp(0., 12.);
+        if state.queue.is_empty() {
+            state.current_id = None;
+            state.cursor = 0;
+            state.position = 0.;
+            state.duration = 0.;
+        } else if state.queue.get(state.cursor) != state.current_id.as_ref() {
+            state.cursor = state
+                .current_id
+                .as_ref()
+                .and_then(|id| state.queue.iter().position(|entry| entry == id))
+                .unwrap_or(state.cursor.min(state.queue.len() - 1));
+            state.current_id = state.queue.get(state.cursor).cloned();
+            state.position = 0.;
+            state.duration = 0.;
+        }
         Arc::new(Self {
             render: Arc::new(Mutex::new(RenderState {
                 state,
@@ -269,32 +311,49 @@ impl Engine {
                         return Err("Queue is too large".into());
                     }
                     let requested = value["index"].as_u64().unwrap_or(0) as usize;
-                    let selected = ids.get(requested).cloned();
-                    let tracks = self.db.tracks()?;
-                    let mut valid: Vec<String> = ids
+                    let available: HashSet<String> = self
+                        .db
+                        .tracks()?
                         .into_iter()
-                        .filter(|id| tracks.iter().any(|t| &t.id == id && !t.missing))
+                        .filter(|t| !t.missing)
+                        .map(|t| t.id)
                         .collect();
+                    let mut valid = Vec::with_capacity(ids.len());
+                    let mut index = 0;
+                    for (original_index, id) in ids.into_iter().enumerate() {
+                        if available.contains(&id) {
+                            if original_index == requested {
+                                index = valid.len();
+                            }
+                            valid.push(id);
+                        }
+                    }
                     if valid.is_empty() {
                         return Err("No available files in this selection".into());
                     }
-                    let mut index = selected
-                        .and_then(|id| valid.iter().position(|s| *s == id))
-                        .unwrap_or(0);
+                    if self.snapshot().shuffle {
+                        let current = valid.remove(index);
+                        valid.shuffle(&mut rand::rng());
+                        valid.insert(0, current);
+                        index = 0;
+                    }
+                    // Decode first: an unavailable replacement must not destroy the current session.
+                    let deck = self.prepare(&valid[index], index)?;
                     {
                         let mut r = self.render.lock().unwrap();
-                        if r.state.shuffle {
-                            let current = valid.remove(index);
-                            valid.shuffle(&mut rand::rng());
-                            valid.insert(0, current);
-                            index = 0;
-                        }
                         r.state.queue = valid;
-                        r.current = None;
+                        r.state.cursor = index;
+                        r.state.current_id = Some(deck.id.clone());
+                        r.state.position = 0.;
+                        r.state.duration = deck.duration;
+                        r.state.playing = true;
+                        r.state.error = None;
+                        r.current = Some(deck);
                         r.next = None;
                         r.epoch += 1;
+                        r.transition += 1;
+                        r.next_attempt = None;
                     }
-                    self.load(index, 0., true)?;
                 }
                 "play" | "toggle" => {
                     let s = self.snapshot();
@@ -393,7 +452,16 @@ impl Engine {
                         return Err("That file is unavailable".into());
                     }
                     let mut r = self.render.lock().unwrap();
+                    if r.state.queue.len() >= 100000 {
+                        return Err("Queue is too large".into());
+                    }
                     r.state.queue.push(id.into());
+                    if r.state.current_id.is_none() {
+                        r.state.cursor = 0;
+                        r.state.current_id = r.state.queue.first().cloned();
+                        r.state.position = 0.;
+                        r.state.duration = t.duration;
+                    }
                     r.next = None;
                     r.epoch += 1;
                     r.next_attempt = None;
@@ -407,18 +475,7 @@ impl Engine {
                     if index == r.snapshot().cursor && r.current.is_some() {
                         return Err("Skip the playing song before removing it".into());
                     }
-                    r.state.queue.remove(index);
-                    if index < r.state.cursor {
-                        r.state.cursor -= 1
-                    }
-                    if let Some(d) = &mut r.current {
-                        if index < d.index {
-                            d.index -= 1;
-                        }
-                    }
-                    r.next = None;
-                    r.epoch += 1;
-                    r.next_attempt = None;
+                    r.remove_queued(index);
                 }
                 "move" => {
                     let from = value["from"].as_u64().ok_or("Missing source")? as usize;
@@ -595,8 +652,7 @@ impl Engine {
                             if r.epoch == epoch {
                                 r.state.error = Some(e);
                                 if index != r.snapshot().cursor && index < r.state.queue.len() {
-                                    r.state.queue.remove(index);
-                                    r.next_attempt = None;
+                                    r.remove_queued(index);
                                 }
                             }
                         }
@@ -708,6 +764,150 @@ mod tests {
         assert_eq!(r.next_index(), None);
         r.state.repeat = "all".into();
         assert_eq!(r.next_index(), Some(0));
+    }
+    fn test_engine() -> (tempfile::TempDir, Arc<Engine>) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("profile")).unwrap());
+        for id in ["a", "b", "c"] {
+            let path = dir.path().join(format!("{id}.wav"));
+            let mut writer = hound::WavWriter::create(
+                &path,
+                hound::WavSpec {
+                    channels: 2,
+                    sample_rate: RATE,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                },
+            )
+            .unwrap();
+            for _ in 0..RATE * 4 {
+                writer.write_sample(100i16).unwrap();
+            }
+            writer.finalize().unwrap();
+            db.upsert(
+                &Track {
+                    id: id.into(),
+                    path: path.to_string_lossy().into(),
+                    title: id.into(),
+                    duration: 2.,
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        }
+        let engine = Engine::new(db);
+        engine.render.lock().unwrap().state.engine_ready = true;
+        (dir, engine)
+    }
+    #[test]
+    fn duplicate_queue_selection_keeps_the_requested_occurrence() {
+        let (_dir, engine) = test_engine();
+        let state = engine
+            .command("queue", serde_json::json!({"ids":["a","b","a"],"index":2}))
+            .unwrap();
+        assert_eq!(state.cursor, 2);
+        assert_eq!(state.current_id.as_deref(), Some("a"));
+    }
+    #[test]
+    fn failed_queue_replacement_preserves_the_current_session() {
+        let (dir, engine) = test_engine();
+        engine
+            .command("queue", serde_json::json!({"ids":["a","b"],"index":0}))
+            .unwrap();
+        std::fs::remove_file(dir.path().join("c.wav")).unwrap();
+        assert!(engine
+            .command("queue", serde_json::json!({"ids":["c"],"index":0}))
+            .is_err());
+        let state = engine.snapshot();
+        assert_eq!(state.queue, vec!["a", "b"]);
+        assert_eq!(state.current_id.as_deref(), Some("a"));
+        assert!(state.playing);
+        assert!(engine.db.track("c").unwrap().missing);
+    }
+    #[test]
+    fn removing_restored_current_track_selects_a_valid_paused_replacement() {
+        let (_dir, engine) = test_engine();
+        engine.db.set("session", &serde_json::json!({"queue":["a","b"],"cursor":1,"currentId":"b","position":1.2,"duration":2.})).unwrap();
+        let restored = Engine::new(engine.db.clone());
+        restored.render.lock().unwrap().state.engine_ready = true;
+        let state = restored.command("remove", serde_json::json!(1)).unwrap();
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.current_id.as_deref(), Some("a"));
+        assert_eq!(state.position, 0.);
+        assert!(!state.playing);
+        let saved = Engine::new(engine.db.clone()).snapshot();
+        assert_eq!(saved.current_id, state.current_id);
+        assert_eq!(saved.cursor, state.cursor);
+        assert!(
+            restored
+                .command("play", serde_json::Value::Null)
+                .unwrap()
+                .playing
+        );
+    }
+    #[test]
+    fn removing_the_only_restored_track_clears_current_state() {
+        let (_dir, engine) = test_engine();
+        engine
+            .db
+            .set(
+                "session",
+                &serde_json::json!({"queue":["a"],"currentId":"a","position":1.}),
+            )
+            .unwrap();
+        let restored = Engine::new(engine.db.clone());
+        let state = restored.command("remove", serde_json::json!(0)).unwrap();
+        assert!(state.queue.is_empty());
+        assert!(state.current_id.is_none());
+        assert_eq!(state.position, 0.);
+    }
+    #[test]
+    fn failed_repeat_wrap_preload_remaps_the_playing_position() {
+        let mut r = render();
+        r.state.queue = vec!["missing".into(), "b".into(), "a".into()];
+        r.state.repeat = "all".into();
+        r.current.as_mut().unwrap().index = 2;
+        r.remove_queued(0);
+        assert_eq!(r.snapshot().cursor, 1);
+        assert_eq!(r.snapshot().current_id.as_deref(), Some("a"));
+        assert_eq!(r.next_index(), Some(0));
+        assert!(r.next.is_none());
+    }
+    #[test]
+    fn crossfade_does_not_consume_an_entire_short_next_track() {
+        let mut r = render();
+        r.next = Some(deck("b", 1, 0.5, 48));
+        r.state.crossfade = 0.005;
+        for _ in 0..961 {
+            r.sample();
+        }
+        assert_eq!(r.snapshot().current_id.as_deref(), Some("b"));
+        assert!(r.state.playing);
+        assert!(r.current.as_ref().unwrap().samples < 96);
+    }
+    #[test]
+    fn appending_to_an_empty_queue_selects_a_paused_track() {
+        let (_dir, engine) = test_engine();
+        let state = engine.command("append", serde_json::json!("a")).unwrap();
+        assert_eq!(state.current_id.as_deref(), Some("a"));
+        assert!(!state.playing);
+        assert!(
+            engine
+                .command("play", serde_json::Value::Null)
+                .unwrap()
+                .playing
+        );
+    }
+    #[test]
+    fn repairs_stale_queue_positions_from_older_saved_sessions() {
+        let (_dir, engine) = test_engine();
+        engine.db.set("session", &serde_json::json!({"queue":["a"],"cursor":8,"currentId":"gone","position":99.,"playing":true})).unwrap();
+        let repaired = Engine::new(engine.db.clone()).snapshot();
+        assert_eq!(repaired.cursor, 0);
+        assert_eq!(repaired.current_id.as_deref(), Some("a"));
+        assert_eq!(repaired.position, 0.);
+        assert!(!repaired.playing);
     }
     #[test]
     #[ignore = "Requires locally generated codec fixtures in SLATE_AUDIO_FIXTURES"]

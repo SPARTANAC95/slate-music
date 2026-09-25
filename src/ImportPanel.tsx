@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ArrowLeft, ArrowUp, ArrowDown, Check, Link2, Search, X, ExternalLink } from 'lucide-react';
 import type { Collection, Entry, SpotifyAlbum, Track } from './types';
 import { matchTracks } from './matching';
-import { normalize, time, reorder } from './library';
+import { normalize, time, reorder, entryStatus } from './library';
 import { Art, IconButton } from './components';
 export default function ImportPanel({
   tracks,
@@ -148,7 +148,8 @@ export default function ImportPanel({
           <div className="match-summary">
             {(['available', 'uncertain', 'missing'] as const).map((status) => (
               <span key={status} className={`status ${status}`}>
-                {collection.entries.filter((e) => e.status === status).length} {status}
+                {collection.entries.filter((e) => entryStatus(e, trackMap) === status).length}{' '}
+                {status}
               </span>
             ))}
           </div>
@@ -159,6 +160,7 @@ export default function ImportPanel({
           <div className="import-tracks">
             {collection.entries.map((e, i) => {
               const t = e.trackId ? trackMap.get(e.trackId) : null;
+              const status = entryStatus(e, trackMap);
               return (
                 <div className="import-row" key={`${e.spotifyId || e.trackId}-${i}`}>
                   <span className="index">{i + 1}</span>
@@ -167,22 +169,22 @@ export default function ImportPanel({
                     <small>
                       {e.artist} · {time(e.duration)}
                     </small>
-                    <small className={e.status === 'available' ? 'muted' : 'amber'}>
+                    <small className={status === 'available' ? 'muted' : 'amber'}>
                       {t
-                        ? `${t.title} · ${t.album}`
+                        ? `${t.title} · ${t.album}${t.missing ? ' · File unavailable' : ''}`
                         : e.candidates?.[0]?.reason || 'No matching local file'}
                     </small>
                   </div>
                   <button
-                    className={`status ${e.status}`}
+                    className={`status ${status}`}
                     onClick={() => {
                       setPicking(i);
                       setQuery('');
                     }}
                   >
-                    {e.status === 'available'
+                    {status === 'available'
                       ? 'Matched'
-                      : e.status === 'uncertain'
+                      : status === 'uncertain'
                         ? 'Review match'
                         : 'Find file'}
                   </button>

@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { matchTracks } from '../src/matching';
-import { albumsFrom, playable, reorder } from '../src/library';
+import {
+  albumsFrom,
+  playable,
+  reorder,
+  queueEntries,
+  entryStatus,
+  entryFrom,
+} from '../src/library';
 import type { Track, SpotifyTrack, Collection } from '../src/types';
 const local = (p: Partial<Track> = {}): Track => ({
   id: 'a',
@@ -63,6 +70,14 @@ describe('Spotify local matching', () => {
   });
   it('flags ambiguous duplicates', () =>
     expect(matchTracks([remote()], [local(), local({ id: 'b' })])[0].status).toBe('uncertain'));
+  it('requires review when two remasters name different releases', () => {
+    expect(
+      matchTracks(
+        [remote({ name: 'Black Hole Sun (2014 Remaster)' })],
+        [local({ title: 'Black Hole Sun (2024 Remaster)' })],
+      )[0].status,
+    ).toBe('uncertain');
+  });
   it('excludes missing files', () =>
     expect(matchTracks([remote()], [local({ missing: true })])[0].status).toBe('missing'));
   it('flags large duration differences', () =>
@@ -77,6 +92,42 @@ describe('Spotify local matching', () => {
     ).toBe('available'));
 });
 describe('library ordering and queues', () => {
+  it('shows unavailable saved matches as missing without discarding their confirmed identity', () => {
+    const track = local();
+    const entry = entryFrom(track);
+    expect(entryStatus(entry, new Map())).toBe('missing');
+    expect(entryStatus(entry, new Map([[track.id, { ...track, missing: true }]]))).toBe('missing');
+    expect(entry.trackId).toBe(track.id);
+    expect(entry.status).toBe('available');
+    expect(entryStatus(entry, new Map([[track.id, track]]))).toBe('available');
+    expect(entryStatus({ ...entry, status: 'uncertain' }, new Map([[track.id, track]]))).toBe(
+      'uncertain',
+    );
+  });
+  it('keeps original queue positions through search, duplicate entries and unknown IDs', () => {
+    const a = local(),
+      b = local({ id: 'b', title: 'Spoonman' });
+    const rows = queueEntries(
+      ['gone', 'a', 'b', 'a'],
+      new Map([
+        [a.id, a],
+        [b.id, b],
+      ]),
+      'black hole',
+    );
+    expect(rows.map((r) => r.index)).toEqual([1, 3]);
+    expect(rows.map((r) => r.track.id)).toEqual(['a', 'a']);
+    expect(
+      queueEntries(
+        ['a', 'b'],
+        new Map([
+          [a.id, a],
+          [b.id, b],
+        ]),
+        'SPOONMAN',
+      )[0].index,
+    ).toBe(1);
+  });
   it('orders multidisc albums by disc then track', () =>
     expect(
       albumsFrom([

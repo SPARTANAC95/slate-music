@@ -201,12 +201,16 @@ export default function SettingsPanel({
         />
         <p aria-live="polite">{updater.status}</p>
         <div className="button-row">
-          <button onClick={() => updater.checkNow(settings.autoDownload)}>Check now</button>
+          <button disabled={updater.busy} onClick={() => updater.checkNow(settings.autoDownload)}>
+            Check now
+          </button>
           {updater.available && !updater.ready && (
-            <button onClick={updater.download}>Download update</button>
+            <button disabled={updater.busy} onClick={updater.download}>
+              Download update
+            </button>
           )}
           {updater.ready && (
-            <button className="primary" disabled={pb.playing} onClick={onInstall}>
+            <button className="primary" disabled={pb.playing || updater.busy} onClick={onInstall}>
               Install and restart
             </button>
           )}

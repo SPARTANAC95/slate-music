@@ -159,6 +159,9 @@ export function TrackTable({
   onRemove,
   compact = false,
   queue = false,
+  rowIndices,
+  currentIndex,
+  queueLength,
 }: {
   tracks: Track[];
   currentId?: string | null;
@@ -171,6 +174,9 @@ export function TrackTable({
   onRemove?: (index: number) => void;
   compact?: boolean;
   queue?: boolean;
+  rowIndices?: number[];
+  currentIndex?: number;
+  queueLength?: number;
 }) {
   const parent = useRef<HTMLDivElement>(null);
   const virtual = useVirtualizer({
@@ -196,7 +202,8 @@ export function TrackTable({
         <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
           {virtual.getVirtualItems().map((row) => {
             const t = tracks[row.index];
-            const active = currentId === t.id;
+            const index = rowIndices?.[row.index] ?? row.index;
+            const active = queue ? currentIndex === index : currentId === t.id;
             return (
               <div
                 key={`${t.id}-${row.index}`}
@@ -209,13 +216,13 @@ export function TrackTable({
                   height: row.size,
                   transform: `translateY(${row.start}px)`,
                 }}
-                onDoubleClick={() => !t.missing && onPlay(row.index)}
+                onDoubleClick={() => !t.missing && onPlay(index)}
               >
                 <button
                   className="row-number"
                   disabled={t.missing}
                   aria-label={`Play ${t.title}`}
-                  onClick={() => onPlay(row.index)}
+                  onClick={() => onPlay(index)}
                 >
                   {active && playing ? (
                     <span className="equalizer">
@@ -225,7 +232,7 @@ export function TrackTable({
                     </span>
                   ) : (
                     <>
-                      <span>{String(row.index + 1).padStart(2, '0')}</span>
+                      <span>{String(index + 1).padStart(2, '0')}</span>
                       <Play className="row-play" size={15} />
                     </>
                   )}
@@ -235,7 +242,7 @@ export function TrackTable({
                   <div>
                     <button
                       className="text-button song-title"
-                      onClick={() => onPlay(row.index)}
+                      onClick={() => onPlay(index)}
                       disabled={t.missing}
                     >
                       {t.title}
@@ -255,21 +262,21 @@ export function TrackTable({
                     <>
                       <IconButton
                         label={`Move ${t.title} up`}
-                        onClick={() => onMove?.(row.index, row.index - 1)}
-                        disabled={row.index === 0}
+                        onClick={() => onMove?.(index, index - 1)}
+                        disabled={index === 0}
                       >
                         <ArrowUp size={15} />
                       </IconButton>
                       <IconButton
                         label={`Move ${t.title} down`}
-                        onClick={() => onMove?.(row.index, row.index + 1)}
-                        disabled={row.index === tracks.length - 1}
+                        onClick={() => onMove?.(index, index + 1)}
+                        disabled={index === (queueLength ?? tracks.length) - 1}
                       >
                         <ArrowDown size={15} />
                       </IconButton>
                       <IconButton
                         label={`Remove ${t.title} from queue`}
-                        onClick={() => onRemove?.(row.index)}
+                        onClick={() => onRemove?.(index)}
                       >
                         <X size={15} />
                       </IconButton>
