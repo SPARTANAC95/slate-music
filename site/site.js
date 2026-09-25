@@ -1,7 +1,19 @@
 const views = {
-  home: { file: 'player-home.png', alt: 'Slate Music Home, showing album artwork, a local music library and the listening queue', caption: 'Actual app. Original demo collection.' },
-  albums: { file: 'player-albums.png', alt: 'Slate Music Albums, showing six original demo album covers organized in a library', caption: 'Your albums, with room for the artwork.' },
-  queue: { file: 'player-queue.png', alt: 'Slate Music Queue, with an ordered list of demo tracks and playback controls', caption: 'An editable queue. A session that stays with you.' },
+  home: {
+    file: 'player-home.png',
+    alt: 'Slate Music Home, showing album artwork, a local music library and the listening queue',
+    caption: 'Actual app. Original demo collection.',
+  },
+  albums: {
+    file: 'player-albums.png',
+    alt: 'Slate Music Albums, showing six original demo album covers organized in a library',
+    caption: 'Your albums, with room for the artwork.',
+  },
+  queue: {
+    file: 'player-queue.png',
+    alt: 'Slate Music Queue, with an ordered list of demo tracks and playback controls',
+    caption: 'An editable queue. A session that stays with you.',
+  },
 };
 const image = document.querySelector('#player-screenshot');
 const caption = document.querySelector('#view-caption');
