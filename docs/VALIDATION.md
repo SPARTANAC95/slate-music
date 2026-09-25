@@ -39,7 +39,11 @@ Native fixture tests can be run with `SLATE_AUDIO_FIXTURES` pointing to generate
 
 ## Release automation
 
-The public source and version tags were pushed successfully. Both GitHub Actions workflows were dispatched, but GitHub refused to start their jobs: “The job was not started because your account is locked due to a billing issue.” No CI test result is claimed. The owner explicitly authorized the updater key to be stored in encrypted Actions secrets; configuration is complete, but the account billing lock must be resolved before hosted automation can run. Releases 1.0.0 and 1.0.1 were signed and published from the tested local Windows build. The failed run is [visible here](https://github.com/SPARTANAC95/slate-music/actions/runs/36182039043).
+The owner resolved the initial GitHub billing block on September 25, 2026. [Windows CI passed](https://github.com/SPARTANAC95/slate-music/actions/runs/36187070441): 12 Vitest tests, six portable Rust tests, the production frontend build and Rust formatting. The three native tests requiring local audio fixtures are intentionally excluded from hosted CI and passed locally as recorded above.
+
+[Hosted release verification also passed](https://github.com/SPARTANAC95/slate-music/actions/runs/36187070416). It built the exact `v1.0.1` source commit (`07dab83bdb924e4fd6020757db26c8d6db89527c`), signed the Windows installer using the encrypted Actions secret, prepared the update manifest and checksums, and uploaded the verification artifact. Independent download verification confirmed the checksums, the signature against the public key trusted by the installed app, the signed version and rejection of modified installer bytes. The artifact was 6,849,238 bytes.
+
+An initial packaging failure was reproduced and fixed: a CRLF checkout appeared dirty after Tauri rewrote `Cargo.toml` with LF, despite an empty content diff. The workflow now uses consistent line endings, locked dependencies and strict source-cleanliness checks. Existing release artifacts were preserved. Published 1.0.0 and 1.0.1 were originally built, tested, signed and published locally; hosted verification does not replace those installers. The next new version can use the configured tag-triggered publication workflow; that future publication is not claimed as already exercised.
 
 ## Limits
 
