@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: User guide and Spotify setup
+    url: https://github.com/SPARTANAC95/slate-music/blob/main/docs/GUIDE.md
+    about: Installation, supported audio, playlists, backups and connecting Spotify.

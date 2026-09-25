@@ -1,87 +1,95 @@
-# SLATE MUSIC
+<p align="center"><a href="https://SPARTANAC95.github.io/slate-music/"><img src="site/assets/icon.png" width="88" height="88" alt="Slate Music"></a></p>
+<h1 align="center">SLATE MUSIC</h1>
+<p align="center"><strong>Your music. In its own space.</strong><br>A beautiful, offline home for your local music collection.</p>
+<p align="center"><a href="https://SPARTANAC95.github.io/slate-music/">Explore the website</a> &nbsp; / &nbsp; <a href="https://github.com/SPARTANAC95/slate-music/releases/latest">Download for Windows</a> &nbsp; / &nbsp; <a href="docs/GUIDE.md">User guide</a></p>
+<p align="center"><a href="https://github.com/SPARTANAC95/slate-music/actions/workflows/ci.yml"><img src="https://github.com/SPARTANAC95/slate-music/actions/workflows/ci.yml/badge.svg" alt="Windows build status"></a> <a href="https://github.com/SPARTANAC95/slate-music/releases/latest"><img src="https://img.shields.io/github/v/release/SPARTANAC95/slate-music?label=release&color=b8a0da&labelColor=242229" alt="Latest release"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-b8a0da?labelColor=242229" alt="MIT license"></a></p>
 
-A Windows desktop player for your own music. Local files, native audio, an offline library, and a quiet interface inspired by [Slate](https://github.com/SPARTANAC95/slate).
+[![Slate Music Home with original demo album artwork, library navigation and a listening queue](site/assets/player-home.png)](https://SPARTANAC95.github.io/slate-music/)
+<p align="center"><sub>Actual Windows app. Original demo artwork and synthetic files; no personal collection or music is included.</sub></p>
 
-## Install
+## A player for the records you keep
 
-Download the Windows x64 installer from [Releases](https://github.com/SPARTANAC95/slate-music/releases/latest). Run it, then open **Slate Music** from Start. Choose your music folder on first launch. The player reads your files; it never retags, renames, moves or deletes them.
+Slate Music gives your albums room to breathe. Browse the artwork, find the song you forgot you loved, and build a listening session that is still there when you return.
 
-Windows 10/11 x64 with WebView2 and a working audio output are required. WebView2 is normally already present; installing the runtime on a new PC can require internet. Once installed, library management and playback work offline. The installer has a cryptographically signed updater artifact, but does not have a Windows Authenticode publisher certificate. Windows may show an unknown-publisher warning.
+- **Your collection, organized.** Albums, artists, songs, playlists, favorites, recently played and an editable queue. Fast search, sorting, filtering and multidisc ordering.
+- **Listening comes first.** Native gapless playback, optional 2–12 second crossfade, seeking, shuffle, repeat, keyboard shortcuts, a mini-player and Windows media controls.
+- **A session that stays with you.** Queue, position, playlists, favorites, history and settings persist. The app always restores paused.
+- **Your files stay yours.** Read-only indexing, watched folders, incremental rescans and cached artwork. No retagging, renaming, moving or deleting your music.
+- **Offline by design.** Local playback and library management work offline. No Slate account, subscription or analytics.
+- **Spotify albums, matched locally.** Retrieve an album’s ordered metadata and match recordings you already own. Review uncertain versions and save a virtual album or playlist.
 
-## Listen and organize
+## Get listening
 
-- Home, Songs, Albums, Artists, Favorites, Recently Played, Playlists, saved virtual albums and Queue.
-- Search titles, artists and albums; sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
-- Add songs to a playlist using its folder button. Open a playlist and choose **Edit playlist** to rename, reorder or remove entries. This only changes Slate Music's database.
-- Double-click a song or use its play button. Reorder upcoming songs in Queue. Play/pause, previous/next, seeking, volume, shuffle and repeat work with the native audio engine.
-- Use the mini-player or Windows media controls. The app restores its queue and position paused, including after an update.
-- Gapless playback is enabled with crossfade off. Choose an optional 2–12 second crossfade in Settings.
-- Settings controls watched folders, rescanning, Spotify setup and updates. Disconnected drives retain their entries as unavailable; reconnect and rescan to restore them.
+**[Download the Windows installer](https://github.com/SPARTANAC95/slate-music/releases/latest)**
 
-| Shortcut | Action |
+1. Run the installer and open **Slate Music** from the Windows Start menu.
+2. Choose your music folder. Slate indexes its tags and album artwork.
+3. Pick an album, build a playlist, or shuffle your library.
+
+Windows 10/11 **x64**, WebView2 and an audio output are required. WebView2 is usually present; installing it on a new PC may need internet. The installer currently has no Windows Authenticode publisher certificate, so Windows may show an unknown-publisher warning. Download from the official release above.
+
+Updates are cryptographically verified and download automatically by default. Installation waits for confirmation while paused or your choice to install on exit. Both automatic checks and downloads can be disabled.
+
+## A closer look
+
+| Your albums | Your listening queue |
+|:---:|:---:|
+| [![Album library](site/assets/player-albums.png)](site/assets/player-albums.png) | [![Editable queue](site/assets/player-queue.png)](site/assets/player-queue.png) |
+| Artwork, album order and artist pages. | Reorder what comes next. Keep your place. |
+
+Screenshots show a separate demo library in the real app. Click an image to view it at full size.
+
+## Bring an album home from Spotify
+
+Paste a Spotify album URL, review its local matches, and save the result in album order. Matching considers title, artist, duration and recording/version information. Missing tracks stay visible and never enter the playable queue. Uncertain matches can be corrected manually.
+
+**This imports metadata, not Spotify audio.** No audio downloading, replacement downloads or DRM bypass. It requires your own Spotify developer app and an eligible Spotify account; no credentials are bundled.
+
+[Connect Spotify and import your first album](docs/GUIDE.md#spotify-album-import)
+
+## Audio, with the details included
+
+| Supported and tested | Current output |
 |---|---|
-| Space | Play / pause |
-| Left / Right | Seek 5 seconds |
-| Ctrl + Left / Right | Previous / next |
-| Ctrl + K | Search |
-| Ctrl + M | Mini-player |
-| Escape | Close dialog |
+| FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis, AIFF | Windows default device, 48 kHz stereo |
 
-Shortcuts do not intercept typing in form fields. Standard media keys are routed through Windows system media controls.
+Raw AAC has limited seeking support. Opus, WMA, APE, DSD and protected files are unsupported. Exclusive-mode and bit-perfect output are not available. [Read the audio notes](docs/GUIDE.md#audio-support).
 
-### Audio support
+## Built, run, and checked on Windows
 
-Tested decoding: FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Seeking was tested for the container formats above; raw ADTS AAC seeking depends on its available seek index. Opus, WMA, APE, DSD and protected files are not supported in this version.
+Validation includes native playback and seeking, measured gapless sample continuity, queue behavior, restart recovery, folder changes, real Spotify matching, installer/reinstaller checks and a production **1.0.0 → 1.0.1** update retaining the library and paused session. Hosted Windows tests and signed installer verification also passed.
 
-The engine streams decoded audio through one 48 kHz stereo mixer and the Windows default output device. This provides gapless transitions and crossfade; it is not a bit-perfect or exclusive-mode player. A disconnected audio device pauses playback; the engine attempts to reconnect without starting audio unexpectedly.
+The [validation report](docs/VALIDATION.md) records the evidence and remaining limits. Test results describe what was checked, not a guarantee for every device or music file.
 
-## Spotify album import
+## Build it yourself
 
-This feature retrieves metadata and matches music you already own. It does not stream Spotify audio or download replacements.
-
-1. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Select Web API access.
-2. Register the exact redirect URI `http://127.0.0.1:43829/callback`.
-3. Add your account under Users Management if required by Development Mode.
-4. Paste the **Client ID** in Slate Music Settings and choose **Connect Spotify**. No client secret is used. Sign-in opens your browser.
-5. Choose **Import Spotify album**, paste an `open.spotify.com/album/...` URL, and retrieve the complete ordered track list.
-6. Review available, uncertain and missing matches. Correct uncertain tracks manually. Save as a virtual album or playlist.
-
-Only confirmed, available local matches enter the queue. Missing tracks remain visible in a saved virtual album. Saved results work offline. Matching compares normalized title, artist, duration and version labels, with conservative handling of duplicate candidates, live recordings, remixes, edits and remasters.
-
-As verified September 25, 2026, Spotify Development Mode requires an active Premium subscription for the app owner and permits up to five authorized users. Spotify controls API availability and quota; some accounts/apps may require further approval. See [quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes), [PKCE authorization](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow) and the [2026 migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide). Rate limits and access errors are reported in the app. Live account sign-in requires your own Client ID; no credentials are bundled.
-
-## Privacy and persistence
-
-The SQLite database and artwork cache live in `%APPDATA%\com.spartanac95.slate-music`. The database stores library paths, metadata, favorites, playlists, play counts, history, settings and the paused listening session. SQLite migrations and WAL journaling protect normal restarts. Settings includes a JSON export of favorites and playlists; to back up the full profile, close the app and copy its data directory. Do not publish that directory.
-
-Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests and update checks/downloads. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
-
-Updates are checked and downloaded automatically by default. The updater verifies both the artifact signature and signed version. It only installs after you confirm while paused or choose the install option on exit. Installation keeps your database, artwork and settings.
-
-## Develop
-
-Install Node.js 22+, the stable Rust toolchain, Microsoft C++ Build Tools, WebView2 and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/).
+The app uses **Tauri 2, React, TypeScript, SQLite, Rodio and Symphonia**. Install Node.js 22+, stable Rust, Microsoft C++ Build Tools and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```powershell
 npm ci
 npm run dev:app
-npm test
-npm run test:rust
-npm run build
 ```
 
-The browser-only Vite page is not a simulated library; native commands require Tauri. For an isolated test profile, set `SLATE_MUSIC_DATA_DIR` before launch. Set `SLATE_MUSIC_LIBRARY` on a fresh profile to seed a folder without the first-launch picker. These are optional developer environment variables, not bundled personal paths.
+```powershell
+npm test
+npm run build
+npm run test:rust
+```
 
-See [architecture](docs/ARCHITECTURE.md), [validation](docs/VALIDATION.md), [release engineering](docs/RELEASING.md) and [changelog](CHANGELOG.md).
+The browser-only development page requires the native Tauri backend; it does not substitute a simulated library. Audio-fixture tests, isolated profiles, packaging and signing are explained in the guides below.
 
-## Build and release
+| Looking for | Start here |
+|---|---|
+| Shortcuts, playlists, folders, backups and Spotify setup | [User guide](docs/GUIDE.md) |
+| The native engine, database and application structure | [Architecture](docs/ARCHITECTURE.md) |
+| What was tested and what remains limited | [Validation](docs/VALIDATION.md) |
+| Windows packaging, updater signing and publication | [Release engineering](docs/RELEASING.md) |
+| Website, screenshots and public assets | [Presentation guide](docs/PRESENTATION.md) |
+| Bugs, ideas and contributions | [Contributing](CONTRIBUTING.md) |
+| What changed between releases | [Changelog](CHANGELOG.md) |
 
-`npm run build:app` produces a per-user NSIS installer and updater signature. Set `TAURI_SIGNING_PRIVATE_KEY` to the signing key contents or a local file path, and optionally `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Never put either value in source control.
+## Open source, in good company
 
-GitHub Actions checks every push and pull request. Version tags run tests, build and sign the Windows installer, and publish the manifest and checksums. The repository's encrypted Actions secrets hold the signing material. An update key is distinct from an Authenticode certificate.
+Inspired by the visual language of [Slate](https://github.com/SPARTANAC95/slate). The reference repository was not modified. Built with Tauri, React, SQLite, Rodio/Symphonia, Lofty, notify, Souvlaki, Inter and Lucide. [Third-party credits](docs/THIRD_PARTY.md).
 
-## Credits
-
-Tauri, React, TypeScript, SQLite/rusqlite, Rodio/Symphonia, Lofty, notify, Souvlaki, Inter and Lucide power the application. See their respective licenses in installed dependencies and [THIRD_PARTY.md](docs/THIRD_PARTY.md). The original application icon and design study were generated for this project; the study is inspiration, not a screenshot of a working library. Slate was inspected as a design reference and was not modified.
-
-MIT license.
+Created by [SPARTANAC95](https://github.com/SPARTANAC95). Released under the [MIT license](LICENSE).

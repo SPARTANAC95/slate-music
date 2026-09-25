@@ -1,0 +1,26 @@
+name: Report a bug
+description: Help us reproduce a problem with Slate Music.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Please do not include music files, private library databases, credentials or personal folder listings. Remove personal information from screenshots and logs."
+  - type: input
+    id: version
+    attributes: {label: Slate Music version, placeholder: 'e.g. 1.0.1'}
+    validations: {required: true}
+  - type: input
+    id: windows
+    attributes: {label: Windows version, placeholder: 'e.g. Windows 11 x64'}
+    validations: {required: true}
+  - type: textarea
+    id: reproduce
+    attributes: {label: How to reproduce it, description: 'What steps lead to the problem?'}
+    validations: {required: true}
+  - type: textarea
+    id: result
+    attributes: {label: Expected and actual behavior}
+    validations: {required: true}
+  - type: textarea
+    id: audio
+    attributes: {label: 'Audio details, if relevant', description: 'File format, audio output device, and whether it affects one file or several.'}

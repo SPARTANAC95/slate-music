@@ -1,0 +1,12 @@
+name: Suggest an improvement
+description: Describe a useful change to local listening.
+title: "[Idea] "
+body:
+  - type: textarea
+    id: need
+    attributes: {label: 'What are you trying to do?', description: Describe the listening or library workflow that could be better.}
+    validations: {required: true}
+  - type: textarea
+    id: idea
+    attributes: {label: Your suggestion, description: 'What would make that workflow easier?'}
+    validations: {required: true}

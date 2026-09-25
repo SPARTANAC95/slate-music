@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://SPARTANAC95.github.io/slate-music/sitemap.xml
