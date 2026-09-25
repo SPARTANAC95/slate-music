@@ -18,6 +18,8 @@ The public counterpart is embedded in `tauri.conf.json`. Never casually regenera
 
 Released artifacts are immutable. The workflow refuses to overwrite an existing release. Use a new version for fixes. Public repository visibility is required for anonymous default update downloads.
 
+To verify hosted compilation and signing for an existing version, manually run **Signed Windows release** from `main`, set `source_ref` to its tag (for example `v1.0.1`), and leave `verify_only` enabled. This runs tests, builds and signs the exact tagged source, and uploads the results as a workflow artifact. Publication is skipped. For a new release, push its version tag normally; publication verifies that the tag points to the exact built commit.
+
 ## Local release fallback
 
 ```powershell

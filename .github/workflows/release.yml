@@ -1,6 +1,16 @@
 name: Signed Windows release
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Source tag or branch to build (blank uses the selected workflow ref)'
+        required: false
+        type: string
+      verify_only:
+        description: 'Build and sign verification artifacts without publishing a new release'
+        required: true
+        default: true
+        type: boolean
   push:
     tags: ['v*']
 permissions:
@@ -10,6 +20,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -37,12 +50,22 @@ jobs:
           name: slate-music-windows
           path: release-artifacts/*
       - name: Publish installer and update manifest
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.verify_only }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $tag = "v$version"
+          $head = git rev-parse HEAD
+          $tagCommit = git rev-parse "$tag^{commit}"
+          if ($LASTEXITCODE -ne 0 -or $head -ne $tagCommit) { throw 'The version tag must point to the exact built source commit.' }
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) { throw 'Release already exists. Never overwrite a released updater artifact.' }
           gh release create $tag release-artifacts/*.exe release-artifacts/*.sig release-artifacts/latest.json release-artifacts/SHA256SUMS.txt --title "Slate Music $version" --notes-file "docs/releases/$tag.md" --verify-tag
+      - name: Record verification result
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_only }}
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          "Signed Windows build for $version passed. Download the slate-music-windows workflow artifact for verification. Existing releases were preserved." >> $env:GITHUB_STEP_SUMMARY
