@@ -15,7 +15,7 @@ if (fs.existsSync(env.TAURI_SIGNING_PRIVATE_KEY))
   env.TAURI_SIGNING_PRIVATE_KEY = fs.readFileSync(env.TAURI_SIGNING_PRIVATE_KEY, 'utf8').trim();
 const r = spawnSync(
   process.execPath,
-  ['node_modules/@tauri-apps/cli/tauri.js', 'build', '--bundles', 'nsis'],
+  ['node_modules/@tauri-apps/cli/tauri.js', 'build', '--bundles', 'nsis', '--ci', '--', '--locked'],
   { stdio: 'inherit', env },
 );
 process.exitCode = r.status ?? 1;

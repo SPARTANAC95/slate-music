@@ -31,19 +31,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - run: npm ci
       - run: npm test
       - run: npm run build
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+      - name: Check source before packaging
+        shell: pwsh
+        run: |
+          $changes = git status --porcelain
+          if ($changes) { $changes; git diff --stat; throw 'Build preparation changed the checked-out source.' }
       - name: Build and sign Windows installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:app
+        run: npm run tauri -- build --bundles nsis --ci -- --locked
       - name: Prepare verified update manifest
         env:
           SLATE_RELEASE_DIR: release-artifacts
-        run: node tools/release.mjs prepare
+        run: |
+          git status --porcelain
+          git diff --stat
+          node tools/release.mjs prepare
+      - name: Preserve signed build diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: slate-music-build-diagnostics
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+          if-no-files-found: ignore
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
