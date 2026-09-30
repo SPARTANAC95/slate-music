@@ -129,10 +129,19 @@ export default function SettingsPanel({
       </section>
       <section>
         <div className="section-heading">
-          <h3>Spotify album matching</h3>
+          <h3>Spotify playlist import</h3>
           {data.spotify.connected && <span className="badge">Connected</span>}
         </div>
-        <p>Bring an album’s track order into your local library. Only metadata is requested.</p>
+        <p>
+          Bring your Spotify playlists into your local library. Slate Music reads each playlist’s
+          song list and matches it to files you already own. Only metadata is requested.
+        </p>
+        {data.spotify.connected && !data.spotify.playlistAccess && (
+          <p className="inline-error">
+            This connection was made before playlist import and cannot read your playlists yet.
+            Choose Reconnect and approve the request in your browser.
+          </p>
+        )}
         <ol className="setup-steps">
           <li>
             Open Spotify Developer Dashboard and create an app. Development apps require an active
@@ -161,7 +170,11 @@ export default function SettingsPanel({
             disabled={!!busy || clientId.length !== 32}
             onClick={() => run('spotify', () => invoke('spotify_connect', { clientId }))}
           >
-            {busy === 'spotify' ? 'Waiting for sign-in…' : 'Connect Spotify'}
+            {busy === 'spotify'
+              ? 'Waiting for sign-in…'
+              : data.spotify.connected
+                ? 'Reconnect'
+                : 'Connect Spotify'}
           </button>
           {data.spotify.connected && (
             <button onClick={() => run('disconnect', () => invoke('spotify_disconnect'))}>
@@ -180,8 +193,9 @@ export default function SettingsPanel({
           </button>
         </div>
         <p className="fine-print">
-          Sign-in tokens are encrypted for your Windows account. Saved virtual albums work offline.
-          Development access is limited to five authorized users.
+          Sign-in tokens are encrypted for your Windows account. Imported playlists work offline.
+          Spotify only shares playlists you created or collaborate on. Development access is
+          limited to five authorized users.
         </p>
       </section>
       <section>
@@ -242,6 +256,9 @@ export default function SettingsPanel({
             Mini-player<kbd>Ctrl + M</kbd>
           </span>
           <span>
+            Go back<kbd>Alt + ←</kbd>
+          </span>
+          <span>
             Close dialog<kbd>Esc</kbd>
           </span>
         </div>
@@ -255,7 +272,7 @@ export default function SettingsPanel({
         <button disabled={!!busy} onClick={() => run('backup', () => invoke('export_backup'))}>
           Export favorites and playlists
         </button>
-        <p className="fine-print">Slate Music 1.0.1 · Built for your own collection.</p>
+        <p className="fine-print">Slate Music · Built for your own collection.</p>
       </section>
       {message && (
         <p className="inline-error" role="alert">

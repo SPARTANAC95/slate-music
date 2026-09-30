@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Disc3,
@@ -104,6 +104,23 @@ export function Modal({
       if (previous?.isConnected) previous.focus();
     };
   }, []);
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      if (dialogs[dialogs.length - 1] !== ref.current) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      } else if (event.key === 'Tab' && !ref.current?.contains(document.activeElement)) {
+        // Disabling a focused control can send focus to body; keep the next Tab in the dialog.
+        const controls = Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,a[href],[tabindex="0"]') || []).filter(el => el.getClientRects().length > 0);
+        const target = event.shiftKey ? controls.at(-1) : controls[0];
+        if (target) { event.preventDefault(); target.focus(); }
+      }
+    };
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, [onClose]);
   return (
     <div
       className="modal-backdrop"
@@ -118,11 +135,10 @@ export function Modal({
         aria-label={title}
         className={`modal ${wide ? 'wide' : ''}`}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') onClose();
           if (e.key === 'Tab') {
-            const els = ref.current?.querySelectorAll<HTMLElement>(
-              'button:not(:disabled),input,select,a[href],[tabindex="0"]',
-            );
+            const els = Array.from(ref.current?.querySelectorAll<HTMLElement>(
+              'button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,a[href],[tabindex="0"]',
+            ) || []).filter(el => el.getClientRects().length > 0);
             if (!els?.length) return;
             const first = els[0],
               last = els[els.length - 1];
@@ -157,6 +173,7 @@ export function TrackTable({
   onQueue,
   onMove,
   onRemove,
+  onContext,
   compact = false,
   queue = false,
   rowIndices,
@@ -172,6 +189,7 @@ export function TrackTable({
   onQueue: (t: Track) => void;
   onMove?: (from: number, to: number) => void;
   onRemove?: (index: number) => void;
+  onContext?: (t: Track, index: number, x: number, y: number) => void;
   compact?: boolean;
   queue?: boolean;
   rowIndices?: number[];
@@ -216,13 +234,22 @@ export function TrackTable({
                   height: row.size,
                   transform: `translateY(${row.start}px)`,
                 }}
-                onDoubleClick={() => !t.missing && onPlay(index)}
+                // The play buttons already handle their own clicks; a double-click on them must
+                // not start the song again.
+                onDoubleClick={(e) =>
+                  !t.missing && !(e.target as HTMLElement).closest('button') && onPlay(index)
+                }
+                onContextMenu={(e) => {
+                  if (!onContext) return;
+                  e.preventDefault();
+                  onContext(t, index, e.clientX, e.clientY);
+                }}
               >
                 <button
                   className="row-number"
                   disabled={t.missing}
                   aria-label={`Play ${t.title}`}
-                  onClick={() => onPlay(index)}
+                  onClick={(e) => e.detail < 2 && onPlay(index)}
                 >
                   {active && playing ? (
                     <span className="equalizer">
@@ -242,7 +269,7 @@ export function TrackTable({
                   <div>
                     <button
                       className="text-button song-title"
-                      onClick={() => onPlay(index)}
+                      onClick={(e) => e.detail < 2 && onPlay(index)}
                       disabled={t.missing}
                     >
                       {t.title}
@@ -275,7 +302,12 @@ export function TrackTable({
                         <ArrowDown size={15} />
                       </IconButton>
                       <IconButton
-                        label={`Remove ${t.title} from queue`}
+                        label={
+                          index === currentIndex
+                            ? 'Skip the playing song before removing it'
+                            : `Remove ${t.title} from queue`
+                        }
+                        disabled={index === currentIndex}
                         onClick={() => onRemove?.(index)}
                       >
                         <X size={15} />
@@ -308,6 +340,93 @@ export function TrackTable({
           })}
         </div>
       </div>
+    </div>
+  );
+}
+export type MenuItem =
+  | { label: string; icon?: ReactNode; onSelect: () => void; disabled?: boolean }
+  | 'divider';
+/** A right-click style menu at a screen point. Closes on outside click, Escape, scroll or blur. */
+export function ContextMenu({
+  x,
+  y,
+  items,
+  onClose,
+  above = false,
+}: {
+  x: number;
+  y: number;
+  items: MenuItem[];
+  onClose: () => void;
+  /** Open upward from the point, e.g. for buttons along the bottom edge. */
+  above?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const box = ref.current?.getBoundingClientRect();
+    if (box)
+      setPosition({
+        left: Math.max(8, Math.min(x, innerWidth - box.width - 8)),
+        top: Math.max(8, Math.min(above ? y - box.height : y, innerHeight - box.height - 8)),
+      });
+    ref.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+  }, [x, y, above]);
+  useEffect(() => {
+    // A button marked data-menu-anchor opens this menu and toggles it closed itself.
+    const outside = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!ref.current?.contains(target) && !target.closest?.('[data-menu-anchor]')) onClose();
+    };
+    const keydown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Tab') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        const buttons = [
+          ...(ref.current?.querySelectorAll<HTMLElement>('button:not(:disabled)') || []),
+        ];
+        const at = buttons.indexOf(document.activeElement as HTMLElement);
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        buttons[(at + step + buttons.length) % buttons.length]?.focus();
+      }
+    };
+    window.addEventListener('mousedown', outside, true);
+    window.addEventListener('keydown', keydown, true);
+    window.addEventListener('resize', onClose);
+    window.addEventListener('blur', onClose);
+    document.addEventListener('scroll', onClose, true);
+    return () => {
+      window.removeEventListener('mousedown', outside, true);
+      window.removeEventListener('keydown', keydown, true);
+      window.removeEventListener('resize', onClose);
+      window.removeEventListener('blur', onClose);
+      document.removeEventListener('scroll', onClose, true);
+    };
+  }, [onClose]);
+  return (
+    <div ref={ref} className="context-menu" role="menu" style={position}>
+      {items.map((item, i) =>
+        item === 'divider' ? (
+          <div key={i} className="menu-divider" role="separator" />
+        ) : (
+          <button
+            key={item.label}
+            role="menuitem"
+            disabled={item.disabled}
+            onClick={() => {
+              onClose();
+              item.onSelect();
+            }}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ),
+      )}
     </div>
   );
 }

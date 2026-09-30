@@ -57,6 +57,18 @@ pub struct Playback {
     pub error: Option<String>,
     pub engine_ready: bool,
     pub system_controls: bool,
+    /// Sleep timer deadline in Unix milliseconds. Never restored after a restart.
+    pub sleep_at: Option<i64>,
+    pub sleep_end_of_track: bool,
+}
+/// Whether the sleep timer should pause now. "End of track" stops just before the song ends,
+/// ahead of any crossfade, so the next song never starts playing.
+fn sleep_due(s: &Playback, now: i64) -> bool {
+    s.playing
+        && (s.sleep_at.is_some_and(|at| now >= at)
+            || (s.sleep_end_of_track
+                && s.duration > 0.
+                && s.duration - s.position <= s.crossfade.min(s.duration / 2.) + 0.25))
 }
 impl Default for Playback {
     fn default() -> Self {
@@ -74,6 +86,8 @@ impl Default for Playback {
             error: None,
             engine_ready: false,
             system_controls: false,
+            sleep_at: None,
+            sleep_end_of_track: false,
         }
     }
 }
@@ -210,6 +224,8 @@ impl Engine {
         state.engine_ready = false;
         state.system_controls = false;
         state.error = None;
+        state.sleep_at = None;
+        state.sleep_end_of_track = false;
         state.volume = state.volume.clamp(0., 1.);
         state.crossfade = state.crossfade.clamp(0., 12.);
         if state.queue.is_empty() {
@@ -445,27 +461,84 @@ impl Engine {
                     r.epoch += 1;
                     r.next_attempt = None;
                 }
-                "append" => {
-                    let id = value.as_str().ok_or("Missing song")?;
-                    let t = self.db.track(id)?;
-                    if t.missing {
-                        return Err("That file is unavailable".into());
+                // One song ID or a list; the whole list is checked before the queue changes.
+                "append" | "insert_next" => {
+                    let ids: Vec<String> = match value.as_str() {
+                        Some(id) => vec![id.into()],
+                        None => serde_json::from_value(value).map_err(|_| "Missing song")?,
+                    };
+                    let mut first_duration = 0.;
+                    for (i, id) in ids.iter().enumerate() {
+                        let t = self.db.track(id)?;
+                        if t.missing {
+                            return Err("That file is unavailable".into());
+                        }
+                        if i == 0 {
+                            first_duration = t.duration;
+                        }
+                    }
+                    if ids.is_empty() {
+                        return Err("Missing song".into());
                     }
                     let mut r = self.render.lock().unwrap();
-                    if r.state.queue.len() >= 100000 {
+                    if r.state.queue.len() + ids.len() > 100000 {
                         return Err("Queue is too large".into());
                     }
-                    r.state.queue.push(id.into());
-                    if r.state.current_id.is_none() {
+                    if r.state.current_id.is_none() || r.state.queue.is_empty() {
+                        r.state.queue.extend(ids);
                         r.state.cursor = 0;
                         r.state.current_id = r.state.queue.first().cloned();
                         r.state.position = 0.;
-                        r.state.duration = t.duration;
+                        r.state.duration = first_duration;
+                    } else if action == "insert_next" {
+                        let at = (r.snapshot().cursor + 1).min(r.state.queue.len());
+                        r.state.queue.splice(at..at, ids);
+                    } else {
+                        r.state.queue.extend(ids);
                     }
                     r.next = None;
                     r.epoch += 1;
                     r.next_attempt = None;
                 }
+                // Keeps the current song (and playback) and drops everything else.
+                "clear_upcoming" => {
+                    let mut r = self.render.lock().unwrap();
+                    let s = r.snapshot();
+                    match s.current_id.filter(|id| s.queue.get(s.cursor) == Some(id)) {
+                        Some(id) => {
+                            r.state.queue = vec![id];
+                            r.state.cursor = 0;
+                            if let Some(d) = r.current.as_mut() {
+                                d.index = 0;
+                            }
+                        }
+                        None => {
+                            r.state.queue.clear();
+                            r.current = None;
+                            r.state.current_id = None;
+                            r.state.position = 0.;
+                            r.state.duration = 0.;
+                            r.state.playing = false;
+                        }
+                    }
+                    r.next = None;
+                    r.epoch += 1;
+                    r.next_attempt = None;
+                }
+                "sleep" => {
+                    let mut r = self.render.lock().unwrap();
+                    r.state.sleep_at = None;
+                    r.state.sleep_end_of_track = false;
+                    if value["endOfTrack"].as_bool() == Some(true) {
+                        r.state.sleep_end_of_track = true;
+                    } else if let Some(minutes) = value["minutes"]
+                        .as_f64()
+                        .filter(|m| m.is_finite() && *m > 0. && *m <= 720.)
+                    {
+                        r.state.sleep_at = Some(crate::db::now() + (minutes * 60000.) as i64);
+                    }
+                }
+                "dismiss_error" => {}
                 "remove" => {
                     let index = value.as_u64().ok_or("Missing queue index")? as usize;
                     let mut r = self.render.lock().unwrap();
@@ -524,9 +597,8 @@ impl Engine {
             }
             Ok(())
         })();
-        if let Err(e) = &result {
-            self.render.lock().unwrap().state.error = Some(e.clone());
-        }
+        // A successful command means an old message no longer describes the session.
+        self.render.lock().unwrap().state.error = result.as_ref().err().cloned();
         self.save();
         result?;
         Ok(self.snapshot())
@@ -657,6 +729,12 @@ impl Engine {
                             }
                         }
                     }
+                }
+                if sleep_due(&engine.snapshot(), crate::db::now()) {
+                    let mut r = engine.render.lock().unwrap();
+                    r.state.playing = false;
+                    r.state.sleep_at = None;
+                    r.state.sleep_end_of_track = false;
                 }
                 let s = engine.snapshot();
                 let transition = engine.render.lock().unwrap().transition;
@@ -898,6 +976,91 @@ mod tests {
                 .unwrap()
                 .playing
         );
+    }
+    #[test]
+    fn play_next_inserts_after_the_current_song_and_lists_are_all_or_nothing() {
+        let (_dir, engine) = test_engine();
+        engine
+            .command("queue", serde_json::json!({"ids":["a","b"],"index":0}))
+            .unwrap();
+        let state = engine.command("insert_next", serde_json::json!(["c", "b"])).unwrap();
+        assert_eq!(state.queue, vec!["a", "c", "b", "b"]);
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.current_id.as_deref(), Some("a"));
+        assert!(state.playing);
+        assert!(engine
+            .command("append", serde_json::json!(["a", "absent"]))
+            .is_err());
+        assert_eq!(engine.snapshot().queue, state.queue);
+        let state = engine.command("append", serde_json::json!(["a"])).unwrap();
+        assert_eq!(state.queue.last().map(String::as_str), Some("a"));
+        assert!(state.error.is_none(), "a successful command clears an old error");
+    }
+    #[test]
+    fn play_next_on_an_empty_queue_selects_the_song_paused() {
+        let (_dir, engine) = test_engine();
+        let state = engine.command("insert_next", serde_json::json!("b")).unwrap();
+        assert_eq!(state.queue, vec!["b"]);
+        assert_eq!(state.current_id.as_deref(), Some("b"));
+        assert!(!state.playing);
+    }
+    #[test]
+    fn clearing_up_next_keeps_the_current_song_playing() {
+        let (_dir, engine) = test_engine();
+        engine
+            .command("queue", serde_json::json!({"ids":["a","b","c"],"index":1}))
+            .unwrap();
+        let state = engine.command("clear_upcoming", serde_json::Value::Null).unwrap();
+        assert_eq!(state.queue, vec!["b"]);
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.current_id.as_deref(), Some("b"));
+        assert!(state.playing);
+        assert_eq!(engine.render.lock().unwrap().current.as_ref().unwrap().index, 0);
+        let empty = Engine::new(engine.db.clone());
+        empty.render.lock().unwrap().state.queue.clear();
+        empty.render.lock().unwrap().state.current_id = None;
+        let state = empty.command("clear_upcoming", serde_json::Value::Null).unwrap();
+        assert!(state.queue.is_empty() && state.current_id.is_none() && !state.playing);
+    }
+    #[test]
+    fn sleep_timer_is_set_cancelled_and_never_restored() {
+        let (_dir, engine) = test_engine();
+        let state = engine
+            .command("sleep", serde_json::json!({"minutes": 30}))
+            .unwrap();
+        let at = state.sleep_at.unwrap();
+        assert!((at - crate::db::now() - 30 * 60000).abs() < 5000);
+        let state = engine
+            .command("sleep", serde_json::json!({"endOfTrack": true}))
+            .unwrap();
+        assert!(state.sleep_at.is_none() && state.sleep_end_of_track);
+        assert!(!Engine::new(engine.db.clone()).snapshot().sleep_end_of_track);
+        let state = engine.command("sleep", serde_json::Value::Null).unwrap();
+        assert!(state.sleep_at.is_none() && !state.sleep_end_of_track);
+        assert!(engine
+            .command("sleep", serde_json::json!({"minutes": -5}))
+            .unwrap()
+            .sleep_at
+            .is_none());
+    }
+    #[test]
+    fn sleep_due_respects_deadline_track_end_crossfade_and_pause() {
+        let s = |playing, at, end, position, crossfade| Playback {
+            playing,
+            sleep_at: at,
+            sleep_end_of_track: end,
+            position,
+            duration: 200.,
+            crossfade,
+            ..Default::default()
+        };
+        assert!(sleep_due(&s(true, Some(1000), false, 10., 0.), 1000));
+        assert!(!sleep_due(&s(true, Some(1000), false, 10., 0.), 999));
+        assert!(!sleep_due(&s(false, Some(1000), false, 10., 0.), 5000));
+        assert!(sleep_due(&s(true, None, true, 199.8, 0.), 0));
+        assert!(!sleep_due(&s(true, None, true, 199.0, 0.), 0));
+        assert!(sleep_due(&s(true, None, true, 194.0, 6.), 0));
+        assert!(!sleep_due(&s(true, None, false, 199.9, 0.), 0));
     }
     #[test]
     fn repairs_stale_queue_positions_from_older_saved_sessions() {

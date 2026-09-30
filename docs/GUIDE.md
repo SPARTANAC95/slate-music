@@ -11,6 +11,7 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 ## Listen and organize
 
 - Home, Songs, Albums, Artists, Favorites, Recently Played, Playlists, saved virtual albums and Queue.
+- Right-click a song or album for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer. The Queue page can save the queue as a playlist or clear everything after the current song. The moon button beside the volume sets a sleep timer.
 - Search titles, artists and albums; sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
 - Add songs to a playlist using its folder button. Open a playlist and choose **Edit playlist** to rename, reorder or remove entries. This only changes Slate Music's database.
 - Double-click a song or use its play button. Reorder upcoming songs in Queue. Play/pause, previous/next, seeking, volume, shuffle and repeat work with the native audio engine.
@@ -35,18 +36,20 @@ Tested decoding: FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Seeking was
 
 The engine streams decoded audio through one 48 kHz stereo mixer and the Windows default output device. This provides gapless transitions and crossfade; it is not a bit-perfect or exclusive-mode player. A disconnected audio device pauses playback; the engine attempts to reconnect without starting audio unexpectedly.
 
-## Spotify album import
+## Spotify playlist import
 
-This feature retrieves metadata and matches music you already own. It does not stream Spotify audio or download replacements.
+This feature reads a Spotify playlist's song list and matches it to music you already own. It does not stream Spotify audio or download replacements.
 
 1. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Select Web API access.
 2. Register the exact redirect URI `http://127.0.0.1:43829/callback`.
 3. Add your account under Users Management if required by Development Mode.
-4. Paste the **Client ID** in Slate Music Settings and choose **Connect Spotify**. No client secret is used. Sign-in opens your browser.
-5. Choose **Import Spotify album**, paste an `open.spotify.com/album/...` URL, and retrieve the complete ordered track list.
-6. Review available, uncertain and missing matches. Correct uncertain tracks manually. Save as a virtual album or playlist.
+4. Paste the **Client ID** in Slate Music Settings and choose **Connect Spotify**. No client secret is used. Sign-in opens your browser and asks permission to read your playlists.
+5. Choose **Import Spotify playlist** and pick one of your playlists, or paste an `open.spotify.com/playlist/...` link.
+6. Review available, uncertain and missing matches. Correct uncertain songs manually, then save the playlist.
 
-Only confirmed, available local matches enter the queue. Missing tracks remain visible in a saved virtual album. Saved results work offline. Matching compares normalized title, artist, duration and version labels, with conservative handling of duplicate candidates, live recordings, remixes, edits and remasters.
+Spotify only lets apps read playlists you created or collaborate on. Other people's playlists and Spotify-made ones (Discover Weekly, Today's Top Hits and similar) appear locked; copy their songs into a playlist of your own in Spotify, then import that. Podcast episodes are left out. Connections made before playlist import need one **Reconnect** to grant playlist access.
+
+Only confirmed, available local matches enter the queue. Missing songs stay visible in the saved playlist. Saved playlists work offline. To pick up later changes, open the playlist, choose **Edit playlist**, then **Update from Spotify**: the song list follows Spotify's current order and songs you already matched stay matched. Matching compares normalized title, artist, duration, album and version labels, with conservative handling of duplicate candidates, live recordings, remixes, edits and remasters. Virtual albums saved by earlier versions keep working.
 
 As verified September 25, 2026, Spotify Development Mode requires an active Premium subscription for the app owner and permits up to five authorized users. Spotify controls API availability and quota; some accounts/apps may require further approval. See [quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes), [PKCE authorization](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow) and the [2026 migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide). Rate limits and access errors are reported in the app. Live account sign-in requires your own Client ID; no credentials are bundled.
 

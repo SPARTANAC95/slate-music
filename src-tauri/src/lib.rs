@@ -1,5 +1,6 @@
 mod audio;
 mod db;
+mod desktop;
 mod library;
 mod spotify;
 use db::{err, Database, Result};
@@ -53,7 +54,7 @@ async fn snapshot(state: tauri::State<'_, AppState>) -> Result<Value> {
     let db = state.db.clone();
     let scan = state.library.status.lock().unwrap().clone();
     let playback = state.engine.snapshot();
-    tauri::async_runtime::spawn_blocking(move||{let mut data=db.snapshot()?;data["scan"]=serde_json::to_value(scan).map_err(err)?;data["playback"]=serde_json::to_value(playback).map_err(err)?;data["spotify"]=json!({"connected":spotify::connected(&db),"clientId":db.get("spotify_client_id"),"redirectUri":spotify::REDIRECT});Ok(data)}).await.map_err(err)?
+    tauri::async_runtime::spawn_blocking(move||{let mut data=db.snapshot()?;data["scan"]=serde_json::to_value(scan).map_err(err)?;data["playback"]=serde_json::to_value(playback).map_err(err)?;data["spotify"]=json!({"connected":spotify::connected(&db),"playlistAccess":spotify::playlist_access(&db),"clientId":db.get("spotify_client_id"),"redirectUri":spotify::REDIRECT});Ok(data)}).await.map_err(err)?
 }
 #[tauri::command]
 async fn playback(
@@ -149,9 +150,16 @@ fn spotify_disconnect(state: tauri::State<'_, AppState>) -> Result<()> {
     spotify::disconnect(&state.db)
 }
 #[tauri::command]
-async fn spotify_album(url: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+async fn spotify_playlists(state: tauri::State<'_, AppState>) -> Result<Value> {
     let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || spotify::album(&db, &url))
+    tauri::async_runtime::spawn_blocking(move || spotify::playlists(&db))
+        .await
+        .map_err(err)?
+}
+#[tauri::command]
+async fn spotify_playlist(url: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || spotify::playlist(&db, &url))
         .await
         .map_err(err)?
 }
@@ -167,6 +175,29 @@ fn open_link(url: String) -> Result<()> {
         return Err("This link is not supported".into());
     }
     open::that(url).map_err(err)
+}
+/// Opens File Explorer with the song selected. Only paths of indexed tracks are accepted.
+#[tauri::command]
+fn reveal_track(id: String, state: tauri::State<'_, AppState>) -> Result<()> {
+    let path = std::path::PathBuf::from(state.db.track(&id)?.path);
+    if !path.is_file() {
+        return match path.parent().filter(|p| p.is_dir()) {
+            Some(folder) => open::that(folder).map_err(err),
+            None => Err("This song's folder is unavailable. Reconnect its drive or rescan.".into()),
+        };
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Windows paths cannot contain quotes, so quoting the whole path is safe.
+        std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn()
+            .map(|_| ())
+            .map_err(err)
+    }
+    #[cfg(not(windows))]
+    open::that(path.parent().unwrap_or(&path)).map_err(err)
 }
 #[tauri::command]
 async fn mini_player(app: tauri::AppHandle) -> Result<()> {
@@ -210,12 +241,10 @@ async fn export_backup(state: tauri::State<'_, AppState>) -> Result<bool> {
  if let Some(path)=path{let favorites:Vec<String>=db.tracks()?.into_iter().filter(|t|t.favorite).map(|t|t.id).collect();let data=json!({"version":1,"collections":db.collections()?,"favorites":favorites,"settings":db.get("settings"),"session":db.get("session")});std::fs::write(path,serde_json::to_vec_pretty(&data).map_err(err)?).map_err(err)?;Ok(true)}else{Ok(false)}}).await.map_err(err)?
 }
 pub fn run() {
+    desktop::initialize_identity();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
+            desktop::show_main(app);
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
@@ -268,6 +297,7 @@ pub fn run() {
                 library: library.clone(),
                 engine: engine.clone(),
             });
+            desktop::setup(app.handle())?;
             engine.start(app.handle().clone(), hwnd);
             library::watch(db.clone(), library.clone(), app.handle().clone());
             library::start_scan(db, library, app.handle().clone());
@@ -286,7 +316,9 @@ pub fn run() {
             remove_folder,
             spotify_connect,
             spotify_disconnect,
-            spotify_album,
+            spotify_playlists,
+            spotify_playlist,
+            reveal_track,
             open_link,
             mini_player,
             show_main,

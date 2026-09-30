@@ -39,14 +39,29 @@ function similarity(a: string, b: string) {
     bw = new Set(b.split(' '));
   return (2 * [...aw].filter((v) => bw.has(v)).length) / (aw.size + bw.size);
 }
-export function rankTrack(remote: SpotifyTrack, local: Track) {
-  const a = recording(remote.name),
-    b = recording(local.title);
+// Title parsing is the expensive part of ranking, so each side is prepared once per import
+// rather than once per remote × local pair.
+type Remote = { rec: ReturnType<typeof recording>; artists: string[]; album: string; seconds: number };
+type Local = { track: Track; rec: ReturnType<typeof recording>; artist: string; album: string };
+const prepareRemote = (r: SpotifyTrack): Remote => ({
+  rec: recording(r.name),
+  artists: r.artists.map((a) => normalize(a.name)),
+  album: normalize(r.album || ''),
+  seconds: r.duration_ms / 1000,
+});
+const prepareLocal = (t: Track): Local => ({
+  track: t,
+  rec: recording(t.title),
+  artist: normalize(t.artist),
+  album: normalize(t.album),
+});
+export const rankTrack = (remote: SpotifyTrack, local: Track) =>
+  rank(prepareRemote(remote), prepareLocal(local));
+function rank(r: Remote, l: Local) {
+  const { rec: a, seconds } = r,
+    { rec: b, track: local } = l;
   const title = similarity(a.base, b.base);
-  const remoteArtists = remote.artists.map((a) => normalize(a.name));
-  const localArtist = normalize(local.artist);
-  const artist = Math.max(...remoteArtists.map((a) => similarity(a, localArtist)), 0);
-  const seconds = remote.duration_ms / 1000;
+  const artist = Math.max(...r.artists.map((a) => similarity(a, l.artist)), 0);
   const delta = Math.abs(seconds - local.duration);
   const duration = local.duration > 0 && seconds > 0 ? Math.max(0, 1 - delta / 12) : 0.5;
   const kindsA = a.kinds.filter((v) => v !== 'remaster'),
@@ -55,6 +70,8 @@ export function rankTrack(remote: SpotifyTrack, local: Track) {
   const detailConflict = (a.kinds.length > 0 || b.kinds.length > 0) && a.detail !== b.detail;
   const remasterMismatch = a.kinds.includes('remaster') !== b.kinds.includes('remaster');
   let score = title * 0.58 + artist * 0.28 + duration * 0.14;
+  // Playlists mix albums; the album name only breaks ties, e.g. album cut versus compilation.
+  if (r.album && l.album) score += similarity(r.album, l.album) * 0.05;
   if (conflict) score -= 0.45;
   if (detailConflict) score -= 0.12;
   if (remasterMismatch) score -= 0.07;
@@ -75,10 +92,11 @@ export function rankTrack(remote: SpotifyTrack, local: Track) {
   return { id: local.id, score: Math.max(0, score), reason };
 }
 export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
+  const prepared = local.filter((t) => !t.missing).map(prepareLocal);
   return remote.map((r) => {
-    const candidates = local
-      .filter((t) => !t.missing)
-      .map((t) => rankTrack(r, t))
+    const features = prepareRemote(r);
+    const candidates = prepared
+      .map((l) => rank(features, l))
       .filter((c) => c.score >= 0.55)
       .sort((a, b) => b.score - a.score)
       .slice(0, 6);
@@ -86,7 +104,7 @@ export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
     const confident =
       !!top && top.score >= 0.96 && (!candidates[1] || top.score - candidates[1].score >= 0.035);
     return {
-      spotifyId: r.id,
+      spotifyId: r.id ?? undefined,
       title: r.name,
       artist: r.artists.map((a) => a.name).join(', '),
       duration: r.duration_ms / 1000,
@@ -94,5 +112,17 @@ export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
       status: confident ? 'available' : top ? 'uncertain' : 'missing',
       candidates,
     };
+  });
+}
+/** After re-reading a playlist from Spotify, keep every song the user already matched. */
+export function keepConfirmed(previous: Entry[], next: Entry[]): Entry[] {
+  const confirmed = new Map(
+    previous.flatMap((e): [string, string][] =>
+      e.spotifyId && e.trackId && e.status === 'available' ? [[e.spotifyId, e.trackId]] : [],
+    ),
+  );
+  return next.map((e) => {
+    const trackId = e.spotifyId && confirmed.get(e.spotifyId);
+    return trackId ? { ...e, trackId, status: 'available' } : e;
   });
 }

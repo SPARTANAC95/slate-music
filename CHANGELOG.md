@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.3 — unreleased
+
+- Import Spotify playlists instead of albums. Pick from your own playlists or paste a playlist link, then update an imported playlist from Spotify later without losing songs you already matched. Uses Spotify's 2026 playlist API; earlier connections need one Reconnect for playlist access.
+- Use the album name to choose between an album cut and a compilation copy of the same song.
+- Right-click a song for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer; right-click an album to play or queue it. The browser's own context menu no longer appears.
+- Add Play next, Clear up next (keeps the current song playing) and Save queue as playlist. Albums are added to the queue in one step.
+- Add a sleep timer (15 minutes to 1½ hours, or end of the current song).
+- Back returns to the previous page and its scroll position; the mouse back button and Alt+← work too.
+- Keyboard shortcuts keep working after using the volume or seek slider or the sort menu. Mute restores the previous volume. Double-clicking a song plays it once.
+- Playback messages can be dismissed and clear once a later action succeeds. The playing song's queue remove button is disabled instead of failing.
+- Adding a song that is already in a playlist no longer duplicates it.
+- Song lists are no longer re-sorted several times a second during playback, and the Artists page is computed once per library change.
+- Show a system tray icon with playback controls and keep Slate Music grouped correctly on the taskbar.
+
 ## 1.0.2 — 2026-09-26
 
 - Search within the queue while keeping play, move and remove actions attached to the correct entry. Repeated songs retain their individual positions and only the active occurrence is highlighted.

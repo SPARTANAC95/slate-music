@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { matchTracks } from '../src/matching';
+import { keepConfirmed, matchTracks } from '../src/matching';
 import {
   albumsFrom,
   playable,
+  playableIndices,
   reorder,
   queueEntries,
   entryStatus,
   entryFrom,
 } from '../src/library';
-import type { Track, SpotifyTrack, Collection } from '../src/types';
+import type { Track, SpotifyTrack, Collection, Entry } from '../src/types';
 const local = (p: Partial<Track> = {}): Track => ({
   id: 'a',
   path: 'a.flac',
@@ -38,8 +39,6 @@ const remote = (p: Partial<SpotifyTrack> = {}): SpotifyTrack => ({
   name: 'Black Hole Sun',
   artists: [{ name: 'Soundgarden' }],
   duration_ms: 318000,
-  track_number: 1,
-  disc_number: 1,
   ...p,
 });
 describe('Spotify local matching', () => {
@@ -90,6 +89,46 @@ describe('Spotify local matching', () => {
     expect(
       matchTracks([remote({ name: 'Déjà vu' })], [local({ title: 'Deja Vu' })])[0].status,
     ).toBe('available'));
+  it('uses the playlist song’s album to choose between an album cut and a compilation', () => {
+    const album = local(),
+      compilation = local({ id: 'b', album: 'A-Sides' });
+    const [entry] = matchTracks(
+      [remote({ album: 'Superunknown' })],
+      [compilation, album],
+    );
+    expect(entry.status).toBe('available');
+    expect(entry.trackId).toBe('a');
+    expect(
+      matchTracks([remote({ album: 'Superunknown' })], [local({ title: 'Spoonman' })])[0].status,
+    ).toBe('missing');
+  });
+  it('matches Spotify local files, which have no Spotify ID', () => {
+    const [entry] = matchTracks([remote({ id: null })], [local()]);
+    expect(entry.spotifyId).toBeUndefined();
+    expect(entry.trackId).toBe('a');
+  });
+  it('keeps confirmed matches when a playlist is updated from Spotify', () => {
+    const previous: Entry[] = [
+      { spotifyId: 's1', trackId: 'manual', title: 'x', artist: 'y', duration: 1, status: 'available' },
+      { spotifyId: 's2', trackId: null, title: 'x', artist: 'y', duration: 1, status: 'missing' },
+      { spotifyId: 's3', trackId: 'old', title: 'x', artist: 'y', duration: 1, status: 'uncertain' },
+    ];
+    const next: Entry[] = [
+      { spotifyId: 's4', trackId: 'new', title: 'n', artist: 'y', duration: 1, status: 'available' },
+      { spotifyId: 's1', trackId: null, title: 'x', artist: 'y', duration: 1, status: 'uncertain' },
+      { spotifyId: 's2', trackId: 'found', title: 'x', artist: 'y', duration: 1, status: 'available' },
+      { spotifyId: 's3', trackId: null, title: 'x', artist: 'y', duration: 1, status: 'missing' },
+      { trackId: null, title: 'local', artist: 'y', duration: 1, status: 'missing' },
+    ];
+    const merged = keepConfirmed(previous, next);
+    expect(merged.map((e) => [e.trackId, e.status])).toEqual([
+      ['new', 'available'],
+      ['manual', 'available'],
+      ['found', 'available'],
+      [null, 'missing'],
+      [null, 'missing'],
+    ]);
+  });
 });
 describe('library ordering and queues', () => {
   it('shows unavailable saved matches as missing without discarding their confirmed identity', () => {
@@ -153,6 +192,26 @@ describe('library ordering and queues', () => {
     };
     expect(playable(c, [local()])).toHaveLength(1);
     expect(playable(c, [local({ missing: true })])).toHaveLength(0);
+  });
+  it('maps playlist rows back to their entries, skipping unplayable ones', () => {
+    const a = local(),
+      b = local({ id: 'b' });
+    const entry = (trackId: string | null, status: Entry['status'] = 'available'): Entry => ({
+      trackId,
+      title: '',
+      artist: '',
+      duration: 0,
+      status,
+    });
+    const c: Collection = {
+      id: 'p',
+      name: 'Mix',
+      kind: 'playlist',
+      created: 0,
+      entries: [entry('a'), entry(null, 'missing'), entry('b', 'uncertain'), entry('a'), entry('b')],
+    };
+    expect(playableIndices(c, [a, b])).toEqual([0, 3, 4]);
+    expect(playable(c, [a, b]).map((t) => t.id)).toEqual(['a', 'a', 'b']);
   });
   it('reorders with bounds safety', () => {
     expect(reorder([1, 2, 3], 2, 0)).toEqual([3, 1, 2]);

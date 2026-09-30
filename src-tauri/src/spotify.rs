@@ -9,6 +9,7 @@ use std::{
 };
 
 pub const REDIRECT: &str = "http://127.0.0.1:43829/callback";
+const SCOPES: &str = "playlist-read-private playlist-read-collaborative";
 fn client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(25))
@@ -100,6 +101,9 @@ fn store(db: &Database, mut value: Value, previous: Option<&Value>) -> Result<()
     }
     value["expires_at"] =
         json!(crate::db::now() + value["expires_in"].as_i64().unwrap_or(3600) * 1000 - 30000);
+    if value["scope"].is_string() {
+        db.set("spotify_scope", &value["scope"])?;
+    }
     let encrypted = protect(value.to_string().as_bytes(), false)?;
     let path = db.directory.join("spotify.dpapi");
     std::fs::write(path, encrypted).map_err(err)
@@ -112,7 +116,7 @@ pub fn disconnect(db: &Database) -> Result<()> {
     if p.exists() {
         std::fs::remove_file(p).map_err(err)?;
     }
-    Ok(())
+    db.set("spotify_scope", &Value::Null)
 }
 pub fn connect(db: &Database, client_id: &str) -> Result<()> {
     if client_id.len() != 32 || !client_id.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -131,6 +135,7 @@ pub fn connect(db: &Database, client_id: &str) -> Result<()> {
         ("code_challenge_method", "S256"),
         ("code_challenge", &challenge),
         ("state", &state),
+        ("scope", SCOPES),
     ]);
     open::that(u.as_str()).map_err(err)?;
     let start = Instant::now();
@@ -209,7 +214,7 @@ fn token(db: &Database) -> Result<String> {
                 ("client_id", id.as_str().unwrap_or("")),
             ])
             .send()
-            .map_err(|_| "Spotify is offline. Your saved albums still work.".to_string())?,
+            .map_err(|_| "Spotify is offline. Your saved playlists still work.".to_string())?,
     )?;
     let access = next["access_token"]
         .as_str()
@@ -218,82 +223,243 @@ fn token(db: &Database) -> Result<String> {
     store(db, next, Some(&value))?;
     Ok(access)
 }
-pub fn album_id(input: &str) -> Result<String> {
-    if let Some(id) = input.strip_prefix("spotify:album:") {
-        if id.len() == 22 && id.chars().all(|c| c.is_ascii_alphanumeric()) {
+pub fn playlist_access(db: &Database) -> bool {
+    db.get("spotify_scope")
+        .as_str()
+        .is_some_and(|s| s.split(' ').any(|scope| scope == "playlist-read-private"))
+}
+const NOT_YOURS: &str = "Spotify only lets apps read playlists you created or collaborate on. To import someone else's playlist, copy its songs into a new playlist of your own in Spotify, then import that.";
+/// Playlist reads get their own messages: Spotify answers 403 for playlists the user does
+/// not own or collaborate on, and 404 for Spotify-made mixes such as Discover Weekly.
+fn playlist_response(r: reqwest::blocking::Response) -> Result<Value> {
+    match r.status().as_u16() {
+        403 => Err(NOT_YOURS.into()),
+        404 => Err("Spotify could not find this playlist. Playlists made by Spotify, such as Discover Weekly or Today's Top Hits, cannot be read by apps; copy the songs into a playlist of your own first.".into()),
+        _ => response(r),
+    }
+}
+fn valid_id(id: &str) -> bool {
+    id.len() == 22 && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+pub fn playlist_id(input: &str) -> Result<String> {
+    let input = input.trim();
+    if let Some(id) = input.strip_prefix("spotify:playlist:") {
+        if valid_id(id) {
             return Ok(id.into());
         }
     }
     let u = url::Url::parse(input).map_err(|_| {
-        "Paste a Spotify album URL, such as https://open.spotify.com/album/…".to_string()
+        "Paste a Spotify playlist link, such as https://open.spotify.com/playlist/…".to_string()
     })?;
+    if u.host_str() == Some("spotify.link") {
+        return Err("Short spotify.link addresses cannot be read. Choose the playlist from your list above, or open the link in a browser and copy the open.spotify.com address.".into());
+    }
     if u.scheme() != "https" || u.host_str() != Some("open.spotify.com") {
-        return Err("Use an https://open.spotify.com/album/ URL".into());
+        return Err("Use a https://open.spotify.com/playlist/ link".into());
     }
-    let parts: Vec<_> = u.path_segments().unwrap().collect();
-    let pos = parts
-        .iter()
-        .position(|p| *p == "album")
-        .ok_or("This is not an album link")?;
-    let id = parts.get(pos + 1).ok_or("Album ID is missing")?;
-    if id.len() != 22 || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("Invalid Spotify album ID".into());
+    let parts: Vec<_> = u.path_segments().map(|s| s.collect()).unwrap_or_default();
+    let Some(pos) = parts.iter().position(|p| *p == "playlist") else {
+        return Err(if parts.contains(&"album") {
+            "That is an album link. Slate Music imports playlists; paste a link to a playlist instead."
+        } else {
+            "This is not a playlist link"
+        }
+        .into());
+    };
+    match parts.get(pos + 1) {
+        Some(id) if valid_id(id) => Ok((*id).into()),
+        _ => Err("Invalid Spotify playlist ID".into()),
     }
-    Ok((*id).into())
 }
-pub fn album(db: &Database, input: &str) -> Result<Value> {
-    let id = album_id(input)?;
-    let token = token(db)?;
-    let client = client()?;
-    let album = response(
-        client
-            .get(format!("https://api.spotify.com/v1/albums/{id}"))
-            .bearer_auth(&token)
-            .send()
-            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
-    )?;
-    let mut tracks = Vec::new();
-    let mut next = Some(format!(
-        "https://api.spotify.com/v1/albums/{id}/tracks?limit=50"
-    ));
-    let mut pages = 0;
+/// Follows Spotify's `next` links, refusing any page outside `path` on the API host.
+fn pages(
+    client: &reqwest::blocking::Client,
+    token: &str,
+    first: String,
+    path: &str,
+    max_pages: usize,
+    read: fn(reqwest::blocking::Response) -> Result<Value>,
+) -> Result<(Vec<Value>, Option<u64>)> {
+    let (mut items, mut total, mut next, mut count) = (Vec::new(), None, Some(first), 0);
     while let Some(address) = next.take() {
         let url = url::Url::parse(&address).map_err(err)?;
         if url.scheme() != "https"
             || url.host_str() != Some("api.spotify.com")
-            || url.path() != format!("/v1/albums/{id}/tracks")
+            || url.path() != path
         {
             return Err("Spotify returned an unexpected pagination URL".into());
         }
-        pages += 1;
-        if pages > 200 {
-            return Err("Album is too large".into());
+        count += 1;
+        if count > max_pages {
+            return Err("This list is too large to import".into());
         }
-        let data = response(client.get(url).bearer_auth(&token).send().map_err(err)?)?;
-        let items = data["items"]
+        let data = read(
+            client
+                .get(url)
+                .bearer_auth(token)
+                .send()
+                .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
+        )?;
+        total = total.or(data["total"].as_u64());
+        let page = data["items"]
             .as_array()
-            .ok_or("Spotify returned no track list")?;
-        tracks.extend(items.iter().cloned());
+            .ok_or("Spotify returned no item list")?;
+        items.extend(page.iter().cloned());
         next = data["next"].as_str().map(str::to_owned);
     }
-    if album["total_tracks"]
-        .as_u64()
-        .is_some_and(|n| n as usize != tracks.len())
-    {
-        return Err("Spotify returned an incomplete album. Please try again.".into());
+    Ok((items, total))
+}
+/// The user's own and followed playlists. Only owned or collaborative ones can be read.
+pub fn playlists(db: &Database) -> Result<Value> {
+    let token = token(db)?;
+    let client = client()?;
+    let me = response(
+        client
+            .get("https://api.spotify.com/v1/me")
+            .bearer_auth(&token)
+            .send()
+            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
+    )?;
+    let me = me["id"].as_str().unwrap_or_default();
+    let (items, _) = pages(
+        &client,
+        &token,
+        "https://api.spotify.com/v1/me/playlists?limit=50".into(),
+        "/v1/me/playlists",
+        40,
+        response,
+    )?;
+    Ok(Value::Array(
+        items
+            .iter()
+            .filter(|p| p["id"].as_str().is_some_and(valid_id))
+            .map(|p| playlist_summary(p, me))
+            .collect(),
+    ))
+}
+fn playlist_summary(p: &Value, me: &str) -> Value {
+    let owner = &p["owner"];
+    let collaborative = p["collaborative"].as_bool().unwrap_or(false);
+    json!({
+        "id": p["id"],
+        "name": p["name"].as_str().unwrap_or("Untitled playlist"),
+        "owner": owner["display_name"].as_str().or(owner["id"].as_str()).unwrap_or_default(),
+        // `items.total` replaced `tracks.total` in 2026; accept either.
+        "total": p["items"]["total"].as_u64().or(p["tracks"]["total"].as_u64()),
+        "readable": collaborative || (!me.is_empty() && owner["id"].as_str() == Some(me)),
+    })
+}
+pub fn playlist(db: &Database, input: &str) -> Result<Value> {
+    let id = playlist_id(input)?;
+    let token = token(db)?;
+    let client = client()?;
+    let meta = playlist_response(
+        client
+            .get(format!("https://api.spotify.com/v1/playlists/{id}"))
+            .query(&[("fields", "name,owner(id,display_name)")])
+            .bearer_auth(&token)
+            .send()
+            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
+    )?;
+    let (items, total) = pages(
+        &client,
+        &token,
+        format!("https://api.spotify.com/v1/playlists/{id}/items?limit=50&additional_types=track"),
+        &format!("/v1/playlists/{id}/items"),
+        250,
+        playlist_response,
+    )?;
+    if total.is_some_and(|n| n as usize != items.len()) {
+        return Err("Spotify returned an incomplete playlist. Please try again.".into());
     }
-    Ok(
-        json!({"id":id,"name":album["name"],"artists":album["artists"],"release_date":album["release_date"],"url":format!("https://open.spotify.com/album/{id}"),"tracks":tracks}),
-    )
+    let (tracks, skipped) = playlist_tracks(&items);
+    let owner = &meta["owner"];
+    Ok(json!({
+        "id": id,
+        "name": meta["name"].as_str().unwrap_or("Spotify playlist"),
+        "owner": owner["display_name"].as_str().or(owner["id"].as_str()).unwrap_or_default(),
+        "url": format!("https://open.spotify.com/playlist/{id}"),
+        "tracks": tracks,
+        "skipped": skipped,
+    }))
+}
+/// Songs in playlist order. Podcast episodes and removed/unavailable entries are counted, not kept.
+fn playlist_tracks(items: &[Value]) -> (Vec<Value>, usize) {
+    let mut skipped = 0;
+    let tracks = items
+        .iter()
+        .filter_map(|entry| {
+            // `item` replaced the deprecated `track` field in 2026; accept either.
+            let item = if entry["item"].is_object() {
+                &entry["item"]
+            } else {
+                &entry["track"]
+            };
+            let name = item["name"].as_str().unwrap_or_default();
+            if name.is_empty() || item["type"].as_str().is_some_and(|t| t != "track") {
+                skipped += 1;
+                return None;
+            }
+            let artists: Vec<Value> = item["artists"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x["name"].as_str()).map(|n| json!({"name": n})).collect())
+                .unwrap_or_default();
+            Some(json!({
+                "id": item["id"].as_str(),
+                "name": name,
+                "artists": artists,
+                "album": item["album"]["name"].as_str().unwrap_or_default(),
+                "duration_ms": item["duration_ms"].as_u64().unwrap_or(0),
+            }))
+        })
+        .collect();
+    (tracks, skipped)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn validates_album_links() {
-        assert!(album_id("https://open.spotify.com/album/1234567890123456789012?si=x").is_ok());
-        assert!(album_id("https://open.spotify.com/intl-de/album/1234567890123456789012").is_ok());
-        assert!(album_id("https://evil.test/album/1234567890123456789012").is_err());
-        assert!(album_id("https://open.spotify.com/track/1234567890123456789012").is_err());
+    fn validates_playlist_links() {
+        let id = "37i9dQZF1DXcBWIGoYBM5M";
+        assert_eq!(playlist_id(&format!("https://open.spotify.com/playlist/{id}?si=x")).unwrap(), id);
+        assert_eq!(playlist_id(&format!(" https://open.spotify.com/intl-de/playlist/{id} ")).unwrap(), id);
+        assert_eq!(playlist_id(&format!("spotify:playlist:{id}")).unwrap(), id);
+        assert!(playlist_id(&format!("https://evil.test/playlist/{id}")).is_err());
+        assert!(playlist_id(&format!("http://open.spotify.com/playlist/{id}")).is_err());
+        assert!(playlist_id("https://open.spotify.com/playlist/short").is_err());
+        assert!(playlist_id("https://spotify.link/AbCdEf").unwrap_err().contains("spotify.link"));
+        assert!(playlist_id(&format!("https://open.spotify.com/album/{id}"))
+            .unwrap_err()
+            .contains("album link"));
+    }
+    #[test]
+    fn reads_playlist_items_in_order_and_skips_non_songs() {
+        let items = vec![
+            json!({"item":{"type":"track","id":"a","name":"First","duration_ms":1000,"artists":[{"name":"A"},{"name":"B"}],"album":{"name":"Album"}}}),
+            json!({"track":{"type":"track","id":"b","name":"Old shape","duration_ms":2000,"artists":[{"name":"C"}],"album":{"name":"X"}}}),
+            json!({"item":{"type":"episode","id":"c","name":"A podcast","duration_ms":3000}}),
+            json!({"item":null,"track":null}),
+            json!({"is_local":true,"item":{"type":"track","id":null,"name":"My own file","duration_ms":4000,"artists":[{"name":"Me"}],"album":{"name":""}}}),
+        ];
+        let (tracks, skipped) = playlist_tracks(&items);
+        assert_eq!(skipped, 2);
+        let names: Vec<_> = tracks.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["First", "Old shape", "My own file"]);
+        assert_eq!(tracks[0]["artists"], json!([{"name":"A"},{"name":"B"}]));
+        assert_eq!(tracks[0]["album"], "Album");
+        assert!(tracks[2]["id"].is_null());
+    }
+    #[test]
+    fn marks_only_owned_or_collaborative_playlists_readable() {
+        let mine = json!({"id":"p1","name":"Mine","owner":{"id":"me","display_name":"Me"},"items":{"total":12}});
+        let theirs = json!({"id":"p2","name":"Theirs","owner":{"id":"you"},"tracks":{"total":3}});
+        let shared = json!({"id":"p3","name":"Shared","owner":{"id":"you"},"collaborative":true});
+        assert_eq!(playlist_summary(&mine, "me")["readable"], true);
+        assert_eq!(playlist_summary(&mine, "me")["total"], 12);
+        assert_eq!(playlist_summary(&theirs, "me")["readable"], false);
+        assert_eq!(playlist_summary(&theirs, "me")["total"], 3);
+        assert_eq!(playlist_summary(&theirs, "me")["owner"], "you");
+        assert_eq!(playlist_summary(&shared, "me")["readable"], true);
+        assert_eq!(playlist_summary(&mine, "")["readable"], false);
     }
 }

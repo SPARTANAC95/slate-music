@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Slate Music",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "identifier": "com.spartanac95.slate-music",
   "build": {
     "frontendDist": "../dist",
@@ -22,6 +22,7 @@
         "theme": "Dark",
         "backgroundColor": "#0a0a0b",
         "decorations": false,
+        "skipTaskbar": false,
         "dragDropEnabled": false
       }
     ],

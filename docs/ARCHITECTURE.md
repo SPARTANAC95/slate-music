@@ -6,7 +6,7 @@ React renders real state obtained through narrowly scoped Tauri commands. Rust o
 
 `src/App.tsx` owns navigation and session presentation; `components.tsx` contains shared accessible controls and virtualized rows. `library.ts` groups and sorts metadata. `matching.ts` implements conservative Spotify matching. `ImportPanel.tsx`, `SettingsPanel.tsx` and `updater.ts` own their respective flows.
 
-`src-tauri/src/lib.rs` wires native commands and windows. `db.rs` owns the SQLite schema and migrations. `library.rs` scans and watches directories on worker threads, uses Lofty to read tags, and caches resized artwork by content hash. `audio.rs` owns a continuously running Rodio output mixer and serializes queue mutations. `spotify.rs` implements PKCE, loopback authorization, DPAPI token storage, refresh and paginated album retrieval.
+`src-tauri/src/lib.rs` wires native commands and windows. `db.rs` owns the SQLite schema and migrations. `library.rs` scans and watches directories on worker threads, uses Lofty to read tags, and caches resized artwork by content hash. `audio.rs` owns a continuously running Rodio output mixer and serializes queue mutations. `spotify.rs` implements PKCE, loopback authorization, DPAPI token storage, refresh, the playlist list and paginated playlist retrieval (the 2026 `/playlists/{id}/items` API).
 
 ## Indexing and data
 
@@ -26,4 +26,4 @@ This release measures sample continuity for contiguous 48 kHz FLAC fixtures. It 
 
 Only HTTPS production endpoints are configured. Tauri checks the signed artifact and its signed version against the embedded public key. No private signing key ships in the app. A debug-only verification command permits loopback fixture URLs; release builds reject that command and never enable insecure updater transport. Downloading does not install. The UI gates installation while playing and requires user action.
 
-Spotify credentials never enter the renderer. OAuth uses a random state and PKCE challenge, binds a loopback listener, and expires after a bounded wait. Album pagination is restricted to the Spotify API host and checks the retrieved total. Import results contain metadata and local track IDs, not audio.
+Spotify credentials never enter the renderer. OAuth uses a random state and PKCE challenge, binds a loopback listener, and expires after a bounded wait. Playlist pagination is restricted to the expected Spotify API path and checks the retrieved total. Import results contain metadata and local track IDs, not audio.

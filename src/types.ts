@@ -34,6 +34,9 @@ export interface Playback {
   crossfade: number;
   error: string | null;
   engineReady: boolean;
+  /** Sleep timer deadline in Unix milliseconds. */
+  sleepAt: number | null;
+  sleepEndOfTrack: boolean;
 }
 export interface Entry {
   trackId: string | null;
@@ -73,7 +76,12 @@ export interface Snapshot {
   settings: Settings | null;
   scan: Scan;
   playback: Playback;
-  spotify: { connected: boolean; clientId: string | null; redirectUri: string };
+  spotify: {
+    connected: boolean;
+    playlistAccess: boolean;
+    clientId: string | null;
+    redirectUri: string;
+  };
 }
 export interface Album {
   key: string;
@@ -84,18 +92,27 @@ export interface Album {
   artwork: string | null;
 }
 export interface SpotifyTrack {
-  id: string;
+  /** Null for local files that were added to a Spotify playlist. */
+  id: string | null;
   name: string;
   artists: { name: string }[];
+  album?: string;
   duration_ms: number;
-  disc_number: number;
-  track_number: number;
 }
-export interface SpotifyAlbum {
+export interface SpotifyPlaylistSummary {
   id: string;
   name: string;
-  artists: { name: string }[];
-  release_date: string;
+  owner: string;
+  total: number | null;
+  /** Spotify only shares the songs of playlists the user owns or collaborates on. */
+  readable: boolean;
+}
+export interface SpotifyPlaylist {
+  id: string;
+  name: string;
+  owner: string;
   url: string;
   tracks: SpotifyTrack[];
+  /** Podcast episodes and removed or unavailable entries. */
+  skipped: number;
 }

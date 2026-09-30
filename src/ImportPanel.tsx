@@ -1,47 +1,131 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ArrowLeft, ArrowUp, ArrowDown, Check, Link2, Search, X, ExternalLink } from 'lucide-react';
-import type { Collection, Entry, SpotifyAlbum, Track } from './types';
-import { matchTracks } from './matching';
+import {
+  ArrowLeft,
+  ArrowUp,
+  ArrowDown,
+  Check,
+  Link2,
+  ListMusic,
+  Lock,
+  RefreshCw,
+  Search,
+  X,
+  ExternalLink,
+} from 'lucide-react';
+import type {
+  Collection,
+  Entry,
+  Snapshot,
+  SpotifyPlaylist,
+  SpotifyPlaylistSummary,
+  Track,
+} from './types';
+import { keepConfirmed, matchTracks } from './matching';
 import { normalize, time, reorder, entryStatus } from './library';
 import { Art, IconButton } from './components';
 export default function ImportPanel({
   tracks,
   existing,
+  spotify,
   onSave,
   onSettings,
+  onConnected,
 }: {
   tracks: Track[];
   existing?: Collection;
+  spotify: Snapshot['spotify'];
   onSave: (c: Collection) => Promise<void>;
   onSettings: () => void;
+  onConnected: () => Promise<void>;
 }) {
   const [url, setUrl] = useState(''),
-    [busy, setBusy] = useState(false),
+    [busy, setBusy] = useState<'' | 'list' | 'fetch' | 'connect' | 'save'>(''),
+    [loading, setLoading] = useState<string | null>(null),
     [error, setError] = useState(''),
+    [notice, setNotice] = useState(''),
     [collection, setCollection] = useState<Collection | null>(existing || null),
+    [playlists, setPlaylists] = useState<SpotifyPlaylistSummary[] | null>(null),
+    [filter, setFilter] = useState(''),
     [picking, setPicking] = useState<number | null>(null),
     [query, setQuery] = useState('');
   const trackMap = useMemo(() => new Map(tracks.map((t) => [t.id, t])), [tracks]);
-  async function fetchAlbum() {
-    setBusy(true);
+  const ready = spotify.connected && spotify.playlistAccess;
+  const fromSpotify = !!collection?.sourceUrl?.includes('/playlist/');
+  async function loadPlaylists() {
+    setBusy('list');
     setError('');
     try {
-      const album = await invoke<SpotifyAlbum>('spotify_album', { url });
+      setPlaylists(await invoke<SpotifyPlaylistSummary[]>('spotify_playlists'));
+    } catch (e) {
+      setError(String(e));
+      setPlaylists([]);
+    } finally {
+      setBusy('');
+    }
+  }
+  useEffect(() => {
+    if (!existing && ready && playlists === null) loadPlaylists();
+  }, [ready]);
+  async function readPlaylist(source: string, key = source) {
+    setBusy('fetch');
+    setLoading(key);
+    setError('');
+    setNotice('');
+    try {
+      const playlist = await invoke<SpotifyPlaylist>('spotify_playlist', { url: source });
+      const skipped = playlist.skipped
+        ? ` ${playlist.skipped} podcast episode${playlist.skipped === 1 ? '' : 's'} or unavailable item${playlist.skipped === 1 ? ' was' : 's were'} left out.`
+        : '';
+      return { playlist, skipped };
+    } finally {
+      setBusy('');
+      setLoading(null);
+    }
+  }
+  async function importPlaylist(source: string, key?: string) {
+    try {
+      const { playlist, skipped } = await readPlaylist(source, key);
+      setNotice(skipped.trim());
       setCollection({
         id: crypto.randomUUID(),
-        name: album.name,
-        artist: album.artists.map((a) => a.name).join(', '),
-        year: Number(album.release_date.slice(0, 4)),
-        kind: 'virtual',
-        sourceUrl: album.url,
+        name: playlist.name,
+        artist: playlist.owner ? `From Spotify · ${playlist.owner}` : 'From Spotify',
+        kind: 'playlist',
+        sourceUrl: playlist.url,
         created: Date.now(),
-        entries: matchTracks(album.tracks, tracks),
+        entries: matchTracks(playlist.tracks, tracks),
       });
     } catch (e) {
       setError(String(e));
+    }
+  }
+  async function refreshFromSpotify() {
+    if (!collection?.sourceUrl) return;
+    try {
+      const { playlist, skipped } = await readPlaylist(collection.sourceUrl);
+      setCollection({
+        ...collection,
+        entries: keepConfirmed(collection.entries, matchTracks(playlist.tracks, tracks)),
+      });
+      setNotice(
+        `Updated to Spotify's current ${playlist.tracks.length} songs. Songs you already matched stay matched. Save to keep the update.${skipped}`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  async function allowAccess() {
+    if (!spotify.clientId) return onSettings();
+    setBusy('connect');
+    setError('');
+    try {
+      await invoke('spotify_connect', { clientId: spotify.clientId });
+      await onConnected();
+    } catch (e) {
+      setError(String(e));
     } finally {
-      setBusy(false);
+      setBusy('');
     }
   }
   function editEntries(entries: Entry[]) {
@@ -71,13 +155,20 @@ export default function ImportPanel({
         )
         .slice(0, 60)
     : candidates;
+  const shownPlaylists = useMemo(() => {
+    const needle = normalize(filter);
+    return (playlists || [])
+      .filter((p) => normalize(`${p.name} ${p.owner}`).includes(needle))
+      .sort((a, b) => Number(b.readable) - Number(a.readable));
+  }, [playlists, filter]);
+  const kindLabel = collection?.kind === 'virtual' ? 'virtual album' : 'playlist';
   return (
     <div className="import-content">
       {picking !== null && chosen ? (
         <>
           <button className="quiet" onClick={() => setPicking(null)}>
             <ArrowLeft size={16} />
-            Back to album
+            Back to {kindLabel}
           </button>
           <h3>Match “{chosen.title}”</h3>
           <p>
@@ -109,31 +200,29 @@ export default function ImportPanel({
             ))}
             {results.length === 0 && <p>No candidates. Search by title or artist.</p>}
           </div>
-          <button onClick={() => select(null)}>Leave this track missing</button>
+          <button onClick={() => select(null)}>Leave this song missing</button>
         </>
       ) : collection ? (
         <>
-          <div className="import-title">
-            <label className="field">
-              Name
-              <input
-                value={collection.name}
-                onChange={(e) => setCollection({ ...collection, name: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              Save as
-              <select
-                value={collection.kind}
-                onChange={(e) =>
-                  setCollection({ ...collection, kind: e.target.value as Collection['kind'] })
-                }
-              >
-                <option value="virtual">Virtual album</option>
-                <option value="playlist">Playlist</option>
-              </select>
-            </label>
-          </div>
+          {!existing && (
+            <button
+              className="quiet"
+              onClick={() => {
+                setCollection(null);
+                setNotice('');
+              }}
+            >
+              <ArrowLeft size={16} />
+              Choose another playlist
+            </button>
+          )}
+          <label className="field">
+            Name
+            <input
+              value={collection.name}
+              onChange={(e) => setCollection({ ...collection, name: e.target.value })}
+            />
+          </label>
           <p>
             {collection.artist}
             {collection.sourceUrl && (
@@ -142,6 +231,17 @@ export default function ImportPanel({
                 onClick={() => invoke('open_link', { url: collection.sourceUrl })}
               >
                 View on Spotify <ExternalLink size={12} />
+              </button>
+            )}
+            {existing && fromSpotify && (
+              <button
+                className="text-button source-link"
+                disabled={!!busy || !ready}
+                title={ready ? undefined : 'Connect Spotify with playlist access in Settings'}
+                onClick={refreshFromSpotify}
+              >
+                <RefreshCw size={12} className={busy === 'fetch' ? 'spin' : ''} />
+                {busy === 'fetch' ? 'Checking Spotify…' : 'Update from Spotify'}
               </button>
             )}
           </p>
@@ -153,6 +253,7 @@ export default function ImportPanel({
               </span>
             ))}
           </div>
+          {notice && <p className="import-notice">{notice}</p>}
           <p className="fine-print">
             Only confirmed, available files enter playback. Review uncertain versions before saving.
             Your files and tags stay unchanged.
@@ -191,21 +292,21 @@ export default function ImportPanel({
                   {collection.kind === 'playlist' && (
                     <div className="row-actions">
                       <IconButton
-                        label={`Move track ${i + 1} up`}
+                        label={`Move song ${i + 1} up`}
                         disabled={i === 0}
                         onClick={() => editEntries(reorder(collection.entries, i, i - 1))}
                       >
                         <ArrowUp size={14} />
                       </IconButton>
                       <IconButton
-                        label={`Move track ${i + 1} down`}
+                        label={`Move song ${i + 1} down`}
                         disabled={i === collection.entries.length - 1}
                         onClick={() => editEntries(reorder(collection.entries, i, i + 1))}
                       >
                         <ArrowDown size={14} />
                       </IconButton>
                       <IconButton
-                        label={`Remove track ${i + 1}`}
+                        label={`Remove song ${i + 1}`}
                         onClick={() => editEntries(collection.entries.filter((_, n) => i !== n))}
                       >
                         <X size={14} />
@@ -215,23 +316,27 @@ export default function ImportPanel({
                 </div>
               );
             })}
+            {collection.entries.length === 0 && <p>This {kindLabel} has no songs yet.</p>}
           </div>
           <footer className="modal-footer">
-            <span>{collection.entries.length} tracks, original order preserved</span>
+            <span>
+              {collection.entries.length} song{collection.entries.length === 1 ? '' : 's'}
+              {fromSpotify && !existing ? ', in Spotify’s order' : ''}
+            </span>
             <button
               className="primary"
-              disabled={busy || !collection.name.trim()}
+              disabled={!!busy || !collection.name.trim()}
               onClick={async () => {
-                setBusy(true);
+                setBusy('save');
                 try {
                   await onSave(collection);
                 } catch (e) {
                   setError(String(e));
-                  setBusy(false);
+                  setBusy('');
                 }
               }}
             >
-              Save {collection.kind === 'virtual' ? 'virtual album' : 'playlist'}
+              Save {kindLabel}
             </button>
           </footer>
         </>
@@ -240,33 +345,112 @@ export default function ImportPanel({
           <div className="import-intro">
             <Link2 size={28} strokeWidth={1.4} />
             <h3>
-              An album you love.
+              A playlist you love.
               <br />
               The files you already own.
             </h3>
             <p>
-              Paste a Spotify album link. Slate Music matches its ordered track list against your
-              local collection.
+              Choose one of your Spotify playlists. Slate Music finds each song in your local
+              collection and keeps the playlist’s order.
             </p>
           </div>
-          <label className="field">
-            Spotify album URL
-            <input
-              autoFocus
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://open.spotify.com/album/…"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && url) fetchAlbum();
-              }}
-            />
-          </label>
-          <div className="button-row">
-            <button className="primary" onClick={fetchAlbum} disabled={busy || !url}>
-              {busy ? 'Retrieving complete track list…' : 'Find matching files'}
-            </button>
-            <button onClick={onSettings}>Spotify setup</button>
-          </div>
+          {!spotify.connected ? (
+            <div className="import-callout">
+              <p>Connect Spotify once, and your playlists will appear here.</p>
+              <button className="primary" onClick={onSettings}>
+                Set up Spotify
+              </button>
+            </div>
+          ) : !spotify.playlistAccess ? (
+            <div className="import-callout">
+              <p>
+                Spotify needs one more permission: letting Slate Music read your playlists. Your
+                browser opens for a quick approval.
+              </p>
+              <button className="primary" disabled={!!busy} onClick={allowAccess}>
+                {busy === 'connect' ? 'Waiting for approval in your browser…' : 'Allow playlist access'}
+              </button>
+            </div>
+          ) : (
+            <>
+              <section className="playlist-picker">
+                <div className="picker-heading">
+                  <h4>Your Spotify playlists</h4>
+                  <IconButton label="Reload playlists" disabled={!!busy} onClick={loadPlaylists}>
+                    <RefreshCw size={14} className={busy === 'list' ? 'spin' : ''} />
+                  </IconButton>
+                </div>
+                {(playlists?.length || 0) > 8 && (
+                  <label className="search-box">
+                    <Search size={16} />
+                    <input
+                      placeholder="Find a playlist…"
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                    />
+                  </label>
+                )}
+                <div className="playlist-list">
+                  {playlists === null ? (
+                    <p className="fine-print">Loading your playlists…</p>
+                  ) : playlists.length === 0 ? (
+                    <p className="fine-print">No playlists found. Paste a link below instead.</p>
+                  ) : (
+                    shownPlaylists.map((p) => (
+                      <button
+                        key={p.id}
+                        className="playlist-option"
+                        disabled={!p.readable || !!busy}
+                        title={
+                          p.readable
+                            ? undefined
+                            : 'Spotify only shares playlists you created or collaborate on. Copy its songs into a playlist of your own to import it.'
+                        }
+                        onClick={() => importPlaylist(`spotify:playlist:${p.id}`, p.id)}
+                      >
+                        {p.readable ? <ListMusic size={17} /> : <Lock size={15} />}
+                        <span>
+                          <strong>{p.name}</strong>
+                          <small>
+                            {loading === p.id
+                              ? 'Reading every song…'
+                              : p.readable
+                                ? `${p.total ?? '?'} songs · ${p.owner}`
+                                : `By ${p.owner} · Spotify doesn’t share this one`}
+                          </small>
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </section>
+              <label className="field">
+                Or paste a playlist link
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://open.spotify.com/playlist/…"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && url.trim() && !busy) importPlaylist(url);
+                  }}
+                />
+              </label>
+            </>
+          )}
+          {spotify.connected && (
+            <div className="button-row">
+              {ready && (
+                <button
+                  className="primary"
+                  onClick={() => importPlaylist(url)}
+                  disabled={!!busy || !url.trim()}
+                >
+                  {loading === url ? 'Reading every song…' : 'Find matching files'}
+                </button>
+              )}
+              <button onClick={onSettings}>Spotify setup</button>
+            </div>
+          )}
           <p className="fine-print">
             Metadata matching only. No streaming, downloads or changes to your music files.
           </p>

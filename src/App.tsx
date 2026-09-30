@@ -1,4 +1,12 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -41,6 +49,12 @@ import {
   Download,
   Trash2,
   Pencil,
+  ListPlus,
+  ListEnd,
+  ListX,
+  Moon,
+  FolderSearch,
+  Save,
 } from 'lucide-react';
 import type { Album, Collection, Playback, Scan, Settings, Snapshot, Track } from './types';
 import {
@@ -50,10 +64,19 @@ import {
   entryFrom,
   normalize,
   playable,
+  playableIndices,
   queueEntries,
   time,
 } from './library';
-import { Art, Empty, IconButton, Modal, TrackTable } from './components';
+import {
+  Art,
+  ContextMenu,
+  Empty,
+  IconButton,
+  Modal,
+  TrackTable,
+  type MenuItem,
+} from './components';
 import SettingsPanel from './SettingsPanel';
 import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
@@ -80,6 +103,18 @@ type Dialog =
   | 'install'
   | null;
 const defaults: Settings = { autoCheck: true, autoDownload: true, showListening: true };
+const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+const noQueueEntries: ReturnType<typeof queueEntries> = [];
+/** Playback updates arrive several times a second. Reusing the old queue array when nothing
+ * changed keeps song lists from being filtered and sorted again on every update. */
+const sameQueue = (previous: Playback | null, next: Playback): Playback =>
+  previous &&
+  previous.queue.length === next.queue.length &&
+  previous.queue.every((id, i) => id === next.queue[i])
+    ? { ...next, queue: previous.queue }
+    : next;
+type View = { page: Page; album: string; artist: string; collection: string; scroll: number };
+type Menu = { x: number; y: number; items: MenuItem[]; above?: boolean };
 const nav = [
   { name: 'Home', icon: Home },
   { name: 'Songs', icon: Music2 },
@@ -103,15 +138,22 @@ export default function App() {
     [selectedArtist, setSelectedArtist] = useState(''),
     [selectedCollection, setSelectedCollection] = useState(''),
     [dialog, setDialog] = useState<Dialog>(null),
-    [addTrack, setAddTrack] = useState<Track | null>(null),
+    [adding, setAdding] = useState<Track[]>([]),
     [playlistName, setPlaylistName] = useState(''),
     [toast, setToast] = useState(''),
     [settings, setSettings] = useState<Settings>(defaults),
-    [seek, setSeek] = useState<number | null>(null);
+    [seek, setSeek] = useState<number | null>(null),
+    [menu, setMenu] = useState<Menu | null>(null);
   const searchRef = useRef<HTMLInputElement>(null),
+    mainRef = useRef<HTMLElement>(null),
+    history = useRef<View[]>([]),
+    restoreScroll = useRef<number | null>(null),
+    unmuteVolume = useRef(0.7),
     initialPicker = useRef(false),
     initialized = useRef(false),
-    exitAllowed = useRef(false);
+    exitAllowed = useRef(false),
+    goBackRef = useRef<() => void>(() => {});
+  const closeMenu = useCallback(() => setMenu(null), []);
   const mini = new URLSearchParams(location.search).has('mini');
   const updater = useUpdater();
   const deferredQuery = useDeferredValue(query);
@@ -120,7 +162,7 @@ export default function App() {
     try {
       const next = await invoke<Snapshot>('snapshot');
       setData(next);
-      setPb(next.playback);
+      setPb((previous) => sameQueue(previous, next.playback));
       setSettings({ ...defaults, ...next.settings });
       setLoading(false);
       setFatal('');
@@ -133,7 +175,7 @@ export default function App() {
     async (action: string, value?: unknown) => {
       try {
         const next = await invoke<Playback>('playback', { action, value: value ?? null });
-        setPb(next);
+        setPb((previous) => sameQueue(previous, next));
         return next;
       } catch (e) {
         notify(String(e));
@@ -156,7 +198,7 @@ export default function App() {
   useEffect(() => {
     refresh();
     const promises = [
-      listen<Playback>('playback', (e) => setPb(e.payload)),
+      listen<Playback>('playback', (e) => setPb((previous) => sameQueue(previous, e.payload))),
       listen<Scan>('scan', (e) => setData((d) => (d ? { ...d, scan: e.payload } : d))),
       listen('library-changed', refresh),
       listen('history-changed', refresh),
@@ -206,9 +248,21 @@ export default function App() {
   }, [updater.ready, mini, task]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || dialog) return;
-      if (e.ctrlKey && e.key.toLowerCase() === 'k') {
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      const type = tag === 'INPUT' ? (el as HTMLInputElement).type : '';
+      const typing =
+        tag === 'TEXTAREA' || el?.isContentEditable || (tag === 'INPUT' && type !== 'range');
+      if (typing || dialog || el?.closest('[role="menu"]')) return;
+      // Sliders and the sort menu keep their own arrow keys (and Space for the menu); every
+      // other shortcut still works after using them.
+      const ownsKeys = type === 'range' || tag === 'SELECT';
+      if (ownsKeys && !e.ctrlKey && !e.altKey && e.key.startsWith('Arrow')) return;
+      if (tag === 'SELECT' && e.code === 'Space') return;
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        goBackRef.current();
+      } else if (e.ctrlKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         searchRef.current?.focus();
       } else if (e.code === 'Space') {
@@ -234,6 +288,32 @@ export default function App() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [pb, dialog, command, task]);
+  useEffect(() => {
+    // The mouse's back button goes back, and the browser's own right-click menu (Back,
+    // Refresh, Print…) never appears outside text fields.
+    const mouseBack = (e: MouseEvent) => {
+      if (e.button === 3) {
+        e.preventDefault();
+        goBackRef.current();
+      }
+    };
+    const browserMenu = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement)?.closest('input, textarea, [contenteditable="true"]'))
+        e.preventDefault();
+    };
+    window.addEventListener('mouseup', mouseBack);
+    window.addEventListener('contextmenu', browserMenu);
+    return () => {
+      window.removeEventListener('mouseup', mouseBack);
+      window.removeEventListener('contextmenu', browserMenu);
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (restoreScroll.current !== null && mainRef.current) {
+      mainRef.current.scrollTop = restoreScroll.current;
+      restoreScroll.current = null;
+    }
+  });
   const tracks = data?.tracks || [];
   const trackMap = useMemo(() => new Map(tracks.map((t) => [t.id, t])), [tracks]);
   const albums = useMemo(() => albumsFrom(tracks), [tracks]);
@@ -242,16 +322,28 @@ export default function App() {
   const album = albums.find((a) => a.key === selectedAlbum),
     collection = data?.collections.find((c) => c.id === selectedCollection);
   const artistNames = useMemo(
-    () => [...new Set(tracks.map((t) => t.albumArtist))].sort((a, b) => a.localeCompare(b)),
+    () => [...new Set(tracks.map((t) => t.albumArtist))].sort(collator.compare),
     [tracks],
   );
+  const artistStats = useMemo(() => {
+    const stats = new Map<string, { albums: number; songs: number; artwork: string | null }>();
+    for (const a of albums) {
+      const s = stats.get(a.artist) || { albums: 0, songs: 0, artwork: null };
+      s.albums += 1;
+      s.songs += a.tracks.length;
+      s.artwork ??= a.artwork;
+      stats.set(a.artist, s);
+    }
+    return stats;
+  }, [albums]);
   const favoriteCount = tracks.filter((t) => t.favorite).length;
   const recent = useMemo(
     () => tracks.filter((t) => t.lastPlayed > 0).sort((a, b) => b.lastPlayed - a.lastPlayed),
     [tracks],
   );
   const visibleQueue = useMemo(
-    () => (page === 'Queue' ? queueEntries(pb?.queue || [], trackMap, deferredQuery) : []),
+    () =>
+      page === 'Queue' ? queueEntries(pb?.queue || [], trackMap, deferredQuery) : noQueueEntries,
     [page, pb?.queue, trackMap, deferredQuery],
   );
   const sortMode = page === 'Recently played' ? recentSort : sort;
@@ -269,10 +361,10 @@ export default function App() {
               : page === 'Collection' && collection
                 ? playable(collection, tracks)
                 : tracks;
-    if (deferredQuery)
-      result = result.filter((t) =>
-        normalize(`${t.title} ${t.artist} ${t.album}`).includes(normalize(deferredQuery)),
-      );
+    if (deferredQuery) {
+      const needle = normalize(deferredQuery);
+      result = result.filter((t) => normalize(`${t.title} ${t.artist} ${t.album}`).includes(needle));
+    }
     if (filter === 'available') result = result.filter((t) => !t.missing);
     if (filter === 'missing') result = result.filter((t) => t.missing);
     if (filter === 'lossless')
@@ -283,19 +375,19 @@ export default function App() {
         sortMode === 'recent'
           ? b.lastPlayed - a.lastPlayed
           : sortMode === 'artist'
-            ? a.artist.localeCompare(b.artist) ||
-              a.album.localeCompare(b.album) ||
+            ? collator.compare(a.artist, b.artist) ||
+              collator.compare(a.album, b.album) ||
               a.disc - b.disc ||
               a.track - b.track
             : sortMode === 'album'
-              ? a.album.localeCompare(b.album) || a.disc - b.disc || a.track - b.track
+              ? collator.compare(a.album, b.album) || a.disc - b.disc || a.track - b.track
               : sortMode === 'added'
                 ? b.added - a.added
                 : sortMode === 'duration'
                   ? b.duration - a.duration
                   : sortMode === 'plays'
                     ? b.playCount - a.playCount
-                    : a.title.localeCompare(b.title),
+                    : collator.compare(a.title, b.title),
       );
     }
     return result;
@@ -306,18 +398,185 @@ export default function App() {
     album,
     selectedArtist,
     collection,
-    pb?.queue,
-    trackMap,
     deferredQuery,
     filter,
     sortMode,
     duplicateIds,
     visibleQueue,
   ]);
+  /** Records where the user is, so Back returns here with the same scroll position. */
+  function remember() {
+    history.current = [
+      ...history.current.slice(-49),
+      {
+        page,
+        album: selectedAlbum,
+        artist: selectedArtist,
+        collection: selectedCollection,
+        scroll: mainRef.current?.scrollTop || 0,
+      },
+    ];
+  }
   function navigate(p: Page) {
+    if (p !== page || ['Album', 'Artist', 'Collection'].includes(p)) remember();
     setPage(p);
     setQuery('');
     setFilter('all');
+    restoreScroll.current = 0;
+  }
+  function goBack() {
+    const view = history.current.pop();
+    if (!view) {
+      if (page !== 'Home') navigate('Home');
+      return;
+    }
+    setSelectedAlbum(view.album);
+    setSelectedArtist(view.artist);
+    setSelectedCollection(view.collection);
+    setPage(view.page);
+    setQuery('');
+    setFilter('all');
+    restoreScroll.current = view.scroll;
+  }
+  goBackRef.current = goBack;
+  function openArtist(name: string) {
+    setSelectedArtist(name);
+    navigate('Artist');
+  }
+  function albumOf(t: Track) {
+    return albums.find((a) => a.tracks.some((x) => x.id === t.id));
+  }
+  async function enqueue(list: Track[], next: boolean) {
+    const available = list.filter((t) => !t.missing);
+    if (!available.length) return notify('There are no available songs in this selection.');
+    const done = await command(
+      next ? 'insert_next' : 'append',
+      available.map((t) => t.id),
+    );
+    const what = available.length === 1 ? available[0].title : `${available.length} songs`;
+    if (done) notify(`${what} ${next ? 'will play next' : 'added to queue'}`);
+  }
+  function trackMenu(
+    t: Track,
+    x: number,
+    y: number,
+    remove?: { label: string; disabled?: boolean; run: () => void },
+  ) {
+    const a = albumOf(t);
+    setMenu({
+      x,
+      y,
+      items: [
+        {
+          label: 'Play next',
+          icon: <ListPlus size={15} />,
+          disabled: t.missing,
+          onSelect: () => enqueue([t], true),
+        },
+        {
+          label: 'Add to queue',
+          icon: <ListEnd size={15} />,
+          disabled: t.missing,
+          onSelect: () => enqueue([t], false),
+        },
+        {
+          label: 'Add to playlist…',
+          icon: <ListMusic size={15} />,
+          onSelect: () => addTo([t]),
+        },
+        'divider',
+        {
+          label: 'Go to album',
+          icon: <Disc3 size={15} />,
+          disabled: !a || (page === 'Album' && a.key === selectedAlbum),
+          onSelect: () => a && openAlbum(a),
+        },
+        {
+          label: 'Go to artist',
+          icon: <Users size={15} />,
+          disabled: page === 'Artist' && selectedArtist === t.albumArtist,
+          onSelect: () => openArtist(t.albumArtist),
+        },
+        'divider',
+        {
+          label: t.favorite ? 'Remove from favorites' : 'Add to favorites',
+          icon: <Heart size={15} />,
+          onSelect: () => favorite(t),
+        },
+        {
+          label: 'Show in File Explorer',
+          icon: <FolderSearch size={15} />,
+          onSelect: () => task(() => invoke('reveal_track', { id: t.id })),
+        },
+        ...(remove
+          ? [
+              'divider' as const,
+              {
+                label: remove.label,
+                icon: <ListX size={15} />,
+                disabled: remove.disabled,
+                onSelect: remove.run,
+              },
+            ]
+          : []),
+      ],
+    });
+  }
+  function albumMenu(a: Album, x: number, y: number) {
+    setMenu({
+      x,
+      y,
+      items: [
+        { label: 'Play album', icon: <Play size={15} />, onSelect: () => playList(a.tracks) },
+        { label: 'Play next', icon: <ListPlus size={15} />, onSelect: () => enqueue(a.tracks, true) },
+        {
+          label: 'Add to queue',
+          icon: <ListEnd size={15} />,
+          onSelect: () => enqueue(a.tracks, false),
+        },
+        {
+          label: 'Add to playlist…',
+          icon: <ListMusic size={15} />,
+          onSelect: () => addTo(a.tracks.filter((t) => !t.missing)),
+        },
+        'divider',
+        { label: 'Go to artist', icon: <Users size={15} />, onSelect: () => openArtist(a.artist) },
+      ],
+    });
+  }
+  const sleepLabel = (() => {
+    if (pb?.sleepEndOfTrack) return 'Sleep timer: pauses after this song';
+    if (!pb?.sleepAt) return 'Sleep timer';
+    const minutes = Math.max(1, Math.ceil((pb.sleepAt - Date.now()) / 60000));
+    return `Sleep timer: pauses in ${minutes} min`;
+  })();
+  function sleepMenu(x: number, y: number) {
+    const set = (value: unknown, message: string) =>
+      command('sleep', value).then((done) => done && notify(message));
+    const active = !!pb?.sleepAt || !!pb?.sleepEndOfTrack;
+    setMenu({
+      x,
+      y,
+      above: true,
+      items: [
+        ...[15, 30, 45, 60, 90].map((minutes) => ({
+          label: minutes < 60 ? `${minutes} minutes` : minutes === 60 ? '1 hour' : '1½ hours',
+          onSelect: () =>
+            set({ minutes }, `Music will pause in ${minutes < 60 ? `${minutes} minutes` : minutes === 60 ? '1 hour' : '1½ hours'}.`),
+        })),
+        {
+          label: 'End of this song',
+          disabled: !pb?.currentId,
+          onSelect: () => set({ endOfTrack: true }, 'Music will pause when this song ends.'),
+        },
+        ...(active
+          ? [
+              'divider' as const,
+              { label: 'Turn off sleep timer', onSelect: () => set(null, 'Sleep timer off.') },
+            ]
+          : []),
+      ],
+    });
   }
   function openAlbum(a: Album) {
     setSelectedAlbum(a.key);
@@ -347,9 +606,39 @@ export default function App() {
       );
     });
   }
-  function addTo(t: Track) {
-    setAddTrack(t);
+  function addTo(list: Track[]) {
+    setAdding(list);
     setDialog('addToPlaylist');
+  }
+  async function addToPlaylist(c: Collection) {
+    const present = new Set(c.entries.map((e) => e.trackId));
+    const fresh = adding.filter((t, i) => !present.has(t.id) && adding.indexOf(t) === i);
+    if (!fresh.length) {
+      setDialog(null);
+      return notify(
+        adding.length === 1 ? `Already in ${c.name}` : `These songs are already in ${c.name}`,
+      );
+    }
+    await invoke('save_collection', {
+      collection: { ...c, entries: [...c.entries, ...fresh.map(entryFrom)] },
+    });
+    await refresh();
+    setDialog(null);
+    const skipped = adding.length - fresh.length;
+    notify(
+      `Added ${fresh.length === 1 ? fresh[0].title : `${fresh.length} songs`} to ${c.name}${skipped ? ` (${skipped} already there)` : ''}`,
+    );
+  }
+  /** `row` is the song's position among the playlist's playable songs. */
+  function removeFromCollection(c: Collection, row: number) {
+    const entry = playableIndices(c, tracks)[row];
+    if (entry === undefined) return;
+    task(async () => {
+      await invoke('save_collection', {
+        collection: { ...c, entries: c.entries.filter((_, i) => i !== entry) },
+      });
+      await refresh();
+    }, `Removed from ${c.name}`);
   }
   async function saveCollection(c: Collection) {
     await invoke('save_collection', { collection: c });
@@ -370,14 +659,22 @@ export default function App() {
         name: playlistName.trim(),
         kind: 'playlist',
         created: Date.now(),
-        entries: addTrack ? [entryFrom(addTrack)] : [],
+        entries: adding.map(entryFrom),
       }),
     );
     setPlaylistName('');
-    setAddTrack(null);
+    setAdding([]);
   }
   const albumCard = (a: Album) => (
-    <button className="album-card" key={a.key} onClick={() => openAlbum(a)}>
+    <button
+      className="album-card"
+      key={a.key}
+      onClick={() => openAlbum(a)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        albumMenu(a, e.clientX, e.clientY);
+      }}
+    >
       <div className="cover-wrap">
         <Art hash={a.artwork} name={a.name} />
         <span className="cover-play">
@@ -399,12 +696,26 @@ export default function App() {
       playing={pb?.playing || false}
       onPlay={(i) => (isQueue ? void command('jump', i) : void playList(list, i))}
       onFavorite={favorite}
-      onAdd={addTo}
-      onQueue={(t) =>
-        task(async () => {
-          await invoke('playback', { action: 'append', value: t.id });
-          notify('Added to queue');
-        })
+      onAdd={(t) => addTo([t])}
+      onQueue={(t) => enqueue([t], false)}
+      onContext={(t, index, x, y) =>
+        trackMenu(
+          t,
+          x,
+          y,
+          isQueue
+            ? {
+                label: 'Remove from queue',
+                disabled: index === pb?.cursor,
+                run: () => command('remove', index),
+              }
+            : page === 'Collection' && collection?.kind === 'playlist' && !compact
+              ? {
+                  label: 'Remove from this playlist',
+                  run: () => removeFromCollection(collection, index),
+                }
+              : undefined,
+        )
       }
       compact={compact}
       queue={isQueue}
@@ -590,7 +901,7 @@ export default function App() {
           <IconButton
             label="Create playlist"
             onClick={() => {
-              setAddTrack(null);
+              setAdding([]);
               setDialog('newPlaylist');
             }}
           >
@@ -621,7 +932,7 @@ export default function App() {
         <div className="sidebar-bottom">
           <button className="import-nav" onClick={() => setDialog('import')}>
             <Link2 size={17} />
-            <span>Import Spotify album</span>
+            <span>Import Spotify playlist</span>
             <Plus size={14} />
           </button>
           <button className="nav-item" onClick={() => setDialog('settings')}>
@@ -645,10 +956,16 @@ export default function App() {
           </div>
         </div>
       </aside>
-      <main className="main">
+      <main className="main" ref={mainRef}>
         <div className="topbar">
           <div className="breadcrumbs">
-            <button className="icon-button" aria-label="Go home" onClick={() => navigate('Home')}>
+            <button
+              className="icon-button"
+              aria-label="Go back"
+              title="Go back (Alt+←)"
+              disabled={page === 'Home' && history.current.length === 0}
+              onClick={goBack}
+            >
               <ArrowLeft size={18} />
             </button>
             <span>
@@ -671,6 +988,7 @@ export default function App() {
               onChange={(e) => {
                 setQuery(e.target.value);
                 if (page !== 'Songs' && page !== 'Queue') {
+                  remember();
                   setPage('Songs');
                   setFilter('all');
                 }
@@ -795,10 +1113,6 @@ export default function App() {
                   <h1>Albums</h1>
                   <p>{albums.length} records in your collection</p>
                 </div>
-                <button onClick={() => setDialog('import')}>
-                  <Link2 size={16} />
-                  Import album
-                </button>
               </div>
               {data.collections.some((c) => c.kind === 'virtual') && (
                 <>
@@ -844,22 +1158,14 @@ export default function App() {
               </div>
               <div className="artist-grid">
                 {artistNames.map((name) => {
-                  const artistAlbums = albums.filter((a) => a.artist === name);
+                  const stats = artistStats.get(name);
                   return (
-                    <button
-                      className="artist-card"
-                      key={name}
-                      onClick={() => {
-                        setSelectedArtist(name);
-                        navigate('Artist');
-                      }}
-                    >
-                      <Art hash={artistAlbums.find((a) => a.artwork)?.artwork} />
+                    <button className="artist-card" key={name} onClick={() => openArtist(name)}>
+                      <Art hash={stats?.artwork} />
                       <div>
                         <h2>{name}</h2>
                         <p>
-                          {artistAlbums.length} albums ·{' '}
-                          {tracks.filter((t) => t.albumArtist === name).length} songs
+                          {stats?.albums || 0} albums · {stats?.songs || 0} songs
                         </p>
                       </div>
                       <ChevronRight size={18} />
@@ -875,16 +1181,22 @@ export default function App() {
                   <h1>Playlists</h1>
                   <p>For every mood, moment and long way home.</p>
                 </div>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setAddTrack(null);
-                    setDialog('newPlaylist');
-                  }}
-                >
-                  <Plus size={16} />
-                  New playlist
-                </button>
+                <div className="button-row">
+                  <button onClick={() => setDialog('import')}>
+                    <Link2 size={16} />
+                    Import from Spotify
+                  </button>
+                  <button
+                    className="primary"
+                    onClick={() => {
+                      setAdding([]);
+                      setDialog('newPlaylist');
+                    }}
+                  >
+                    <Plus size={16} />
+                    New playlist
+                  </button>
+                </div>
               </div>
               {data.collections.filter((c) => c.kind === 'playlist').length ? (
                 <div className="collection-grid">
@@ -909,7 +1221,7 @@ export default function App() {
               ) : (
                 <Empty
                   title="A soundtrack of your own."
-                  description="Create a playlist, then add songs using the folder button beside a track."
+                  description="Create a playlist and add songs with the folder button or by right-clicking a song. Or bring one over from Spotify."
                 />
               )}
             </>
@@ -920,13 +1232,7 @@ export default function App() {
                 <div>
                   <span className="detail-type">Local album</span>
                   <h1>{album.name}</h1>
-                  <button
-                    className="text-button"
-                    onClick={() => {
-                      setSelectedArtist(album.artist);
-                      navigate('Artist');
-                    }}
-                  >
+                  <button className="text-button" onClick={() => openArtist(album.artist)}>
                     {album.artist}
                   </button>
                   <p>
@@ -938,15 +1244,11 @@ export default function App() {
                       <Play size={16} fill="currentColor" />
                       Play album
                     </button>
-                    <button
-                      onClick={() =>
-                        task(async () => {
-                          for (const t of album.tracks.filter((t) => !t.missing))
-                            await invoke('playback', { action: 'append', value: t.id });
-                          notify('Album added to queue');
-                        })
-                      }
-                    >
+                    <button onClick={() => enqueue(album.tracks, true)}>
+                      <ListPlus size={16} />
+                      Play next
+                    </button>
+                    <button onClick={() => enqueue(album.tracks, false)}>
                       <Plus size={16} />
                       Add to queue
                     </button>
@@ -1031,7 +1333,11 @@ export default function App() {
               ) : (
                 <Empty
                   title="Ready for your first song."
-                  description="Add local songs with the playlist button beside any track, or review this album’s matches."
+                  description={
+                    collection.entries.length
+                      ? 'None of these songs are matched to your files yet. Choose Review tracks to match them.'
+                      : 'Add songs with the folder button beside any track, or right-click a song.'
+                  }
                 />
               )}
             </>
@@ -1053,7 +1359,23 @@ export default function App() {
                   </p>
                 </div>
                 {page === 'Queue' ? (
-                  <button onClick={() => command('clear')}>Clear queue</button>
+                  <div className="button-row">
+                    <button
+                      disabled={!pb.queue.length}
+                      onClick={() => addTo(pb.queue.flatMap((id) => trackMap.get(id) || []))}
+                    >
+                      <Save size={15} />
+                      Save as playlist
+                    </button>
+                    <button
+                      disabled={pb.queue.length <= 1}
+                      title="Removes everything except the song that is playing"
+                      onClick={() => command('clear_upcoming')}
+                    >
+                      <ListX size={15} />
+                      Clear up next
+                    </button>
+                  </div>
                 ) : (
                   <button
                     className="primary"
@@ -1087,11 +1409,12 @@ export default function App() {
                   <select
                     aria-label="Sort songs"
                     value={sortMode}
-                    onChange={(e) =>
-                      page === 'Recently played'
-                        ? setRecentSort(e.target.value)
-                        : setSort(e.target.value)
-                    }
+                    onChange={(e) => {
+                      if (page === 'Recently played') setRecentSort(e.target.value);
+                      else setSort(e.target.value);
+                      // Hand the keyboard back so Space plays and pauses again.
+                      e.currentTarget.blur();
+                    }}
                   >
                     {page === 'Recently played' && <option value="recent">Last played</option>}
                     <option value="title">Title</option>
@@ -1247,9 +1570,29 @@ export default function App() {
           {progress}
         </div>
         <div className="player-tools">
+          <button
+            type="button"
+            data-menu-anchor
+            className={`icon-button sleep-button ${pb.sleepAt || pb.sleepEndOfTrack ? 'active' : ''}`}
+            aria-label={sleepLabel}
+            title={sleepLabel}
+            onClick={(e) => {
+              const box = e.currentTarget.getBoundingClientRect();
+              if (menu?.above) closeMenu();
+              else sleepMenu(box.left, box.top - 6);
+            }}
+          >
+            <Moon size={17} />
+            {pb.sleepAt && (
+              <small>{Math.max(1, Math.ceil((pb.sleepAt - Date.now()) / 60000))}</small>
+            )}
+          </button>
           <IconButton
             label={pb.volume === 0 ? 'Unmute' : 'Mute'}
-            onClick={() => command('volume', pb.volume === 0 ? 0.7 : 0)}
+            onClick={() => {
+              if (pb.volume > 0) unmuteVolume.current = pb.volume;
+              command('volume', pb.volume === 0 ? unmuteVolume.current : 0);
+            }}
           >
             {pb.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </IconButton>
@@ -1281,8 +1624,22 @@ export default function App() {
       {pb.error && !toast && (
         <div className="playback-error" role="status">
           <span>{pb.error}</span>
-          <button onClick={() => setDialog('settings')}>Settings</button>
+          {/audio|output|device/i.test(pb.error) && (
+            <button onClick={() => setDialog('settings')}>Settings</button>
+          )}
+          <IconButton label="Dismiss message" onClick={() => command('dismiss_error')}>
+            <X size={16} />
+          </IconButton>
         </div>
+      )}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          above={menu.above}
+          items={menu.items}
+          onClose={closeMenu}
+        />
       )}
       {dialog && (
         <Modal
@@ -1290,7 +1647,7 @@ export default function App() {
             dialog === 'settings'
               ? 'Make yourself at home.'
               : dialog === 'import'
-                ? 'Import a Spotify album'
+                ? 'Import a Spotify playlist'
                 : dialog === 'newPlaylist'
                   ? 'A new playlist'
                   : dialog === 'addToPlaylist'
@@ -1320,8 +1677,10 @@ export default function App() {
             <ImportPanel
               tracks={tracks}
               existing={dialog === 'editCollection' ? collection : undefined}
+              spotify={data.spotify}
               onSave={saveCollection}
               onSettings={() => setDialog('settings')}
+              onConnected={refresh}
             />
           )}
           {dialog === 'newPlaylist' && (
@@ -1343,26 +1702,14 @@ export default function App() {
           )}
           {dialog === 'addToPlaylist' && (
             <div className="dialog-body">
-              <p className="muted">{addTrack?.title}</p>
+              <p className="muted">
+                {adding.length === 1 ? adding[0].title : `${adding.length} songs`}
+              </p>
               <div className="playlist-choices">
                 {data.collections
                   .filter((c) => c.kind === 'playlist')
                   .map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() =>
-                        task(async () => {
-                          if (addTrack) {
-                            await invoke('save_collection', {
-                              collection: { ...c, entries: [...c.entries, entryFrom(addTrack)] },
-                            });
-                            await refresh();
-                            setDialog(null);
-                            notify(`Added to ${c.name}`);
-                          }
-                        })
-                      }
-                    >
+                    <button key={c.id} onClick={() => task(() => addToPlaylist(c))}>
                       <ListMusic size={18} />
                       <span>{c.name}</span>
                       <Plus size={16} />

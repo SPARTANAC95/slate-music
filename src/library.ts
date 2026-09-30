@@ -53,12 +53,17 @@ export function entryStatus(entry: Entry, tracks: Map<string, Track>): Entry['st
   const track = entry.trackId ? tracks.get(entry.trackId) : undefined;
   return entry.status === 'available' && (!track || track.missing) ? 'missing' : entry.status;
 }
+/** Positions in `c.entries` of the songs that `playable` returns, in the same order. */
+export function playableIndices(c: Collection, tracks: Track[]): number[] {
+  const map = new Map(tracks.map((t) => [t.id, t]));
+  return c.entries.flatMap((e, i) => {
+    const t = e.trackId ? map.get(e.trackId) : null;
+    return e.status === 'available' && t && !t.missing ? [i] : [];
+  });
+}
 export function playable(c: Collection, tracks: Track[]): Track[] {
   const map = new Map(tracks.map((t) => [t.id, t]));
-  return c.entries.flatMap((e) => {
-    const t = e.trackId ? map.get(e.trackId) : null;
-    return e.status === 'available' && t && !t.missing ? [t] : [];
-  });
+  return playableIndices(c, tracks).map((i) => map.get(c.entries[i].trackId!)!);
 }
 export function queueEntries(ids: string[], tracks: Map<string, Track>, query = '') {
   const needle = normalize(query);

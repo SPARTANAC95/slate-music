@@ -166,19 +166,131 @@ try {
     await page.locator('.artist-card').first().click();
     assert(await page.getByRole('button', { name: 'Play artist', exact: true }).count());
   });
-  await test('Spotify import reports setup requirement honestly', async () => {
-    await page.getByRole('button', { name: 'Import Spotify album', exact: true }).click();
-    await page
-      .getByRole('textbox', { name: 'Spotify album URL' })
-      .fill('https://open.spotify.com/album/4eLPsYPBmXABThSJ821sqY');
-    await page.getByRole('button', { name: 'Find matching files' }).click();
-    await page.getByRole('alert').waitFor();
-    assert.match(
-      await page.getByRole('alert').innerText(),
-      /Connect Spotify|Invalid Spotify album ID/,
-    );
+  await test('Spotify playlist import reports setup requirement honestly', async () => {
+    await page.getByRole('button', { name: 'Import Spotify playlist', exact: true }).click();
+    const { spotify } = await snap();
+    if (!spotify.connected) {
+      await page.getByText('Connect Spotify once').waitFor();
+      assert(await page.getByRole('button', { name: 'Set up Spotify', exact: true }).count());
+    } else if (!spotify.playlistAccess) {
+      assert(await page.getByRole('button', { name: 'Allow playlist access' }).count());
+    } else {
+      await page.getByText('Your Spotify playlists').waitFor();
+    }
+    assert(!(await page.getByText(/album link|album URL/i).count()));
     await page.screenshot({ path: path.join(output, 'spotify-setup.png') });
     await page.getByRole('button', { name: 'Close dialog' }).click();
+  });
+  await test('Right-click menu plays next, adds to queue and opens the album', async () => {
+    const songs = initial.tracks.filter((t) => !t.missing);
+    await invoke('playback', { action: 'shuffle', value: false });
+    await invoke('playback', { action: 'queue', value: { ids: [songs[0].id], index: 0 } });
+    await invoke('playback', { action: 'pause' });
+    await page.getByRole('button', { name: 'Songs', exact: true }).first().click();
+    const target = songs.find((t) => t.id !== songs[0].id);
+    await page.getByRole('button', { name: target.title, exact: true }).first().click({
+      button: 'right',
+    });
+    const menu = page.getByRole('menu');
+    await menu.waitFor();
+    await page.screenshot({ path: path.join(output, 'context-menu.png') });
+    await menu.getByRole('menuitem', { name: 'Play next' }).click();
+    await waitFor(async () => (await snap()).playback.queue[1] === target.id);
+    assert.equal((await snap()).playback.currentId, songs[0].id);
+    await page.getByRole('button', { name: target.title, exact: true }).first().click({
+      button: 'right',
+    });
+    await page.getByRole('menuitem', { name: 'Add to queue' }).click();
+    await waitFor(async () => (await snap()).playback.queue.at(-1) === target.id);
+    await page.getByRole('button', { name: target.title, exact: true }).first().click({
+      button: 'right',
+    });
+    await page.keyboard.press('Escape');
+    assert.equal(await page.getByRole('menu').count(), 0);
+    await page.getByRole('button', { name: target.title, exact: true }).first().click({
+      button: 'right',
+    });
+    await page.getByRole('menuitem', { name: 'Go to album' }).click();
+    await page.getByRole('button', { name: 'Play album', exact: true }).waitFor();
+    assert.equal(await page.locator('.detail-hero h1').textContent(), target.album);
+  });
+  await test('Back returns to the previous page and its scroll position', async () => {
+    await page.getByRole('button', { name: 'Go back' }).click();
+    await page.getByRole('heading', { name: 'Songs', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Albums', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Go back' }).click();
+    await page.getByRole('heading', { name: 'Songs', exact: true }).waitFor();
+  });
+  await test('Space still plays and pauses after using the volume slider', async () => {
+    const volume = page.getByRole('slider', { name: 'Volume' });
+    await volume.focus();
+    const before = (await snap()).playback.playing;
+    await page.keyboard.press('Space');
+    await waitFor(async () => (await snap()).playback.playing !== before);
+    await page.keyboard.press('Space');
+    await waitFor(async () => (await snap()).playback.playing === before);
+  });
+  await test('Mute restores the previous volume', async () => {
+    await invoke('playback', { action: 'volume', value: 0.37 });
+    const volume = page.getByRole('slider', { name: 'Volume' });
+    await waitFor(async () => (await volume.inputValue()) === '0.37');
+    await page.getByRole('button', { name: 'Mute', exact: true }).click();
+    await waitFor(async () => (await snap()).playback.volume === 0);
+    await page.getByRole('button', { name: 'Unmute', exact: true }).click();
+    await waitFor(async () => Math.abs((await snap()).playback.volume - 0.37) < 0.001);
+  });
+  await test('Sleep timer sets, shows its countdown and turns off', async () => {
+    await page.getByRole('button', { name: 'Sleep timer', exact: true }).click();
+    await page.getByRole('menuitem', { name: '30 minutes' }).click();
+    await waitFor(async () => !!(await snap()).playback.sleepAt);
+    await page.getByRole('button', { name: /pauses in 30 min/ }).waitFor();
+    await page.screenshot({ path: path.join(output, 'sleep-timer.png') });
+    await page.getByRole('button', { name: /Sleep timer:/ }).click();
+    await page.getByRole('menuitem', { name: 'Turn off sleep timer' }).click();
+    await waitFor(async () => !(await snap()).playback.sleepAt);
+  });
+  await test('Queue saves as a playlist and clears up next without stopping', async () => {
+    const songs = initial.tracks.filter((t) => !t.missing).slice(0, 3);
+    await invoke('playback', { action: 'queue', value: { ids: songs.map((t) => t.id), index: 1 } });
+    await page.getByRole('button', { name: 'Queue', exact: true }).click();
+    await page.getByRole('button', { name: 'Save as playlist' }).click();
+    await page.getByRole('button', { name: 'New playlist', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Playlist name', exact: true }).fill('QA saved queue');
+    await page.getByRole('button', { name: 'Create playlist', exact: true }).last().click();
+    await waitFor(async () =>
+      (await snap()).collections.some((c) => c.name === 'QA saved queue' && c.entries.length === 3),
+    );
+    await page.getByRole('button', { name: 'Queue', exact: true }).click();
+    await page.getByRole('button', { name: 'Clear up next' }).click();
+    await waitFor(async () => (await snap()).playback.queue.length === 1);
+    const s = (await snap()).playback;
+    assert.equal(s.currentId, songs[1].id);
+    assert(s.playing);
+    await invoke('playback', { action: 'pause' });
+  });
+  await test('Adding a song already in a playlist is not duplicated', async () => {
+    const saved = (await snap()).collections.find((c) => c.name === 'QA saved queue');
+    const title = initial.tracks.find((t) => t.id === saved.entries[0].trackId).title;
+    await page.getByRole('button', { name: 'Songs', exact: true }).first().click();
+    await page
+      .getByRole('button', { name: `Add ${title} to playlist`, exact: true })
+      .first()
+      .click();
+    await page.getByRole('dialog').getByRole('button', { name: 'QA saved queue' }).click();
+    await page.getByText('Already in QA saved queue').waitFor();
+    assert.equal(
+      (await snap()).collections.find((c) => c.id === saved.id).entries.length,
+      saved.entries.length,
+    );
+  });
+  await test('Playback messages can be dismissed', async () => {
+    await invoke('playback', { action: 'remove', value: 999 }).catch(() => {});
+    const toast = page.locator('.toast');
+    if (await toast.count()) await toast.getByRole('button', { name: 'Dismiss message' }).click();
+    await page.locator('.playback-error').waitFor();
+    await page.locator('.playback-error').getByRole('button', { name: 'Dismiss message' }).click();
+    await waitFor(async () => (await snap()).playback.error === null);
+    assert.equal(await page.locator('.playback-error').count(), 0);
   });
   await test('Offline library and native playback', async () => {
     await context.setOffline(true);

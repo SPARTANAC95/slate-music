@@ -16,7 +16,7 @@ Slate Music gives your albums room to breathe. Browse the artwork, find the song
 - **A session that stays with you.** Queue, position, playlists, favorites, history and settings persist. The app always restores paused.
 - **Your files stay yours.** Read-only indexing, watched folders, incremental rescans and cached artwork. No retagging, renaming, moving or deleting your music.
 - **Offline by design.** Local playback and library management work offline. No Slate account, subscription or analytics.
-- **Spotify albums, matched locally.** Retrieve an album’s ordered metadata and match recordings you already own. Review uncertain versions and save a virtual album or playlist.
+- **Spotify playlists, matched locally.** Pick one of your Spotify playlists and match its songs to recordings you already own. Review uncertain versions, save it, and update it from Spotify later.
 
 ## Get listening
 
@@ -39,13 +39,13 @@ Updates are cryptographically verified and download automatically by default. In
 
 Screenshots show a separate demo library in the real app. Click an image to view it at full size.
 
-## Bring an album home from Spotify
+## Bring a playlist home from Spotify
 
-Paste a Spotify album URL, review its local matches, and save the result in album order. Matching considers title, artist, duration and recording/version information. Missing tracks stay visible and never enter the playable queue. Uncertain matches can be corrected manually.
+Choose one of your Spotify playlists (or paste its link), review the local matches, and save it in Spotify’s order. Matching considers title, artist, album, duration and recording/version information. Missing songs stay visible and never enter the playable queue. Uncertain matches can be corrected manually, and **Update from Spotify** picks up later changes while keeping your corrections.
 
-**This imports metadata, not Spotify audio.** No audio downloading, replacement downloads or DRM bypass. It requires your own Spotify developer app and an eligible Spotify account; no credentials are bundled.
+**This imports metadata, not Spotify audio.** No audio downloading, replacement downloads or DRM bypass. It requires your own Spotify developer app and an eligible Spotify account; no credentials are bundled. Spotify only shares playlists you created or collaborate on.
 
-[Connect Spotify and import your first album](docs/GUIDE.md#spotify-album-import)
+[Connect Spotify and import your first playlist](docs/GUIDE.md#spotify-playlist-import)
 
 ## Audio, with the details included
 
