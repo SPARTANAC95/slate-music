@@ -3570,3 +3570,111 @@ input[type='range']:disabled {
   object-fit: cover;
   object-position: center 25%;
 }
+
+/* Song lists: sorting, picking, dragging */
+.track-table {
+  position: relative;
+}
+.head-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.head-sort:hover,
+.table-head > .sorted .head-sort {
+  background: none;
+  color: var(--text);
+}
+.table-head > .sorted .head-sort svg {
+  color: var(--art, var(--accent));
+}
+.table-head > span:nth-child(4) .head-sort,
+.table-head > span:nth-child(5) .head-sort {
+  flex-direction: row-reverse;
+}
+.track-row.picked {
+  background: color-mix(in srgb, var(--art, var(--accent)) 20%, transparent);
+  box-shadow: inset 3px 0 0 var(--art, var(--accent));
+}
+.track-row.picked:hover {
+  background: color-mix(in srgb, var(--art, var(--accent)) 22%, transparent);
+}
+.track-row.drop-before {
+  box-shadow: inset 0 2px 0 var(--art, var(--accent));
+}
+.track-row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--art, var(--accent));
+}
+.drag-ghost {
+  position: fixed;
+  top: -100px;
+  left: -100px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: var(--art, var(--accent));
+  color: #0b0a0e;
+  font: 600 12px/1.2 Inter, system-ui, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.drop-target {
+  outline: 2px solid var(--art, var(--accent));
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--art, var(--accent)) 14%, transparent) !important;
+  border-radius: 8px;
+}
+.jump-playing {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 0;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: #1c1a21;
+  border: 1px solid #36323d;
+  box-shadow: 0 8px 24px #0008;
+  animation: page-in 0.2s ease-out;
+}
+.selection-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 14px auto 0;
+  padding: 8px 10px 8px 16px;
+  border: 1px solid #36323d;
+  border-radius: 14px;
+  background: #17161bf2;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 16px 40px #000a;
+  animation: page-in 0.18s ease-out;
+}
+.selection-bar > strong {
+  margin-right: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.selection-bar button {
+  min-height: 0;
+  padding: 6px 11px;
+  font-size: 11px;
+}

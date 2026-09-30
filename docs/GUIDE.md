@@ -16,6 +16,9 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 - Hover over Slate Music's taskbar button for Previous, Play/Pause, Next and Favorite buttons in the preview.
 - Right-click a song or album for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer. The Queue page can save the queue as a playlist or clear everything after the current song. The moon button beside the volume sets a sleep timer.
 - Search titles, artists and albums; small typos are forgiven, and matching artists and albums appear above the songs. Sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
+- Click a song row to pick it; Ctrl+click adds or removes songs and Shift+click picks a range (Ctrl+A picks the whole list). With several picked, a bar appears with Play, Play next, Add to queue, Add to playlist and Favorite; in the queue and your own playlists, Delete removes them. Esc clears the pick.
+- Drag songs or albums onto a playlist in the sidebar to add them, onto Favorites to heart them, onto Playlists to start a new playlist, or onto Up next to queue them. Drag rows in the queue or one of your playlists to reorder them.
+- Click a column heading (Title, Album, Year, Time) to sort by it and click again to reverse. On albums, playlists and search results, # returns to their own order. Songs, Favorites, Recently played and each playlist remember how you sorted them, and every list remembers where you scrolled.
 - Press Ctrl+K anywhere for the command bar: type a song, album, artist, playlist or action (for example "shuffle" or "sleep") and press Enter.
 - Home suggests albums to jump back into, recent additions, songs you played on this day in earlier years and favourites you have not heard in a while. **Your year** is a private year in review built from your listening history on this PC.
 - Smart playlists (Playlists → **New smart playlist**) fill themselves from rules such as "Favorite is yes" and "Last played not in the last 90 days". Start from a preset or build your own; open one and choose **Edit rules** to change it.
@@ -36,7 +39,9 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 | Ctrl + K | Command bar: search and actions |
 | Ctrl + L | Now Playing |
 | Ctrl + M | Mini-player |
-| Escape | Close dialog |
+| Ctrl + A | Pick every song in the list |
+| Delete | Remove picked songs from the queue or playlist |
+| Escape | Close dialog, or clear picked songs |
 
 Shortcuts do not intercept typing in form fields. Standard media keys are routed through Windows system media controls.
 

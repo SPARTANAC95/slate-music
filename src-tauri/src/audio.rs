@@ -302,6 +302,15 @@ impl RenderState {
 }
 /// The output device to open: the named one when it is connected, else the Windows default.
 /// Returns the device (None = default), its name, and whether the named one was missing.
+/// The new order of a list of `len` items after moving `rows` (kept in their order) to sit
+/// before position `to` of the original list (`to == len` moves them to the end).
+pub fn move_rows(len: usize, rows: &[usize], to: usize) -> Vec<usize> {
+    let moving: Vec<usize> = (0..len).filter(|i| rows.contains(i)).collect();
+    let mut order: Vec<usize> = (0..len).filter(|i| !rows.contains(i)).collect();
+    let at = order.iter().position(|&i| i >= to).unwrap_or(order.len());
+    order.splice(at..at, moving);
+    order
+}
 fn choose_device(wanted: Option<&str>) -> (Option<rodio::Device>, String, bool) {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let host = rodio::cpal::default_host();
@@ -320,6 +329,18 @@ fn choose_device(wanted: Option<&str>) -> (Option<rodio::Device>, String, bool) 
     }
 }
 /// Output devices Windows offers, and which one is the default.
+fn indices(value: &serde_json::Value) -> Result<Vec<usize>> {
+    let rows: Vec<usize> = value
+        .as_array()
+        .ok_or("Missing queue positions")?
+        .iter()
+        .filter_map(|v| v.as_u64().map(|n| n as usize))
+        .collect();
+    if rows.is_empty() {
+        return Err("Missing queue positions".into());
+    }
+    Ok(rows)
+}
 pub fn output_devices() -> (Vec<String>, Option<String>) {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let host = rodio::cpal::default_host();
@@ -938,6 +959,42 @@ impl Engine {
                     r.epoch += 1;
                     r.next_attempt = None;
                 }
+                "move_many" => {
+                    let rows = indices(&value["rows"])?;
+                    let to = value["to"].as_u64().ok_or("Missing destination")? as usize;
+                    let mut r = self.render.lock().unwrap();
+                    let len = r.state.queue.len();
+                    if rows.iter().any(|&i| i >= len) || to > len {
+                        return Err("Queue entry not found".into());
+                    }
+                    let current = r.snapshot().cursor;
+                    let order = move_rows(len, &rows, to);
+                    let queue: Vec<String> =
+                        order.iter().map(|&i| r.state.queue[i].clone()).collect();
+                    r.state.queue = queue;
+                    let mapped = order.iter().position(|&i| i == current).unwrap_or(current);
+                    r.state.cursor = mapped;
+                    if let Some(d) = &mut r.current {
+                        d.index = mapped
+                    }
+                    r.next = None;
+                    r.epoch += 1;
+                    r.next_attempt = None;
+                }
+                "remove_many" => {
+                    let mut rows = indices(&value)?;
+                    let mut r = self.render.lock().unwrap();
+                    let cursor = r.snapshot().cursor;
+                    let playing = r.current.is_some();
+                    rows.sort_unstable();
+                    rows.dedup();
+                    // From the end, so earlier positions stay valid; the playing song stays.
+                    for &i in rows.iter().rev() {
+                        if i < r.state.queue.len() && !(playing && i == cursor) {
+                            r.remove_queued(i);
+                        }
+                    }
+                }
                 "jump" => {
                     let i = value.as_u64().ok_or("Missing queue index")? as usize;
                     self.load(i, 0., true)?;
@@ -1443,6 +1500,36 @@ mod tests {
             .command("clear_upcoming", serde_json::Value::Null)
             .unwrap();
         assert!(state.queue.is_empty() && state.current_id.is_none() && !state.playing);
+    }
+    #[test]
+    fn several_queue_songs_move_and_leave_together() {
+        assert_eq!(move_rows(5, &[1, 3], 0), vec![1, 3, 0, 2, 4]);
+        assert_eq!(move_rows(5, &[0, 1], 4), vec![2, 3, 0, 1, 4]);
+        assert_eq!(move_rows(5, &[0, 1], 5), vec![2, 3, 4, 0, 1]);
+        assert_eq!(move_rows(3, &[2], 2), vec![0, 1, 2]);
+        let (_dir, engine) = test_engine();
+        engine
+            .command(
+                "queue",
+                serde_json::json!({"ids":["a","b","c","a","c"],"index":1}),
+            )
+            .unwrap();
+        // "b" plays; moving the last two in front of it keeps it playing at its new place.
+        let state = engine
+            .command("move_many", serde_json::json!({"rows":[3,4],"to":0}))
+            .unwrap();
+        assert_eq!(state.queue, vec!["a", "c", "a", "b", "c"]);
+        assert_eq!((state.cursor, state.current_id.as_deref()), (3, Some("b")));
+        assert!(state.playing);
+        assert!(engine
+            .command("move_many", serde_json::json!({"rows":[9],"to":0}))
+            .is_err());
+        // The playing song is never removed; the rest go at once.
+        let state = engine
+            .command("remove_many", serde_json::json!([0, 3, 4]))
+            .unwrap();
+        assert_eq!(state.queue, vec!["c", "a", "b"]);
+        assert_eq!((state.cursor, state.current_id.as_deref()), (2, Some("b")));
     }
     #[test]
     fn moved_songs_keep_their_queue_places_and_removed_ones_leave_the_queue() {

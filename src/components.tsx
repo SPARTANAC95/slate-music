@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Disc3,
@@ -11,9 +19,21 @@ import {
   X,
   Check,
   FolderOpen,
+  ChevronUp,
+  ChevronDown,
+  LocateFixed,
 } from 'lucide-react';
 import type { Track } from './types';
 import { time } from './library';
+import type { ListSort, SortMode } from './listTools';
+import { dragged, endDrag } from './dnd';
+
+/** Where each song list was scrolled to, so returning to it keeps your place. */
+const scrollMemory = new Map<string, number>();
+/** Modes whose natural order is largest or newest first. */
+const DESCENDING = new Set<SortMode>(['added', 'duration', 'plays', 'recent']);
+/** Clicks on these never pick the row: they play, favorite, queue and so on. */
+const interactive = (e: MouseEvent) => !!(e.target as HTMLElement).closest('button, a, input, select');
 export function IconButton({
   label,
   children,
@@ -182,6 +202,14 @@ export function TrackTable({
   rowIndices,
   currentIndex,
   queueLength,
+  listId,
+  sort,
+  onSort,
+  hasCustomOrder = false,
+  picked,
+  onPick,
+  onDragRows,
+  onReorder,
 }: {
   tracks: Track[];
   currentId?: string | null;
@@ -192,44 +220,141 @@ export function TrackTable({
   onQueue: (t: Track) => void;
   onMove?: (from: number, to: number) => void;
   onRemove?: (index: number) => void;
-  onContext?: (t: Track, index: number, x: number, y: number) => void;
+  /** `row` is the position in this list; `index` the queue position in the queue. */
+  onContext?: (t: Track, index: number, x: number, y: number, row: number) => void;
   compact?: boolean;
   queue?: boolean;
   rowIndices?: number[];
   currentIndex?: number;
   queueLength?: number;
+  /** Names the list: its scroll position is remembered, and drags stay within it. */
+  listId?: string;
+  sort?: ListSort;
+  /** Makes the column headings sort the list. */
+  onSort?: (mode: SortMode) => void;
+  /** The list has an order of its own (album, playlist, search matches) to return to. */
+  hasCustomOrder?: boolean;
+  /** Picked rows, by song id (or queue position in the queue). */
+  picked?: Set<string>;
+  onPick?: (row: number, e: MouseEvent) => void;
+  onDragRows?: (row: number, e: DragEvent) => void;
+  /** Present when rows can be dragged into a new order. */
+  onReorder?: (rows: number[], to: number) => void;
 }) {
   const parent = useRef<HTMLDivElement>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
   const virtual = useVirtualizer({
     count: tracks.length,
     getScrollElement: () => parent.current,
     estimateSize: () => 64,
     overscan: 8,
   });
+  useLayoutEffect(() => {
+    const saved = listId ? (scrollMemory.get(listId) ?? 0) : 0;
+    if (parent.current && listId && Math.abs(parent.current.scrollTop - saved) > 1)
+      parent.current.scrollTop = saved;
+  }, [listId]);
+  const playingRow = queue
+    ? (rowIndices ?? tracks.map((_, i) => i)).indexOf(currentIndex ?? -1)
+    : currentId
+      ? tracks.findIndex((t) => t.id === currentId)
+      : -1;
+  const shownPlaying = virtual.getVirtualItems().find((item) => item.index === playingRow);
+  const viewTop = virtual.scrollOffset ?? 0;
+  const viewHeight = virtual.scrollRect?.height ?? 0;
+  const playingHidden =
+    !compact &&
+    viewHeight > 0 &&
+    playingRow >= 0 &&
+    tracks.length > 8 &&
+    (!shownPlaying || shownPlaying.end <= viewTop + 8 || shownPlaying.start >= viewTop + viewHeight - 8);
+  const heading = (label: string, mode?: SortMode) => {
+    if (!onSort || !mode || (mode === 'custom' && !hasCustomOrder)) return <span>{label}</span>;
+    const active = sort?.mode === mode && mode !== 'custom';
+    const down = active && DESCENDING.has(mode) !== !!sort?.reverse;
+    return (
+      <span className={active ? 'sorted' : ''}>
+        <button
+          type="button"
+          className="head-sort"
+          title={mode === 'custom' ? 'Back to the list’s own order' : `Sort by ${label.toLowerCase()}`}
+          aria-label={mode === 'custom' ? 'Sort in the list’s own order' : `Sort by ${label}`}
+          onClick={() => onSort(mode)}
+        >
+          {label}
+          {active && (down ? <ChevronDown size={11} /> : <ChevronUp size={11} />)}
+        </button>
+      </span>
+    );
+  };
+  const reorderable = (): boolean => {
+    const d = dragged();
+    return !!onReorder && !!d && d.source === listId;
+  };
   return (
     <div className={`track-table ${compact ? 'compact' : ''} ${queue ? 'queue-table' : ''}`}>
       <div className="table-head">
-        <span>#</span>
-        <span>Title</span>
-        <span>Album</span>
-        <span>Year</span>
-        <span>Time</span>
+        {heading('#', 'custom')}
+        {heading('Title', 'title')}
+        {heading('Album', 'album')}
+        {heading('Year', 'year')}
+        {heading('Time', 'duration')}
         <span />
       </div>
       <div
         className="table-scroll"
         ref={parent}
         style={{ height: compact ? Math.min(tracks.length * 64, 340) : 'min(60vh, 700px)' }}
+        onScroll={(e) => listId && scrollMemory.set(listId, e.currentTarget.scrollTop)}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropAt(null);
+        }}
       >
         <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
           {virtual.getVirtualItems().map((row) => {
             const t = tracks[row.index];
             const index = rowIndices?.[row.index] ?? row.index;
             const active = queue ? currentIndex === index : currentId === t.id;
+            const isPicked = !!picked?.has(queue ? String(index) : t.id);
+            const drop =
+              dropAt === row.index
+                ? 'drop-before'
+                : dropAt === tracks.length && row.index === tracks.length - 1
+                  ? 'drop-after'
+                  : '';
+            const pickInstead = (e: MouseEvent) => {
+              if (!onPick || !(e.ctrlKey || e.shiftKey || e.metaKey)) return false;
+              e.preventDefault();
+              onPick(row.index, e);
+              return true;
+            };
             return (
               <div
                 key={`${t.id}-${row.index}`}
-                className={`track-row ${active ? 'selected' : ''} ${t.missing ? 'unavailable' : ''}`}
+                className={`track-row ${active ? 'selected' : ''} ${isPicked ? 'picked' : ''} ${t.missing ? 'unavailable' : ''} ${drop}`}
+                draggable={!!onDragRows}
+                onDragStart={(e) => onDragRows?.(row.index, e)}
+                onDragEnd={() => {
+                  endDrag();
+                  setDropAt(null);
+                }}
+                onDragOver={(e) => {
+                  if (!reorderable()) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  const box = e.currentTarget.getBoundingClientRect();
+                  setDropAt(row.index + (e.clientY > box.top + box.height / 2 ? 1 : 0));
+                }}
+                onDrop={(e) => {
+                  const d = dragged();
+                  if (!reorderable() || !d || dropAt === null) return;
+                  e.preventDefault();
+                  endDrag();
+                  setDropAt(null);
+                  onReorder?.(d.rows, dropAt);
+                }}
+                onMouseDown={(e) => e.shiftKey && e.preventDefault()}
+                onClick={(e) => onPick && !interactive(e) && onPick(row.index, e)}
                 style={{
                   position: 'absolute',
                   top: 0,
@@ -246,14 +371,14 @@ export function TrackTable({
                 onContextMenu={(e) => {
                   if (!onContext) return;
                   e.preventDefault();
-                  onContext(t, index, e.clientX, e.clientY);
+                  onContext(t, index, e.clientX, e.clientY, row.index);
                 }}
               >
                 <button
                   className="row-number"
                   disabled={t.missing}
                   aria-label={`Play ${t.title}`}
-                  onClick={(e) => e.detail < 2 && onPlay(index)}
+                  onClick={(e) => !pickInstead(e) && e.detail < 2 && onPlay(index)}
                 >
                   {active && playing ? (
                     <span className="equalizer">
@@ -273,7 +398,7 @@ export function TrackTable({
                   <div>
                     <button
                       className="text-button song-title"
-                      onClick={(e) => e.detail < 2 && onPlay(index)}
+                      onClick={(e) => !pickInstead(e) && e.detail < 2 && onPlay(index)}
                       disabled={t.missing}
                     >
                       {t.title}
@@ -358,6 +483,16 @@ export function TrackTable({
           })}
         </div>
       </div>
+      {playingHidden && (
+        <button
+          type="button"
+          className="jump-playing"
+          onClick={() => virtual.scrollToIndex(playingRow, { align: 'center' })}
+        >
+          <LocateFixed size={14} />
+          Show playing song
+        </button>
+      )}
     </div>
   );
 }
@@ -380,8 +515,10 @@ export function ContextMenu({
   above?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const openedAt = useRef(0);
   const [position, setPosition] = useState({ left: x, top: y });
   useLayoutEffect(() => {
+    openedAt.current = performance.now();
     const box = ref.current?.getBoundingClientRect();
     if (box)
       setPosition({
@@ -412,17 +549,19 @@ export function ContextMenu({
         buttons[(at + step + buttons.length) % buttons.length]?.focus();
       }
     };
+    // A scroll that was still settling when the menu opened doesn't close it.
+    const scroll = () => performance.now() - openedAt.current > 250 && onClose();
     window.addEventListener('mousedown', outside, true);
     window.addEventListener('keydown', keydown, true);
     window.addEventListener('resize', onClose);
     window.addEventListener('blur', onClose);
-    document.addEventListener('scroll', onClose, true);
+    document.addEventListener('scroll', scroll, true);
     return () => {
       window.removeEventListener('mousedown', outside, true);
       window.removeEventListener('keydown', keydown, true);
       window.removeEventListener('resize', onClose);
       window.removeEventListener('blur', onClose);
-      document.removeEventListener('scroll', onClose, true);
+      document.removeEventListener('scroll', scroll, true);
     };
   }, [onClose]);
   return (

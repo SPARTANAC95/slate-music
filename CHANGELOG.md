@@ -19,6 +19,13 @@
 - **Your year:** a private year in review with plays, minutes, longest streak, new artists, top songs, artists and albums, and plays per month. Earlier years are one click away.
 - **Smart playlists:** build playlists from rules (artist, album, year, format, lossless, plays, favourite, length, last played, added) matched all or any, ordered and limited as you like. They update themselves; ready-made presets include Forgotten favourites, Most played, Never played and Songs from the 80s. Shuffled smart playlists keep the same order through the day.
 - **Artist photos and bios:** with "Show artist photos and bios" on, opening an artist looks them up once on MusicBrainz, Wikidata and Wikipedia and saves a photo and short bio (only the artist's name is sent). The photos also appear on the Artists page, in search and in Your year.
+- **Pick several songs:** click a row to pick it, Ctrl+click to add or drop one, Shift+click for a range, Ctrl+A for the whole list. A bar offers Play, Play next, Add to queue, Add to playlist, Favorite and (in the queue or your playlists) Remove; right-click works on all picked songs, Delete removes them and Esc clears the pick.
+- **Drag and drop:** drag songs (or whole albums) onto a playlist in the sidebar, onto Favorites to heart them, onto Playlists to start a new playlist, or onto Up next to queue them. Drag rows to reorder the queue and your own playlists.
+- **Sortable columns:** click Title, Album, Year or Time to sort, again to reverse, and # to return to an album's, playlist's or search's own order. Songs, Favorites, Recently played and each playlist remember their order.
+- **Search results** now list the best matches first.
+- **Lists keep their place:** each song list remembers where you scrolled, and long lists offer "Show playing song".
+- Artist pages list songs album by album, oldest first.
+- A right-click menu no longer disappears when a scroll was still settling as it opened.
 
 ## 1.0.3 — 2026-09-30
 

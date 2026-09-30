@@ -353,6 +353,47 @@ try {
     assert.equal(saved.rules.rules[0].field, 'title');
     await invoke('delete_collection', { id: saved.id });
   });
+  await test('Column headings sort songs; picked songs act together', async () => {
+    const titles = () => page.locator('.track-table .song-title').allTextContents();
+    await page.getByRole('button', { name: 'Songs', exact: true }).first().click();
+    await page.getByRole('combobox', { name: 'Sort songs' }).selectOption('title');
+    const ascending = await titles();
+    await page.getByRole('button', { name: 'Sort by Title' }).click();
+    await waitFor(async () => (await titles())[0] === ascending[ascending.length - 1]);
+    await page.getByRole('button', { name: 'Sort by Title' }).click();
+    await waitFor(async () => (await titles())[0] === ascending[0]);
+    const cells = page.locator('.track-row .album-cell');
+    await cells.nth(0).click();
+    await cells.nth(1).click({ modifiers: ['Shift'] });
+    await page.locator('.selection-bar', { hasText: '2 songs selected' }).waitFor();
+    const queued = (await snap()).playback.queue.length;
+    await page.locator('.selection-bar').getByRole('button', { name: 'Add to queue' }).click();
+    await waitFor(async () => (await snap()).playback.queue.length === queued + 2);
+    await page.keyboard.press('Escape');
+    await page.locator('.selection-bar').waitFor({ state: 'detached' });
+  });
+  await test('Songs drag onto a playlist, and the queue reorders by dragging', async () => {
+    const name = `QA drag ${Date.now() % 100000}`;
+    await page.locator('.sidebar').getByRole('button', { name: 'Create playlist' }).click();
+    await page.getByRole('textbox', { name: 'Playlist name', exact: true }).fill(name);
+    await page.getByRole('button', { name: 'Create playlist', exact: true }).last().click();
+    await page.locator('h1', { hasText: name }).waitFor();
+    await page.getByRole('button', { name: 'Songs', exact: true }).first().click();
+    const link = page.locator('.sidebar .playlist-link', { hasText: name });
+    await link.scrollIntoViewIfNeeded();
+    await page.locator('.track-row').nth(0).dragTo(link);
+    const id = (await snap()).collections.find((c) => c.name === name).id;
+    await waitFor(async () => (await snap()).collections.find((c) => c.id === id).entries.length === 1);
+    await invoke('delete_collection', { id });
+    const ids = initial.tracks.filter((t) => !t.missing).slice(0, 3).map((t) => t.id);
+    await invoke('playback', { action: 'queue', value: { ids, index: 0 } });
+    await invoke('playback', { action: 'pause' });
+    await page.getByRole('button', { name: 'Queue', exact: true }).last().click();
+    const rows = page.locator('.queue-table .track-row');
+    await rows.nth(2).dragTo(rows.nth(0), { targetPosition: { x: 40, y: 6 } });
+    await waitFor(async () => (await snap()).playback.queue[0] === ids[2]);
+    assert.equal((await snap()).playback.currentId, ids[0]);
+  });
   await test('Offline library and native playback', async () => {
     await context.setOffline(true);
     await page.getByRole('button', { name: 'Songs', exact: true }).click();
