@@ -303,6 +303,21 @@ try {
     await waitFor(async () => (await snap()).playback.error === null);
     assert.equal(await page.locator('.playback-error').count(), 0);
   });
+  await test('Now Playing opens with the current song and closes with Esc', async () => {
+    const song = initial.tracks.find((t) => !t.missing);
+    await invoke('playback', { action: 'queue', value: { ids: [song.id], index: 0 } });
+    await invoke('playback', { action: 'pause' });
+    await page.getByRole('button', { name: 'Open Now Playing' }).click();
+    await page.locator('.now-playing h1', { hasText: song.title }).waitFor();
+    await page.locator('.np-lyrics, .np-empty').first().waitFor();
+    await page.screenshot({ path: path.join(output, 'now-playing.png') });
+    await page.keyboard.press('Escape');
+    await page.locator('.now-playing').waitFor({ state: 'detached' });
+    await page.keyboard.press('Control+l');
+    await page.locator('.now-playing').waitFor();
+    await page.getByRole('button', { name: 'Close Now Playing (Esc)' }).click();
+    await page.locator('.now-playing').waitFor({ state: 'detached' });
+  });
   await test('Offline library and native playback', async () => {
     await context.setOffline(true);
     await page.getByRole('button', { name: 'Songs', exact: true }).click();

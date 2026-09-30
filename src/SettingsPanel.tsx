@@ -139,6 +139,12 @@ export default function SettingsPanel({
           checked={!!settings.lookupYears}
           onChange={(v) => onSettings({ ...settings, lookupYears: v })}
         />
+        <Toggle
+          label="Find lyrics online"
+          description="Songs without lyrics of their own (in the file or an .lrc file beside it) are looked up on LRCLIB, a free lyrics database, when you open Now Playing. Only the artist, title, album and length are sent; results are remembered."
+          checked={!!settings.lookupLyrics}
+          onChange={(v) => onSettings({ ...settings, lookupLyrics: v })}
+        />
         {data.scan.errors.length > 0 && (
           <details className="scan-errors">
             <summary>

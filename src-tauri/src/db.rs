@@ -70,6 +70,7 @@ impl Database {
    CREATE TABLE IF NOT EXISTS collections(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT,track_id TEXT NOT NULL,played INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS original_years(key TEXT PRIMARY KEY,year INTEGER NOT NULL,checked INTEGER NOT NULL);
+   CREATE TABLE IF NOT EXISTS lyrics(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    INSERT OR IGNORE INTO migrations VALUES(1,strftime('%s','now'));
    PRAGMA user_version=1;").map_err(err)?;
         Ok(Self {
@@ -182,6 +183,28 @@ impl Database {
             }
         }
         Ok(needed.into_values().collect())
+    }
+    /// Lyrics remembered from LRCLIB (see lyrics.rs), by song.
+    pub fn lyrics(&self, key: &str) -> Result<Option<Value>> {
+        let c = self.conn.lock().unwrap();
+        match c.query_row("SELECT data FROM lyrics WHERE key=?", [key], |r| {
+            r.get::<_, String>(0)
+        }) {
+            Ok(data) => Ok(serde_json::from_str(&data).ok()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(err(e)),
+        }
+    }
+    pub fn set_lyrics(&self, key: &str, data: &Value) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO lyrics VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                params![key, data.to_string()],
+            )
+            .map_err(err)?;
+        Ok(())
     }
     pub fn set_original_year(&self, key: &str, year: u32) -> Result<()> {
         self.conn

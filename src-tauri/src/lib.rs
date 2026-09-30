@@ -2,6 +2,7 @@ mod audio;
 mod db;
 mod desktop;
 mod library;
+mod lyrics;
 mod spotify;
 #[cfg(windows)]
 mod taskbar;
@@ -219,6 +220,14 @@ fn open_link(url: String) -> Result<()> {
     }
     open::that(url).map_err(err)
 }
+/// Lyrics for a song (see lyrics.rs). May ask LRCLIB when that is enabled in Settings.
+#[tauri::command]
+async fn song_lyrics(id: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || lyrics::find(&db, &db.track(&id)?))
+        .await
+        .map_err(err)?
+}
 /// Forgets songs whose files are gone. Returns how many were removed.
 #[tauri::command]
 async fn remove_missing(state: tauri::State<'_, AppState>) -> Result<usize> {
@@ -313,11 +322,19 @@ pub fn run() {
         );
     builder
         .register_uri_scheme_protocol("art", |context, request| {
-            let id = request.uri().path().trim_start_matches('/');
+            // "<hash>" is the 640 px cover; "<hash>-xl" the large copy, falling back to 640 px.
+            let path = request.uri().path().trim_start_matches('/');
+            let (id, large) = path
+                .strip_suffix("-xl")
+                .map_or((path, false), |id| (id, true));
             let app = context.app_handle();
             let state = app.state::<AppState>();
+            let dir = state.db.directory.join("artwork");
             let data = if id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-                std::fs::read(state.db.directory.join("artwork").join(format!("{id}.jpg"))).ok()
+                large
+                    .then(|| std::fs::read(dir.join(format!("{id}-xl.jpg"))).ok())
+                    .flatten()
+                    .or_else(|| std::fs::read(dir.join(format!("{id}.jpg"))).ok())
             } else {
                 None
             };
@@ -382,6 +399,7 @@ pub fn run() {
             collection,
             reveal_track,
             remove_missing,
+            song_lyrics,
             open_link,
             mini_player,
             show_main,

@@ -75,15 +75,68 @@ fn cache_art(data: &[u8], db: &Database) -> Option<String> {
         return None;
     }
     let hash = hex::encode(Sha256::digest(data));
-    let file = db.directory.join("artwork").join(format!("{hash}.jpg"));
-    if !file.exists() {
-        let reader = image::ImageReader::new(std::io::Cursor::new(data))
+    let dir = db.directory.join("artwork");
+    let (file, large) = (
+        dir.join(format!("{hash}.jpg")),
+        dir.join(format!("{hash}-xl.jpg")),
+    );
+    if !file.exists() || !large.exists() {
+        let img = image::ImageReader::new(std::io::Cursor::new(data))
             .with_guessed_format()
+            .ok()?
+            .decode()
             .ok()?;
-        let img = reader.decode().ok()?;
-        img.thumbnail(640, 640).to_rgb8().save(&file).ok()?;
+        if !file.exists() {
+            fit(&img, 640).save(&file).ok()?;
+        }
+        // A sharper copy for full-screen views and large, high-DPI screens.
+        let _ = fit(&img, 1600).save(&large);
     }
     Some(hash)
+}
+/// Shrinks to fit `max` pixels, never enlarging a smaller image.
+fn fit(img: &image::DynamicImage, max: u32) -> image::RgbImage {
+    if img.width() <= max && img.height() <= max {
+        img.to_rgb8()
+    } else {
+        img.thumbnail(max, max).to_rgb8()
+    }
+}
+/// Covers indexed before large copies existed get one in the background, by finding the
+/// original image again (embedded or beside the song) and checking it is the same picture.
+pub fn upgrade_artwork(db: Arc<Database>) {
+    std::thread::spawn(move || {
+        let Ok(tracks) = db.tracks() else { return };
+        let dir = db.directory.join("artwork");
+        let mut done = HashSet::new();
+        for t in tracks.iter().filter(|t| !t.missing) {
+            let Some(hash) = t.artwork.as_deref() else {
+                continue;
+            };
+            if !done.insert(hash.to_string()) || dir.join(format!("{hash}-xl.jpg")).exists() {
+                continue;
+            }
+            let path = Path::new(&t.path);
+            let embedded = lofty::read_from_path(path).ok().map(|tagged| {
+                tagged
+                    .tags()
+                    .iter()
+                    .flat_map(|tag| tag.pictures().iter().map(|p| p.data().to_vec()))
+                    .collect::<Vec<_>>()
+            });
+            let beside = folder_covers(path)
+                .into_iter()
+                .filter_map(|f| std::fs::read(f).ok());
+            if let Some(data) = embedded
+                .into_iter()
+                .flatten()
+                .chain(beside)
+                .find(|d| hex::encode(Sha256::digest(d)) == hash)
+            {
+                let _ = cache_art(&data, &db);
+            }
+        }
+    });
 }
 /// Album images next to the songs, used when a file has no embedded artwork.
 const COVER_NAMES: [&str; 6] = [
@@ -375,6 +428,7 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
     progress(status.clone());
     status
 }
+static ARTWORK_UPGRADED: AtomicBool = AtomicBool::new(false);
 pub fn start_scan(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
     if !lib.request_scan() {
         return;
@@ -393,6 +447,9 @@ pub fn start_scan(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
             state.engine.remap(&status.relinked);
         }
         crate::years::start(db.clone(), app.clone());
+        if !ARTWORK_UPGRADED.swap(true, Ordering::SeqCst) {
+            upgrade_artwork(db.clone());
+        }
         let _ = app.emit("library-changed", ());
         if !lib.continue_scan() {
             break;

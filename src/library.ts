@@ -42,6 +42,21 @@ export const durationLabel = (s: number) =>
   s >= 3600
     ? `${Math.floor(s / 3600)} hr ${Math.floor((s % 3600) / 60)} min`
     : `${Math.ceil(s / 60)} min`;
+/** How a file is encoded, for quality badges: lossless formats, and "Hi-Res" for
+ * 24-bit (or deeper) files above 48 kHz. ALAC shares the M4A extension with lossy AAC, so it
+ * counts as lossless only when the file reports a bit depth. */
+export function quality(t: Track) {
+  const lossless =
+    ['FLAC', 'WAV', 'AIF', 'AIFF'].includes(t.format) || (t.format === 'M4A' && t.bitDepth > 0);
+  const hiRes = lossless && t.bitDepth >= 24 && t.sampleRate > 48000;
+  const detail = [
+    t.bitDepth > 0 ? `${t.bitDepth}-bit` : '',
+    t.sampleRate > 0 ? `${Math.round(t.sampleRate / 100) / 10} kHz` : '',
+  ]
+    .filter(Boolean)
+    .join(' / ');
+  return { lossless, hiRes, label: hiRes ? 'Hi-Res Lossless' : lossless ? 'Lossless' : '', detail };
+}
 /** A confirmed playlist entry for a local song. It stays confirmed even if the file is
  * unavailable right now; it is shown as missing until the file returns (see entryStatus). */
 export const entryFrom = (t: Track): Entry => ({

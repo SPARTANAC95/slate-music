@@ -55,6 +55,7 @@ import {
   Moon,
   FolderSearch,
   Save,
+  Expand,
 } from 'lucide-react';
 import type { Album, Collection, Playback, Scan, Settings, Snapshot, Track } from './types';
 import {
@@ -81,6 +82,8 @@ import SettingsPanel from './SettingsPanel';
 import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
 import { followsSpotify, updateAll } from './spotifySources';
+import NowPlaying from './NowPlaying';
+import { useArtColor } from './artColor';
 
 type Page =
   | 'Home'
@@ -108,6 +111,7 @@ const defaults: Settings = {
   autoDownload: true,
   showListening: true,
   lookupYears: false,
+  lookupLyrics: false,
 };
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 const noQueueEntries: ReturnType<typeof queueEntries> = [];
@@ -149,7 +153,8 @@ export default function App() {
     [toast, setToast] = useState(''),
     [settings, setSettings] = useState<Settings>(defaults),
     [seek, setSeek] = useState<number | null>(null),
-    [menu, setMenu] = useState<Menu | null>(null);
+    [menu, setMenu] = useState<Menu | null>(null),
+    [nowPlaying, setNowPlaying] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null),
     mainRef = useRef<HTMLElement>(null),
     history = useRef<View[]>([]),
@@ -279,7 +284,13 @@ export default function App() {
       const ownsKeys = type === 'range' || tag === 'SELECT';
       if (ownsKeys && !e.ctrlKey && !e.altKey && e.key.startsWith('Arrow')) return;
       if (tag === 'SELECT' && e.code === 'Space') return;
-      if (e.altKey && e.key === 'ArrowLeft') {
+      if (e.key === 'Escape' && nowPlaying) {
+        e.preventDefault();
+        setNowPlaying(false);
+      } else if (e.ctrlKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setNowPlaying((open) => !open);
+      } else if (e.altKey && e.key === 'ArrowLeft') {
         e.preventDefault();
         goBackRef.current();
       } else if (e.ctrlKey && e.key.toLowerCase() === 'k') {
@@ -307,7 +318,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [pb, dialog, command, task]);
+  }, [pb, dialog, command, task, nowPlaying]);
   useEffect(() => {
     // The mouse's back button goes back, and the browser's own right-click menu (Back,
     // Refresh, Print…) never appears outside text fields.
@@ -339,6 +350,7 @@ export default function App() {
   const albums = useMemo(() => albumsFrom(tracks), [tracks]);
   const duplicateIds = useMemo(() => duplicates(tracks), [tracks]);
   const current = pb?.currentId ? trackMap.get(pb.currentId) : null;
+  const accent = useArtColor(current?.artwork);
   const album = albums.find((a) => a.key === selectedAlbum),
     collection = data?.collections.find((c) => c.id === selectedCollection);
   const artistNames = useMemo(
@@ -905,7 +917,10 @@ export default function App() {
       </div>
     );
   return (
-    <div className={`app ${settings.showListening ? '' : 'without-listening'}`}>
+    <div
+      className={`app ${settings.showListening ? '' : 'without-listening'}`}
+      style={accent ? ({ '--art': accent } as React.CSSProperties) : undefined}
+    >
       <header className="titlebar" data-tauri-drag-region>
         <span className="titlebar-word" data-tauri-drag-region>
           SLATE MUSIC
@@ -1526,7 +1541,14 @@ export default function App() {
               <ListMusic size={18} />
             </IconButton>
           </div>
-          <div className="listening-cover">
+          <div
+            className="listening-cover"
+            role={current ? 'button' : undefined}
+            tabIndex={current ? 0 : undefined}
+            title={current ? 'Open Now Playing (Ctrl+L)' : undefined}
+            onClick={() => current && setNowPlaying(true)}
+            onKeyDown={(e) => current && e.key === 'Enter' && setNowPlaying(true)}
+          >
             <Art hash={current?.artwork} name={current?.album} />
             {current && (
               <span className="format-badge">
@@ -1612,11 +1634,19 @@ export default function App() {
       )}
       <footer className="player-bar">
         <div className="player-current">
-          <Art hash={current?.artwork} />
-          <div>
-            <strong>{current?.title || 'Choose something you love'}</strong>
-            <span>{current?.artist || 'Your library is ready'}</span>
-          </div>
+          <button
+            className="player-open"
+            aria-label="Open Now Playing"
+            title="Now Playing (Ctrl+L)"
+            disabled={!current}
+            onClick={() => setNowPlaying(true)}
+          >
+            <Art hash={current?.artwork} />
+            <div>
+              <strong>{current?.title || 'Choose something you love'}</strong>
+              <span>{current?.artist || 'Your library is ready'}</span>
+            </div>
+          </button>
           <IconButton
             label="Favorite playing song"
             active={current?.favorite}
@@ -1666,6 +1696,14 @@ export default function App() {
             value={pb.volume}
             onChange={(e) => command('volume', Number(e.target.value))}
           />
+          <IconButton
+            label="Now Playing (Ctrl+L)"
+            active={nowPlaying}
+            disabled={!current}
+            onClick={() => setNowPlaying((open) => !open)}
+          >
+            <Expand size={17} />
+          </IconButton>
           <IconButton label="Mini-player" onClick={() => task(() => invoke('mini_player'))}>
             <Minimize2 size={18} />
           </IconButton>
@@ -1692,6 +1730,28 @@ export default function App() {
             <X size={16} />
           </IconButton>
         </div>
+      )}
+      {nowPlaying && (
+        <NowPlaying
+          track={current ?? null}
+          pb={pb}
+          trackMap={trackMap}
+          accent={accent}
+          transport={transport()}
+          progress={progress}
+          lookupLyrics={settings.lookupLyrics}
+          onClose={() => setNowPlaying(false)}
+          onFavorite={favorite}
+          onSeek={(seconds) => command('seek', seconds)}
+          onJump={(index) => command('jump', index)}
+          onAlbum={(t) => {
+            const a = albumOf(t);
+            if (a) {
+              setNowPlaying(false);
+              openAlbum(a);
+            }
+          }}
+        />
       )}
       {menu && (
         <ContextMenu

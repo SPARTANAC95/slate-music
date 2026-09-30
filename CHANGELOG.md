@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 — unreleased
+
+- **Now Playing:** a full-window view with a large, sharp cover, a backdrop blurred from the artwork, and synced lyrics that follow the song (click a line to jump to it), or the queue. Open it by clicking the song in the player bar or the cover in the listening panel, with the new button beside the volume, or with Ctrl+L; Esc closes it.
+- **Lyrics** come from an .lrc file beside the song, lyrics stored in the file, or, when "Find lyrics online" is on, LRCLIB (a free lyrics database; artist, title, album and length are sent, and results are remembered).
+- **Colours from the cover:** the progress bar, playing indicator and Now Playing view take their accent from the current album cover.
+- **Sharper artwork:** covers are also kept at up to 1600 px for large views; existing covers are upgraded in the background.
+- **Quality badges:** Lossless and Hi-Res Lossless, with the format, bit depth and sample rate.
+- **Motion:** pages, covers and Now Playing ease in; turned off when Windows asks for reduced motion.
+
 ## 1.0.3 — 2026-09-30
 
 - Import Spotify playlists instead of albums. Pick from your own playlists or paste a playlist link, then update an imported playlist from Spotify later without losing songs you already matched. Uses Spotify's 2026 playlist API; earlier connections need one Reconnect for playlist access.

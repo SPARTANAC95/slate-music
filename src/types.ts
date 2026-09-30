@@ -73,6 +73,8 @@ export interface Settings {
   showListening: boolean;
   /** Look up original release years on MusicBrainz. */
   lookupYears: boolean;
+  /** Look up lyrics on LRCLIB when a song has none of its own. */
+  lookupLyrics: boolean;
 }
 export interface Scan {
   scanning: boolean;

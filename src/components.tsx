@@ -46,17 +46,20 @@ export function Art({
   hash,
   name = '',
   className = '',
+  large = false,
 }: {
   hash?: string | null;
   name?: string;
   className?: string;
+  /** Use the sharp 1600 px copy, for big views. */
+  large?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [hash]);
   return hash && !failed ? (
     <img
       className={`art ${className}`}
-      src={`http://art.localhost/${hash}`}
+      src={`http://art.localhost/${hash}${large ? '-xl' : ''}`}
       alt={name ? `${name} cover` : ''}
       loading="lazy"
       onError={() => setFailed(true)}
