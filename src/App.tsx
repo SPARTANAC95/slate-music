@@ -80,6 +80,7 @@ import {
 import SettingsPanel from './SettingsPanel';
 import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
+import { updateAll } from './spotifySources';
 
 type Page =
   | 'Home'
@@ -102,7 +103,12 @@ type Dialog =
   | 'deleteCollection'
   | 'install'
   | null;
-const defaults: Settings = { autoCheck: true, autoDownload: true, showListening: true };
+const defaults: Settings = {
+  autoCheck: true,
+  autoDownload: true,
+  showListening: true,
+  lookupYears: false,
+};
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 const noQueueEntries: ReturnType<typeof queueEntries> = [];
 /** Playback updates arrive several times a second. Reusing the old queue array when nothing
@@ -151,6 +157,7 @@ export default function App() {
     unmuteVolume = useRef(0.7),
     initialPicker = useRef(false),
     initialized = useRef(false),
+    spotifyChecked = useRef(false),
     exitAllowed = useRef(false),
     goBackRef = useRef<() => void>(() => {});
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -218,6 +225,17 @@ export default function App() {
       });
     }
   }, [data, mini, refresh, task]);
+  useEffect(() => {
+    // Once per launch, after the first scan, bring imported Spotify playlists up to date.
+    if (!data || mini || spotifyChecked.current || data.scan.scanning || !data.spotify.connected)
+      return;
+    spotifyChecked.current = true;
+    updateAll(data).then(async (updated) => {
+      if (!updated) return;
+      await refresh();
+      notify(`Updated ${updated} Spotify playlist${updated === 1 ? '' : 's'}`);
+    });
+  }, [data, mini, refresh, notify]);
   useEffect(() => {
     if (!data || mini || !settings.autoCheck) return;
     const t = setTimeout(() => updater.checkNow(settings.autoDownload), 30000);
@@ -381,7 +399,12 @@ export default function App() {
               a.track - b.track
             : sortMode === 'album'
               ? collator.compare(a.album, b.album) || a.disc - b.disc || a.track - b.track
-              : sortMode === 'added'
+              : sortMode === 'year'
+                ? (a.originalYear || a.year || 9999) - (b.originalYear || b.year || 9999) ||
+                  collator.compare(a.artist, b.artist) ||
+                  a.disc - b.disc ||
+                  a.track - b.track
+                : sortMode === 'added'
                 ? b.added - a.added
                 : sortMode === 'duration'
                   ? b.duration - a.duration
@@ -1420,6 +1443,7 @@ export default function App() {
                     <option value="title">Title</option>
                     <option value="artist">Artist</option>
                     <option value="album">Album order</option>
+                    <option value="year">Year released</option>
                     <option value="added">Recently added</option>
                     <option value="duration">Duration</option>
                     <option value="plays">Most played</option>
@@ -1505,6 +1529,12 @@ export default function App() {
               {current.album}
               <ChevronRight size={14} />
             </button>
+          )}
+          {current && current.originalYear > 0 && current.originalYear !== current.year && (
+            <p className="first-released">
+              First released {current.originalYear}
+              {current.year ? ` · this album ${current.year}` : ''}
+            </p>
           )}
           <div className="listening-divider" />
           <div className="section-heading">

@@ -36,6 +36,8 @@ export default function SettingsPanel({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const missing = data.tracks.filter((t) => t.missing).length;
+  const available = data.tracks.length - missing;
+  const known = data.tracks.filter((t) => !t.missing && t.originalYear > 0).length;
   async function run(label: string, action: () => Promise<unknown>) {
     setBusy(label);
     setMessage('');
@@ -92,6 +94,16 @@ export default function SettingsPanel({
             </button>
           </div>
         )}
+        <Toggle
+          label="Find each song’s original release year"
+          description={
+            settings.lookupYears
+              ? `Known for ${known} of ${available} songs. Looks songs up on MusicBrainz, a free music database, about one per second; it sends only artists and titles and never changes your files.`
+              : 'Compilations and remasters only carry the year of the album. When on, Slate Music asks MusicBrainz, a free music database, when each song first came out. Only artists and titles are sent.'
+          }
+          checked={!!settings.lookupYears}
+          onChange={(v) => onSettings({ ...settings, lookupYears: v })}
+        />
         {data.scan.errors.length > 0 && (
           <details className="scan-errors">
             <summary>
@@ -149,16 +161,16 @@ export default function SettingsPanel({
           {data.spotify.connected && <span className="badge">Connected</span>}
         </div>
         <p>
-          Bring your Spotify playlists and Liked Songs into your local library. Slate Music reads
+          Bring your Spotify playlists, Liked Songs and top songs into your local library. Slate Music reads
           each song list and matches it to files you already own. Only metadata is requested.
         </p>
-        {data.spotify.connected && (!data.spotify.playlistAccess || !data.spotify.likedAccess) && (
-          <p className="inline-error">
-            This connection was made before {data.spotify.playlistAccess ? 'Liked Songs' : 'playlist'}{' '}
-            import and cannot read your {data.spotify.playlistAccess ? 'Liked Songs' : 'playlists'}{' '}
-            yet. Choose Reconnect and approve the request in your browser.
-          </p>
-        )}
+        {data.spotify.connected &&
+          (!data.spotify.playlistAccess || !data.spotify.likedAccess || !data.spotify.topAccess) && (
+            <p className="inline-error">
+              This connection cannot read all of your playlists, Liked Songs and top songs yet.
+              Choose Reconnect and approve the request in your browser.
+            </p>
+          )}
         <ol className="setup-steps">
           <li>
             Open Spotify Developer Dashboard and create an app. Development apps require an active

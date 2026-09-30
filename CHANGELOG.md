@@ -4,6 +4,9 @@
 
 - Import Spotify playlists instead of albums. Pick from your own playlists or paste a playlist link, then update an imported playlist from Spotify later without losing songs you already matched. Uses Spotify's 2026 playlist API; earlier connections need one Reconnect for playlist access.
 - Import Spotify Liked Songs as a playlist and, optionally, add the matched songs to Favorites (needs one Reconnect for the `user-library-read` permission). Large imports are matched much faster.
+- Import your Spotify top songs (this month, last 6 months or last year) as playlists (`user-top-read`).
+- Imported Spotify playlists, Liked Songs and top songs update themselves each time Slate Music opens, keeping confirmed matches. Each can be switched off in its edit screen.
+- Optional original release years: when enabled in Settings, Slate Music asks MusicBrainz (artist and title only, about one song per second) when each song first came out. A new Year column and a "Year released" sort show it; songs without a known original year show their album's year dimmed, and the listening panel notes "First released" for compilation and remaster tracks. ORIGINALDATE tags are used when present.
 - Use the album name to choose between an album cut and a compilation copy of the same song.
 - Recognize songs whose files were moved or renamed inside the library: favorites, play counts, history, playlist places and the queue carry over, and no "Unavailable" copy is left behind. Songs on a disconnected drive are left alone, and ambiguous duplicates are not guessed.
 - Settings can remove unavailable songs (deleted files or disconnected drives); playlists keep them as missing entries.

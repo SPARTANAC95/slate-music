@@ -209,6 +209,10 @@ pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
         album,
         album_artist,
         year: tag.and_then(|t| t.year()).unwrap_or(0),
+        original_year: tag
+            .and_then(|t| t.get_string(&ItemKey::OriginalReleaseDate))
+            .and_then(|date| date.get(..4)?.parse().ok())
+            .unwrap_or(0),
         track: tag.and_then(|t| t.track()).unwrap_or(0),
         disc: tag.and_then(|t| t.disk()).unwrap_or(1),
         duration: props.duration().as_secs_f64(),
@@ -345,6 +349,7 @@ pub fn start_scan(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
             state.engine.remap(&status.relinked);
         }
+        crate::years::start(db.clone(), app.clone());
         let _ = app.emit("library-changed", ());
         if !lib.continue_scan() {
             break;

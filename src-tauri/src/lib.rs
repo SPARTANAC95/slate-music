@@ -3,6 +3,7 @@ mod db;
 mod desktop;
 mod library;
 mod spotify;
+mod years;
 use db::{err, Database, Result};
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Arc};
@@ -54,7 +55,7 @@ async fn snapshot(state: tauri::State<'_, AppState>) -> Result<Value> {
     let db = state.db.clone();
     let scan = state.library.status.lock().unwrap().clone();
     let playback = state.engine.snapshot();
-    tauri::async_runtime::spawn_blocking(move||{let mut data=db.snapshot()?;data["scan"]=serde_json::to_value(scan).map_err(err)?;data["playback"]=serde_json::to_value(playback).map_err(err)?;data["spotify"]=json!({"connected":spotify::connected(&db),"playlistAccess":spotify::playlist_access(&db),"likedAccess":spotify::liked_access(&db),"clientId":db.get("spotify_client_id"),"redirectUri":spotify::REDIRECT});Ok(data)}).await.map_err(err)?
+    tauri::async_runtime::spawn_blocking(move||{let mut data=db.snapshot()?;data["scan"]=serde_json::to_value(scan).map_err(err)?;data["playback"]=serde_json::to_value(playback).map_err(err)?;data["spotify"]=json!({"connected":spotify::connected(&db),"playlistAccess":spotify::playlist_access(&db),"likedAccess":spotify::liked_access(&db),"topAccess":spotify::top_access(&db),"clientId":db.get("spotify_client_id"),"redirectUri":spotify::REDIRECT});Ok(data)}).await.map_err(err)?
 }
 #[tauri::command]
 async fn playback(
@@ -86,11 +87,17 @@ async fn delete_collection(id: String, state: tauri::State<'_, AppState>) -> Res
     state.db.delete_collection(&id)
 }
 #[tauri::command]
-async fn settings(value: Value, state: tauri::State<'_, AppState>) -> Result<()> {
+async fn settings(
+    value: Value,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<()> {
     if !value.is_object() {
         return Err("Invalid settings".into());
     }
-    state.db.set("settings", &value)
+    state.db.set("settings", &value)?;
+    years::start(state.db.clone(), app);
+    Ok(())
 }
 #[tauri::command]
 fn rescan(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
@@ -164,6 +171,13 @@ async fn spotify_playlists(state: tauri::State<'_, AppState>) -> Result<Value> {
 async fn spotify_liked(state: tauri::State<'_, AppState>) -> Result<Value> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || spotify::liked(&db))
+        .await
+        .map_err(err)?
+}
+#[tauri::command]
+async fn spotify_top(source: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || spotify::top(&db, &source))
         .await
         .map_err(err)?
 }
@@ -343,6 +357,7 @@ pub fn run() {
             spotify_playlists,
             spotify_playlist,
             spotify_liked,
+            spotify_top,
             reveal_track,
             remove_missing,
             open_link,

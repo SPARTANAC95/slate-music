@@ -9,7 +9,8 @@ use std::{
 };
 
 pub const REDIRECT: &str = "http://127.0.0.1:43829/callback";
-const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-library-read";
+const SCOPES: &str =
+    "playlist-read-private playlist-read-collaborative user-library-read user-top-read";
 /// The Liked Songs collection has no playlist ID; this address stands for it.
 pub const LIKED_URL: &str = "https://open.spotify.com/collection/tracks";
 fn client() -> Result<reqwest::blocking::Client> {
@@ -235,6 +236,50 @@ pub fn playlist_access(db: &Database) -> bool {
 }
 pub fn liked_access(db: &Database) -> bool {
     granted(db, "user-library-read")
+}
+pub fn top_access(db: &Database) -> bool {
+    granted(db, "user-top-read")
+}
+/// Spotify's time ranges for top songs and Slate's names for them.
+const TOP_RANGES: [(&str, &str); 3] = [
+    ("short_term", "this month"),
+    ("medium_term", "last 6 months"),
+    ("long_term", "last year"),
+];
+/// The user's 50 most played songs for a time range, in the same shape as a playlist.
+/// `source` is Slate's address for it, e.g. `spotify:top:medium_term`.
+pub fn top(db: &Database, source: &str) -> Result<Value> {
+    let (range, label) = TOP_RANGES
+        .iter()
+        .find(|(range, _)| source.strip_prefix("spotify:top:") == Some(range))
+        .ok_or("Unknown top songs period")?;
+    if !top_access(db) {
+        return Err("Reconnect Spotify to allow Slate Music to read your top songs.".into());
+    }
+    let data = response(
+        client()?
+            .get("https://api.spotify.com/v1/me/top/tracks")
+            .query(&[("time_range", *range), ("limit", "50")])
+            .bearer_auth(token(db)?)
+            .send()
+            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
+    )?;
+    // Top songs are plain track objects; wrap them like playlist items.
+    let items: Vec<Value> = data["items"]
+        .as_array()
+        .ok_or("Spotify returned no top songs")?
+        .iter()
+        .map(|t| json!({ "item": t }))
+        .collect();
+    let (tracks, skipped) = playlist_tracks(&items);
+    Ok(json!({
+        "id": source,
+        "name": format!("Top songs · {label}"),
+        "owner": "",
+        "url": source,
+        "tracks": tracks,
+        "skipped": skipped,
+    }))
 }
 const NOT_YOURS: &str = "Spotify only lets apps read playlists you created or collaborate on. To import someone else's playlist, copy its songs into a new playlist of your own in Spotify, then import that.";
 /// Playlist reads get their own messages: Spotify answers 403 for playlists the user does
@@ -483,6 +528,15 @@ mod tests {
         assert_eq!(tracks[0]["artists"], json!([{"name":"A"},{"name":"B"}]));
         assert_eq!(tracks[0]["album"], "Album");
         assert!(tracks[2]["id"].is_null());
+    }
+    #[test]
+    fn top_songs_need_a_known_period_and_permission() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        assert!(top(&db, "spotify:top:forever").unwrap_err().contains("Unknown"));
+        assert!(top(&db, "spotify:top:short_term").unwrap_err().contains("Reconnect"));
+        db.set("spotify_scope", &json!("user-library-read user-top-read")).unwrap();
+        assert!(top_access(&db) && liked_access(&db) && !playlist_access(&db));
     }
     #[test]
     fn marks_only_owned_or_collaborative_playlists_readable() {

@@ -8,6 +8,7 @@ import {
   Link2,
   ListMusic,
   Heart,
+  TrendingUp,
   Lock,
   RefreshCw,
   Search,
@@ -23,10 +24,9 @@ import type {
   Track,
 } from './types';
 import { keepConfirmed, matchTracks } from './matching';
+import { canRead, LIKED_URL, readSource, sourceKind, TOP_RANGES, topUrl } from './spotifySources';
 import { normalize, time, reorder, entryStatus } from './library';
 import { Art, IconButton, Toggle } from './components';
-/** Slate's address for the Liked Songs collection (matches spotify.rs). */
-const LIKED_URL = 'https://open.spotify.com/collection/tracks';
 export default function ImportPanel({
   tracks,
   existing,
@@ -50,13 +50,12 @@ export default function ImportPanel({
     [collection, setCollection] = useState<Collection | null>(existing || null),
     [playlists, setPlaylists] = useState<SpotifyPlaylistSummary[] | null>(null),
     [filter, setFilter] = useState(''),
-    [heartLiked, setHeartLiked] = useState(true),
     [picking, setPicking] = useState<number | null>(null),
     [query, setQuery] = useState('');
   const trackMap = useMemo(() => new Map(tracks.map((t) => [t.id, t])), [tracks]);
   const ready = spotify.connected && spotify.playlistAccess;
-  const isLiked = collection?.sourceUrl === LIKED_URL;
-  const fromSpotify = !!collection?.sourceUrl?.includes('/playlist/') || isLiked;
+  const isLiked = sourceKind(collection?.sourceUrl) === 'liked';
+  const fromSpotify = sourceKind(collection?.sourceUrl) !== null;
   async function loadPlaylists() {
     setBusy('list');
     setError('');
@@ -78,10 +77,7 @@ export default function ImportPanel({
     setError('');
     setNotice('');
     try {
-      const playlist =
-        source === LIKED_URL
-          ? await invoke<SpotifyPlaylist>('spotify_liked')
-          : await invoke<SpotifyPlaylist>('spotify_playlist', { url: source });
+      const playlist = await readSource(source);
       const skipped = playlist.skipped
         ? ` ${playlist.skipped} podcast episode${playlist.skipped === 1 ? '' : 's'} or unavailable item${playlist.skipped === 1 ? ' was' : 's were'} left out.`
         : '';
@@ -103,6 +99,8 @@ export default function ImportPanel({
         sourceUrl: playlist.url,
         created: Date.now(),
         entries: matchTracks(playlist.tracks, tracks),
+        autoUpdate: true,
+        heartMatches: sourceKind(playlist.url) === 'liked',
       });
     } catch (e) {
       setError(String(e));
@@ -233,7 +231,7 @@ export default function ImportPanel({
           </label>
           <p>
             {collection.artist}
-            {collection.sourceUrl && (
+            {collection.sourceUrl?.startsWith('https://') && (
               <button
                 className="text-button source-link"
                 onClick={() => invoke('open_link', { url: collection.sourceUrl })}
@@ -244,8 +242,12 @@ export default function ImportPanel({
             {existing && fromSpotify && (
               <button
                 className="text-button source-link"
-                disabled={!!busy || !ready}
-                title={ready ? undefined : 'Connect Spotify with playlist access in Settings'}
+                disabled={!!busy || !canRead(spotify, collection.sourceUrl)}
+                title={
+                  canRead(spotify, collection.sourceUrl)
+                    ? undefined
+                    : 'Reconnect Spotify in Settings to allow this'
+                }
                 onClick={refreshFromSpotify}
               >
                 <RefreshCw size={12} className={busy === 'fetch' ? 'spin' : ''} />
@@ -266,8 +268,16 @@ export default function ImportPanel({
             <Toggle
               label="Also add matched songs to Favorites"
               description="Hearts every song that has a confirmed match. Songs already in Favorites stay there."
-              checked={heartLiked}
-              onChange={setHeartLiked}
+              checked={!!collection.heartMatches}
+              onChange={(heartMatches) => setCollection({ ...collection, heartMatches })}
+            />
+          )}
+          {fromSpotify && (
+            <Toggle
+              label="Update automatically when Slate Music opens"
+              description="Follows Spotify’s current song list and order. Songs you already matched stay matched."
+              checked={collection.autoUpdate !== false}
+              onChange={(autoUpdate) => setCollection({ ...collection, autoUpdate })}
             />
           )}
           <p className="fine-print">
@@ -345,11 +355,15 @@ export default function ImportPanel({
               onClick={async () => {
                 setBusy('save');
                 try {
-                  if (isLiked && heartLiked) {
+                  if (collection.heartMatches) {
+                    // Only songs matched in this session, so earlier un-hearts are respected.
+                    const before = new Set(existing?.entries.map((e) => e.status === 'available' && e.trackId));
                     const ids = collection.entries.flatMap((e) =>
-                      e.trackId && entryStatus(e, trackMap) === 'available' ? [e.trackId] : [],
+                      e.trackId && entryStatus(e, trackMap) === 'available' && !before.has(e.trackId)
+                        ? [e.trackId]
+                        : [],
                     );
-                    await invoke('favorite_many', { ids });
+                    if (ids.length) await invoke('favorite_many', { ids });
                   }
                   await onSave(collection);
                 } catch (e) {
@@ -434,6 +448,30 @@ export default function ImportPanel({
                       </small>
                     </span>
                   </button>
+                  {TOP_RANGES.map(({ range, label }) => (
+                    <button
+                      key={range}
+                      className="playlist-option liked"
+                      disabled={!!busy}
+                      onClick={() =>
+                        spotify.topAccess ? importPlaylist(topUrl(range), range) : allowAccess()
+                      }
+                    >
+                      <TrendingUp size={17} />
+                      <span>
+                        <strong>Your top songs · {label}</strong>
+                        <small>
+                          {loading === range
+                            ? 'Reading your top songs…'
+                            : busy === 'connect'
+                              ? 'Waiting for approval in your browser…'
+                              : spotify.topAccess
+                                ? 'The 50 songs you played most on Spotify'
+                                : 'Needs one more approval in your browser'}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
                   {playlists === null ? (
                     <p className="fine-print">Loading your playlists…</p>
                   ) : playlists.length === 0 ? (

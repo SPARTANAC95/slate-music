@@ -32,6 +32,7 @@ const local = (p: Partial<Track> = {}): Track => ({
   lastPlayed: 0,
   added: 0,
   size: 1,
+  originalYear: 0,
   ...p,
 });
 const remote = (p: Partial<SpotifyTrack> = {}): SpotifyTrack => ({

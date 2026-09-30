@@ -18,6 +18,7 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 - Use the mini-player or Windows media controls. The app restores its queue and position paused, including after an update.
 - Gapless playback is enabled with crossfade off. Choose an optional 2–12 second crossfade in Settings.
 - Settings controls watched folders, rescanning, Spotify setup and updates. Disconnected drives retain their entries as unavailable; reconnect and rescan to restore them. Songs you move or rename inside a watched folder are recognized and keep their favorites, plays and playlist places. Settings can remove songs that stay unavailable.
+- The Year column shows when each song was first released. Files only carry the year of the album they are on, so compilations and remasters show that album year dimmed. Turn on **Find each song's original release year** in Settings to look songs up on MusicBrainz, a free music database: only artists and titles are sent, about one song per second, and your files are never changed. Songs not found are tried again after 60 days.
 - Album art comes from the file itself, or from an image in the album folder: `cover.jpg`, `folder.jpg`, `front.jpg`, any image named like a front cover, or the folder's only image (e.g. `Artist - Album [2008].jpg`). Songs in `CD1`/`Disc 2` folders also use the album folder's image.
 
 | Shortcut | Action |
@@ -48,6 +49,10 @@ This feature reads a Spotify playlist's song list and matches it to music you al
 5. Choose **Import Spotify playlist** and pick one of your playlists, or paste an `open.spotify.com/playlist/...` link.
 6. Review available, uncertain and missing matches. Correct uncertain songs manually, then save the playlist.
 
+**Your top songs** (this month, last 6 months, last year) are listed next: Spotify's 50 most played songs for that period, saved as a playlist.
+
+Imported playlists, Liked Songs and top songs update themselves each time Slate Music opens (after the library scan): the song list follows Spotify, confirmed matches stay, and newly matched Liked Songs are hearted if that option is on. Switch **Update automatically when Slate Music opens** off in a playlist's edit screen to keep it as it is.
+
 **Liked Songs** appears first in the list. Importing it saves a "Liked Songs" playlist and, unless you switch it off on the review screen, adds every matched song to Favorites. Connections made before this feature need one **Reconnect** for it.
 
 Spotify only lets apps read playlists you created or collaborate on. Other people's playlists and Spotify-made ones (Discover Weekly, Today's Top Hits and similar) appear locked; copy their songs into a playlist of your own in Spotify, then import that. Podcast episodes are left out. Connections made before playlist import need one **Reconnect** to grant playlist access.
@@ -60,7 +65,7 @@ As verified September 25, 2026, Spotify Development Mode requires an active Prem
 
 The SQLite database and artwork cache live in `%APPDATA%\com.spartanac95.slate-music`. The database stores library paths, metadata, favorites, playlists, play counts, history, settings and the paused listening session. SQLite migrations and WAL journaling protect normal restarts. Settings includes a JSON export of favorites and playlists; to back up the full profile, close the app and copy its data directory. Do not publish that directory.
 
-Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests and update checks/downloads. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
+Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup and update checks/downloads. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
 
 Updates are checked and downloaded automatically by default. The updater verifies both the artifact signature and signed version. It only installs after you confirm while paused or choose the install option on exit. Installation keeps your database, artwork and settings.
 

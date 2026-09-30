@@ -20,6 +20,8 @@ export interface Track {
   lastPlayed: number;
   added: number;
   size: number;
+  /** Year the song was first released (tag or MusicBrainz); 0 when unknown. */
+  originalYear: number;
 }
 export interface Playback {
   queue: string[];
@@ -56,11 +58,17 @@ export interface Collection {
   sourceUrl?: string;
   artist?: string;
   year?: number;
+  /** Imported from Spotify: refresh when the app opens (default on). */
+  autoUpdate?: boolean;
+  /** Add songs to Favorites when they are matched (Liked Songs). */
+  heartMatches?: boolean;
 }
 export interface Settings {
   autoCheck: boolean;
   autoDownload: boolean;
   showListening: boolean;
+  /** Look up original release years on MusicBrainz. */
+  lookupYears: boolean;
 }
 export interface Scan {
   scanning: boolean;
@@ -80,6 +88,7 @@ export interface Snapshot {
     connected: boolean;
     playlistAccess: boolean;
     likedAccess: boolean;
+    topAccess: boolean;
     clientId: string | null;
     redirectUri: string;
   };

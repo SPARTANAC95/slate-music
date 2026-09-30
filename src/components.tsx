@@ -209,6 +209,7 @@ export function TrackTable({
         <span>#</span>
         <span>Title</span>
         <span>Album</span>
+        <span>Year</span>
         <span>Time</span>
         <span />
       </div>
@@ -282,6 +283,20 @@ export function TrackTable({
                 </div>
                 <span className="album-cell ellipsis" title={t.album}>
                   {t.album}
+                </span>
+                {/* The song's own first-release year when known; otherwise the album's year,
+                    shown dimmed so a compilation's year never passes for the song's. */}
+                <span
+                  className={`year-cell ${t.originalYear ? '' : 'album-year'}`}
+                  title={
+                    t.originalYear
+                      ? `First released ${t.originalYear}${t.year && t.year !== t.originalYear ? ` · this album ${t.year}` : ''}`
+                      : t.year
+                        ? `Album released ${t.year}. This song’s first release year is not known.`
+                        : 'Year unknown'
+                  }
+                >
+                  {t.originalYear || t.year || '–'}
                 </span>
                 <span className="time-cell">{time(t.duration)}</span>
                 <div className="row-actions">

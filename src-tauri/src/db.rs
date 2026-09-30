@@ -39,6 +39,17 @@ pub struct Track {
     pub last_played: i64,
     pub added: i64,
     pub size: u64,
+    /// The year the song was first released: from an ORIGINALDATE-style tag, or looked up
+    /// online. 0 when unknown; `year` is the year of the album the file is on.
+    #[serde(default)]
+    pub original_year: u32,
+}
+/// A song that still needs its original year looked up.
+pub struct YearRequest {
+    pub key: String,
+    pub artist: String,
+    pub title: String,
+    pub album_year: u32,
 }
 pub struct Database {
     pub conn: Mutex<Connection>,
@@ -58,6 +69,7 @@ impl Database {
    CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS collections(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT,track_id TEXT NOT NULL,played INTEGER NOT NULL);
+   CREATE TABLE IF NOT EXISTS original_years(key TEXT PRIMARY KEY,year INTEGER NOT NULL,checked INTEGER NOT NULL);
    INSERT OR IGNORE INTO migrations VALUES(1,strftime('%s','now'));
    PRAGMA user_version=1;").map_err(err)?;
         Ok(Self {
@@ -114,7 +126,66 @@ impl Database {
             t.last_played = last_played;
             out.push(t);
         }
+        let years: HashMap<String, u32> = {
+            let mut s = c
+                .prepare("SELECT key,year FROM original_years WHERE year>0")
+                .map_err(err)?;
+            let rows = s
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(err)?;
+            rows.collect::<std::result::Result<_, _>>().map_err(err)?
+        };
+        for t in out.iter_mut().filter(|t| t.original_year == 0) {
+            t.original_year = years
+                .get(&crate::years::key(&t.artist, &t.title))
+                .copied()
+                .unwrap_or(0);
+        }
         Ok(out)
+    }
+    /// Songs whose original year is unknown and has not been looked up recently.
+    pub fn years_needed(&self) -> Result<Vec<YearRequest>> {
+        let checked: HashMap<String, (u32, i64)> = {
+            let c = self.conn.lock().unwrap();
+            let mut s = c
+                .prepare("SELECT key,year,checked FROM original_years")
+                .map_err(err)?;
+            let rows = s
+                .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))
+                .map_err(err)?;
+            rows.collect::<std::result::Result<_, _>>().map_err(err)?
+        };
+        // Songs that were not found are tried again after 60 days.
+        let retry_before = now() - 60 * 24 * 3600 * 1000;
+        let mut needed: HashMap<String, YearRequest> = HashMap::new();
+        for t in self.tracks()?.into_iter().filter(|t| !t.missing && t.original_year == 0) {
+            let key = crate::years::key(&t.artist, &t.title);
+            if checked.get(&key).is_some_and(|(year, at)| *year > 0 || *at > retry_before) {
+                continue;
+            }
+            let request = needed.entry(key.clone()).or_insert(YearRequest {
+                key,
+                artist: t.artist.clone(),
+                title: t.title.clone(),
+                album_year: t.year,
+            });
+            // With several copies, the earliest album is the strictest check.
+            if t.year > 0 && (request.album_year == 0 || t.year < request.album_year) {
+                request.album_year = t.year;
+            }
+        }
+        Ok(needed.into_values().collect())
+    }
+    pub fn set_original_year(&self, key: &str, year: u32) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO original_years VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET year=excluded.year,checked=excluded.checked",
+                params![key, year, now()],
+            )
+            .map_err(err)?;
+        Ok(())
     }
     pub fn track(&self, id: &str) -> Result<Track> {
         let c = self.conn.lock().unwrap();
@@ -347,6 +418,32 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn looked_up_years_fill_every_copy_and_are_not_asked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Database::open(dir.path()).unwrap();
+        let song = |id: &str, title: &str, year| Track {
+            id: id.into(),
+            path: format!("{id}.flac"),
+            title: title.into(),
+            artist: "Cliff Richard".into(),
+            year,
+            ..Default::default()
+        };
+        d.upsert(&song("a", "Wired For Sound", 1994), 1).unwrap();
+        d.upsert(&song("b", "Wired for Sound (2011 Remaster)", 2011), 1).unwrap();
+        d.upsert(&song("c", "Living Doll", 1994), 1).unwrap();
+        let mut needed = d.years_needed().unwrap();
+        needed.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(needed.len(), 2, "both copies share one lookup");
+        assert_eq!((needed[1].title.as_str(), needed[1].album_year), ("Wired For Sound", 1994));
+        d.set_original_year(&needed[1].key, 1981).unwrap();
+        d.set_original_year(&needed[0].key, 0).unwrap(); // not found
+        let tracks = d.tracks().unwrap();
+        let year = |id: &str| tracks.iter().find(|t| t.id == id).unwrap().original_year;
+        assert_eq!((year("a"), year("b"), year("c")), (1981, 1981, 0));
+        assert!(d.years_needed().unwrap().is_empty(), "a miss is not retried right away");
+    }
     #[test]
     fn migration_persistence_and_scan_preserves_user_data() {
         let dir = tempfile::tempdir().unwrap();

@@ -762,7 +762,7 @@ kbd {
 .table-head,
 .track-row {
   display: grid;
-  grid-template-columns: 30px minmax(140px, 1fr) minmax(75px, 0.66fr) 45px 100px;
+  grid-template-columns: 30px minmax(140px, 1fr) minmax(75px, 0.66fr) 38px 45px 100px;
   gap: 10px;
   align-items: center;
 }
@@ -772,7 +772,8 @@ kbd {
   padding: 0 8px 11px;
   border-bottom: 1px solid var(--line);
 }
-.table-head > span:nth-child(4) {
+.table-head > span:nth-child(4),
+.table-head > span:nth-child(5) {
   text-align: right;
 }
 .table-scroll {
@@ -850,6 +851,20 @@ kbd {
 .album-cell {
   font-size: 10px;
   color: #797884;
+}
+.year-cell {
+  font-size: 10px;
+  color: #8a8996;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.year-cell.album-year {
+  color: #55545f;
+}
+.first-released {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 6px;
 }
 .time-cell {
   font-size: 10px;
@@ -2275,7 +2290,7 @@ input[type='range']:disabled {
   }
   .table-head,
   .track-row {
-    grid-template-columns: 25px minmax(125px, 1fr) 40px 88px;
+    grid-template-columns: 25px minmax(125px, 1fr) 34px 40px 88px;
     gap: 7px;
   }
   .table-head > span:nth-child(3),
@@ -2377,7 +2392,7 @@ input[type='range']:disabled {
   }
   .table-head,
   .track-row {
-    grid-template-columns: 25px minmax(140px, 1fr) minmax(70px, 0.5fr) 40px 88px;
+    grid-template-columns: 25px minmax(140px, 1fr) minmax(70px, 0.5fr) 34px 40px 88px;
   }
   .table-head > span:nth-child(3),
   .album-cell {
