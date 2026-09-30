@@ -71,6 +71,7 @@ impl Database {
    CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT,track_id TEXT NOT NULL,played INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS original_years(key TEXT PRIMARY KEY,year INTEGER NOT NULL,checked INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS lyrics(key TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS loudness(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    INSERT OR IGNORE INTO migrations VALUES(1,strftime('%s','now'));
    PRAGMA user_version=1;").map_err(err)?;
         Ok(Self {
@@ -183,6 +184,47 @@ impl Database {
             }
         }
         Ok(needed.into_values().collect())
+    }
+    /// Songs whose loudness has been measured (or found unreadable), by loudness::key.
+    pub fn loudness_keys(&self) -> Result<std::collections::HashSet<String>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c.prepare("SELECT key FROM loudness").map_err(err)?;
+        let rows = s.query_map([], |r| r.get(0)).map_err(err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(err)
+    }
+    pub fn loudness_count(&self) -> Result<u64> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM loudness", [], |r| r.get(0))
+            .map_err(err)
+    }
+    pub fn set_loudness(&self, key: &str, l: &crate::loudness::Loudness) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO loudness VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                params![key, serde_json::to_string(l).map_err(err)?],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+    /// Measurements for the given keys; unreadable or unmeasured songs are left out.
+    pub fn loudness(&self, keys: &[String]) -> Result<HashMap<String, crate::loudness::Loudness>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c
+            .prepare("SELECT data FROM loudness WHERE key=?")
+            .map_err(err)?;
+        let mut out = HashMap::new();
+        for k in keys {
+            if let Ok(data) = s.query_row([k], |r| r.get::<_, String>(0)) {
+                if let Ok(l) = serde_json::from_str(&data) {
+                    out.insert(k.clone(), l);
+                }
+            }
+        }
+        Ok(out)
     }
     /// Lyrics remembered from LRCLIB (see lyrics.rs), by song.
     pub fn lyrics(&self, key: &str) -> Result<Option<Value>> {

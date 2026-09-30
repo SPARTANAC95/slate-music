@@ -8,6 +8,11 @@
 - **Sharper artwork:** covers are also kept at up to 1600 px for large views; existing covers are upgraded in the background.
 - **Quality badges:** Lossless and Hi-Res Lossless, with the format, bit depth and sample rate.
 - **Motion:** pages, covers and Now Playing ease in; turned off when Windows asks for reduced motion.
+- **Loudness levelling:** every song is measured once in the background (EBU R128, the basis of ReplayGain 2; ReplayGain tags are preferred when present). Smart mode uses album gain while an album plays in order and song gain otherwise; boosts are limited to +12 dB, near-silent songs are never boosted, and peaks never clip.
+- **Smart crossfade:** fades start where the music ends and skip silence at song edges; songs that run into each other on an album are never faded.
+- **Equalizer:** 10 bands with a preamp and presets (Bass boost, Vocal, Loudness, Late night and more), remembered separately for each output device.
+- **Output device:** choose where Slate Music plays; it switches immediately and falls back to the Windows default when the chosen device is disconnected.
+- **Signal path:** Now Playing lists every step from the file to the device: source format, levelling, equalizer, conversion to 48 kHz, and the output device.
 
 ## 1.0.3 — 2026-09-30
 

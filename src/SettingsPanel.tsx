@@ -13,6 +13,7 @@ import {
 import { Toggle, IconButton } from './components';
 import type { Snapshot, Settings, Playback } from './types';
 import type { useUpdater } from './updater';
+import SoundSettings from './SoundSettings';
 export default function SettingsPanel({
   data,
   pb,
@@ -185,6 +186,13 @@ export default function SettingsPanel({
             ))}
           </select>
         </label>
+        <SoundSettings
+          data={data}
+          pb={pb}
+          settings={settings}
+          onSettings={onSettings}
+          onPlayback={onPlayback}
+        />
         <Toggle
           label="Listening panel"
           description="Keep artwork and the next songs in view."
@@ -192,8 +200,8 @@ export default function SettingsPanel({
           onChange={(v) => onSettings({ ...settings, showListening: v })}
         />
         <p className="fine-print">
-          FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Output follows your Windows default
-          device. If an output device disconnects, playback pauses and reconnects automatically.
+          FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Songs are mixed at 48 kHz in Windows’
+          shared mode. If an output device disconnects, playback pauses and reconnects automatically.
         </p>
       </section>
       <section>

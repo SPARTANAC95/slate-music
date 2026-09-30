@@ -36,6 +36,7 @@ url = "2"
 open = "5"
 chrono = "0.4"
 image = {version="0.25",default-features=false,features= ["jpeg", "png", "webp"] }
+ebur128 = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = {version="0.61",features= ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_UI_Shell"] }

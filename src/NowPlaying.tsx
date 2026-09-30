@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronDown, Heart, ListMusic, MicVocal } from 'lucide-react';
+import { ChevronDown, Heart, ListMusic, MicVocal, Waves } from 'lucide-react';
 import type { Playback, Track } from './types';
 import { Art, IconButton } from './components';
 import { quality, time } from './library';
@@ -56,6 +56,7 @@ export default function NowPlaying({
   onAlbum: (t: Track) => void;
 }) {
   const [tab, setTab] = useState<'lyrics' | 'next'>('lyrics');
+  const [path, setPath] = useState(false);
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [loading, setLoading] = useState(false);
   const position = usePosition(pb);
@@ -112,7 +113,7 @@ export default function NowPlaying({
         </div>
       </header>
       <div className="np-body">
-        <section className="np-art">
+        <section className={`np-art ${path ? 'with-path' : ''}`}>
           <div className="np-cover" key={track?.id}>
             <Art hash={track?.artwork} name={track?.album} large />
           </div>
@@ -138,14 +139,23 @@ export default function NowPlaying({
             )}
           </div>
           {q && (
-            <p className="np-quality">
+            <div className="np-quality">
               {q.label && <span className={`quality-badge ${q.hiRes ? 'hi-res' : ''}`}>{q.label}</span>}
               <span>
                 {track!.format}
                 {q.detail && ` · ${q.detail}`}
               </span>
-            </p>
+              <button
+                className={`np-path-toggle ${path ? 'active' : ''}`}
+                aria-expanded={path}
+                onClick={() => setPath((open) => !open)}
+              >
+                <Waves size={13} />
+                Signal path
+              </button>
+            </div>
           )}
+          {path && track && <SignalPath track={track} pb={pb} />}
         </section>
         <section className="np-side">
           {tab === 'lyrics' ? (
@@ -217,5 +227,45 @@ export default function NowPlaying({
         {progress}
       </footer>
     </div>
+  );
+}
+
+/** Every step between the file and the speakers, stated plainly. */
+function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
+  const q = quality(track);
+  const rate = track.sampleRate;
+  const out = pb.output;
+  const kHz = (hz: number) => `${Math.round(hz / 100) / 10} kHz`;
+  const steps: [string, string][] = [
+    ['Source', `${track.format}${q.detail ? ` · ${q.detail}` : ''}${q.label ? ` · ${q.label}` : ''}`],
+    [
+      'Loudness',
+      pb.gainKind === 'off'
+        ? 'Levelling off'
+        : pb.gainKind === 'unmeasured' || pb.gainDb == null
+          ? 'Not measured yet'
+          : `${pb.gainDb > 0 ? '+' : ''}${pb.gainDb.toFixed(1)} dB (${pb.gainKind === 'album' ? 'album' : 'song'})`,
+    ],
+    [
+      'Equalizer',
+      pb.eq?.enabled ? `${pb.eq.preset || 'Custom'}${pb.eq.preamp ? ` · preamp ${pb.eq.preamp} dB` : ''}` : 'Off',
+    ],
+    ['Mixing', rate && rate !== 48000 ? `Converted from ${kHz(rate)} to 48 kHz` : '48 kHz, no conversion'],
+    [
+      'Output',
+      out
+        ? `${out.device} · Windows shared mode · ${kHz(out.sampleRate)}${out.fallback ? ' (chosen device not connected)' : ''}`
+        : 'No output device',
+    ],
+  ];
+  return (
+    <ol className="np-path">
+      {steps.map(([label, value]) => (
+        <li key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </li>
+      ))}
+    </ol>
   );
 }

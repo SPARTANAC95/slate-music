@@ -11,6 +11,7 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 ## Listen and organize
 
 - Home, Songs, Albums, Artists, Favorites, Recently Played, Playlists, saved virtual albums and Queue.
+- Settings → Playback holds the sound controls: output device, loudness levelling (Smart uses album gain while an album plays in order), smart crossfade and a 10-band equalizer that each output device remembers. Loudness is measured once per song in the background. Now Playing's **Signal path** shows exactly what happens between the file and your speakers or headphones.
 - Now Playing (click the song in the player bar or press Ctrl+L) shows a large cover and synced lyrics. Lyrics come from an .lrc file with the same name beside the song, lyrics stored in the file, or LRCLIB when **Find lyrics online** is on in Settings. Click a line to jump there.
 - Hover over Slate Music's taskbar button for Previous, Play/Pause, Next and Favorite buttons in the preview.
 - Right-click a song or album for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer. The Queue page can save the queue as a playlist or clear everything after the current song. The moon button beside the volume sets a sleep timer.

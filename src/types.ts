@@ -39,6 +39,24 @@ export interface Playback {
   /** Sleep timer deadline in Unix milliseconds. */
   sleepAt: number | null;
   sleepEndOfTrack: boolean;
+  levelling: 'off' | 'track' | 'album' | 'smart';
+  smartCrossfade: boolean;
+  eq: EqSettings;
+  /** The chosen output device; null follows the Windows default. */
+  outputDevice: string | null;
+  /** What is actually playing, for the signal path. */
+  output: { device: string; sampleRate: number; channels: number; fallback: boolean } | null;
+  /** Levelling applied to the current song, in dB. */
+  gainDb: number | null;
+  gainKind: 'off' | 'track' | 'album' | 'unmeasured';
+}
+export interface EqSettings {
+  enabled: boolean;
+  /** dB, 0 or below. */
+  preamp: number;
+  /** dB for 31 Hz … 16 kHz. */
+  bands: number[];
+  preset: string;
 }
 export interface Entry {
   trackId: string | null;
@@ -75,6 +93,8 @@ export interface Settings {
   lookupYears: boolean;
   /** Look up lyrics on LRCLIB when a song has none of its own. */
   lookupLyrics: boolean;
+  /** Equalizer per output device name ("" = Windows default). */
+  eqByDevice?: Record<string, EqSettings>;
 }
 export interface Scan {
   scanning: boolean;
@@ -90,6 +110,8 @@ export interface Snapshot {
   settings: Settings | null;
   scan: Scan;
   playback: Playback;
+  /** Songs whose loudness has been measured. */
+  loudnessMeasured: number;
   spotify: {
     connected: boolean;
     playlistAccess: boolean;

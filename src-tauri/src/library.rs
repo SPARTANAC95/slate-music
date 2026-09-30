@@ -447,6 +447,7 @@ pub fn start_scan(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
             state.engine.remap(&status.relinked);
         }
         crate::years::start(db.clone(), app.clone());
+        crate::loudness::start(db.clone());
         if !ARTWORK_UPGRADED.swap(true, Ordering::SeqCst) {
             upgrade_artwork(db.clone());
         }

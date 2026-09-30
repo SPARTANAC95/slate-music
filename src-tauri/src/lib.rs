@@ -1,7 +1,9 @@
 mod audio;
 mod db;
 mod desktop;
+mod dsp;
 mod library;
+mod loudness;
 mod lyrics;
 mod spotify;
 #[cfg(windows)]
@@ -58,7 +60,7 @@ async fn snapshot(state: tauri::State<'_, AppState>) -> Result<Value> {
     let db = state.db.clone();
     let scan = state.library.status.lock().unwrap().clone();
     let playback = state.engine.snapshot();
-    tauri::async_runtime::spawn_blocking(move||{let mut data=db.snapshot()?;data["scan"]=serde_json::to_value(scan).map_err(err)?;data["playback"]=serde_json::to_value(playback).map_err(err)?;data["spotify"]=json!({"connected":spotify::connected(&db),"playlistAccess":spotify::playlist_access(&db),"likedAccess":spotify::liked_access(&db),"topAccess":spotify::top_access(&db),"clientId":db.get("spotify_client_id"),"redirectUri":spotify::REDIRECT});Ok(data)}).await.map_err(err)?
+    tauri::async_runtime::spawn_blocking(move||{let mut data=db.snapshot()?;data["scan"]=serde_json::to_value(scan).map_err(err)?;data["playback"]=serde_json::to_value(playback).map_err(err)?;data["loudnessMeasured"]=json!(db.loudness_count().unwrap_or(0));data["spotify"]=json!({"connected":spotify::connected(&db),"playlistAccess":spotify::playlist_access(&db),"likedAccess":spotify::liked_access(&db),"topAccess":spotify::top_access(&db),"clientId":db.get("spotify_client_id"),"redirectUri":spotify::REDIRECT});Ok(data)}).await.map_err(err)?
 }
 #[tauri::command]
 async fn playback(
@@ -219,6 +221,16 @@ fn open_link(url: String) -> Result<()> {
         return Err("This link is not supported".into());
     }
     open::that(url).map_err(err)
+}
+/// Output devices Windows offers, for Settings.
+#[tauri::command]
+async fn audio_devices() -> Result<Value> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (devices, default) = audio::output_devices();
+        json!({ "devices": devices, "default": default })
+    })
+    .await
+    .map_err(err)
 }
 /// Lyrics for a song (see lyrics.rs). May ask LRCLIB when that is enabled in Settings.
 #[tauri::command]
@@ -400,6 +412,7 @@ pub fn run() {
             reveal_track,
             remove_missing,
             song_lyrics,
+            audio_devices,
             open_link,
             mini_player,
             show_main,

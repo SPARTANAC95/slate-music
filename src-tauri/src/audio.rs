@@ -21,6 +21,16 @@ pub struct Deck {
     pub source: StreamSource,
     pub samples: u64,
     pub duration: f64,
+    /// Loudness levelling as a linear factor, and what it is for the signal path.
+    pub gain: f32,
+    pub gain_db: Option<f64>,
+    pub gain_kind: String,
+    /// Where the music ends, before any trailing silence (for smart crossfades).
+    pub audible_end: f64,
+    /// Seconds of silence before the music starts.
+    pub start_silence: f64,
+    /// Follows the previous song on the same album, so it plays gaplessly, never faded.
+    pub continues_album: bool,
 }
 impl Deck {
     fn load(track: &Track, index: usize) -> Result<Self> {
@@ -35,7 +45,22 @@ impl Deck {
             source: Box::new(UniformSourceIterator::new(decoder, 2, RATE)),
             samples: 0,
             duration,
+            gain: 1.,
+            gain_db: None,
+            gain_kind: "off".into(),
+            audible_end: duration,
+            start_silence: 0.,
+            continues_album: false,
         })
+    }
+    /// Jumps forward, keeping the position count in whole stereo frames.
+    fn skip_to(&mut self, seconds: f64) -> Result<()> {
+        let target = seconds.min((self.duration - 0.1).max(0.));
+        self.source
+            .try_seek(Duration::from_secs_f64(target))
+            .map_err(err)?;
+        self.samples = (target * RATE as f64) as u64 * 2;
+        Ok(())
     }
     fn position(&self) -> f64 {
         self.samples as f64 / (RATE * 2) as f64
@@ -60,6 +85,28 @@ pub struct Playback {
     /// Sleep timer deadline in Unix milliseconds. Never restored after a restart.
     pub sleep_at: Option<i64>,
     pub sleep_end_of_track: bool,
+    /// Loudness levelling: "off", "track", "album" or "smart" (album gain while an album
+    /// plays in order, song gain otherwise).
+    pub levelling: String,
+    /// Crossfades skip silence at song edges and never fade within an album.
+    pub smart_crossfade: bool,
+    pub eq: crate::dsp::EqSettings,
+    /// The chosen output device's name; None follows the Windows default.
+    pub output_device: Option<String>,
+    /// The device actually playing, for the signal path. Not restored.
+    pub output: Option<OutputInfo>,
+    /// Levelling applied to the current song, in dB, and whether by song or album.
+    pub gain_db: Option<f64>,
+    pub gain_kind: String,
+}
+#[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OutputInfo {
+    pub device: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// The chosen device was missing, so the Windows default is used.
+    pub fallback: bool,
 }
 impl Default for Playback {
     fn default() -> Self {
@@ -79,6 +126,13 @@ impl Default for Playback {
             system_controls: false,
             sleep_at: None,
             sleep_end_of_track: false,
+            levelling: "smart".into(),
+            smart_crossfade: true,
+            eq: crate::dsp::EqSettings::default(),
+            output_device: None,
+            output: None,
+            gain_db: None,
+            gain_kind: "off".into(),
         }
     }
 }
@@ -92,6 +146,11 @@ pub struct RenderState {
     pub next_attempt: Option<(u64, usize)>,
     /// Old → new ID of the playing song after its file moved, so it is not counted again.
     pub renamed: HashMap<String, String>,
+    pub eq: crate::dsp::Equalizer,
+    /// Which channel the next output sample is for (0 left, 1 right).
+    pub channel: usize,
+    /// The output device changed; the audio thread opens it again.
+    pub reopen: bool,
 }
 impl RenderState {
     /// Ends a sleep timer whose time is up: pauses if playing, and clears it either way (a
@@ -129,8 +188,23 @@ impl RenderState {
             s.cursor = d.index;
             s.position = d.position();
             s.duration = d.duration;
+            s.gain_db = d.gain_db;
+            s.gain_kind = d.gain_kind.clone();
         }
         s
+    }
+    /// Makes the prepared next song current. False when there is none.
+    fn advance(&mut self) -> bool {
+        let Some(next) = self.next.take() else {
+            return false;
+        };
+        self.state.cursor = next.index;
+        self.state.current_id = Some(next.id.clone());
+        self.current = Some(next);
+        self.transition += 1;
+        self.epoch += 1;
+        self.next_attempt = None;
+        true
     }
     fn next_index(&self) -> Option<usize> {
         if self.state.queue.is_empty() {
@@ -155,40 +229,63 @@ impl RenderState {
         if !self.state.playing || self.stopping {
             return 0.;
         }
+        // "End of this song" plays the song to its real end, so no crossfade.
+        let crossfade = if self.state.sleep_end_of_track {
+            0.
+        } else {
+            self.state.crossfade
+        };
+        let smart = self.state.smart_crossfade;
+        let fades_into_next = crossfade > 0.
+            && self
+                .next
+                .as_ref()
+                .is_some_and(|n| !(smart && n.continues_album));
+        // Smart crossfade: once the music itself has ended, go straight to the next song
+        // (at a whole stereo frame, so the channels stay in order).
+        if smart && fades_into_next {
+            if let Some(current) = &self.current {
+                if current.samples % 2 == 0
+                    && current.position() >= current.audible_end
+                    && self.advance()
+                {
+                    return self.sample();
+                }
+            }
+        }
         let Some(current) = self.current.as_mut() else {
             return 0.;
         };
-        if let Some(mut sample) = current.source.next() {
-            // "End of this song" plays the song to its real end, so no crossfade.
-            let crossfade = if self.state.sleep_end_of_track {
-                0.
+        if let Some(sample) = current.source.next() {
+            let mut sample = sample * current.gain;
+            let fade = if fades_into_next {
+                crossfade
+                    .min(current.duration / 2.)
+                    .min(self.next.as_ref().map(|d| d.duration / 2.).unwrap_or(0.))
+                    .max(0.)
             } else {
-                self.state.crossfade
+                0.
             };
-            let fade = crossfade
-                .min(current.duration / 2.)
-                .min(self.next.as_ref().map(|d| d.duration / 2.).unwrap_or(0.))
-                .max(0.);
-            let remaining = current.duration - current.position();
+            let end = if smart {
+                current.audible_end
+            } else {
+                current.duration
+            };
+            let remaining = end - current.position();
             if fade > 0. && remaining <= fade {
                 if let Some(next) = self.next.as_mut() {
                     if let Some(n) = next.source.next() {
                         let ratio = (1. - remaining / fade).clamp(0., 1.) as f32;
-                        sample = sample * (1. - ratio) + n * ratio;
+                        sample = sample * (1. - ratio) + n * next.gain * ratio;
                         next.samples += 1;
                     }
                 }
             }
             current.samples += 1;
-            return sample * self.state.volume;
+            let shaped = self.eq.process(sample, self.channel) * self.state.volume;
+            return shaped.clamp(-1., 1.);
         }
-        if let Some(next) = self.next.take() {
-            self.state.cursor = next.index;
-            self.state.current_id = Some(next.id.clone());
-            self.current = Some(next);
-            self.transition += 1;
-            self.epoch += 1;
-            self.next_attempt = None;
+        if self.advance() {
             if self.state.sleep_end_of_track {
                 // Sleep timer: the next song is ready but waits, paused at its start.
                 self.state.sleep_end_of_track = false;
@@ -203,11 +300,46 @@ impl RenderState {
         0.
     }
 }
+/// The output device to open: the named one when it is connected, else the Windows default.
+/// Returns the device (None = default), its name, and whether the named one was missing.
+fn choose_device(wanted: Option<&str>) -> (Option<rodio::Device>, String, bool) {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let host = rodio::cpal::default_host();
+    let named = wanted.and_then(|name| {
+        host.output_devices()
+            .ok()?
+            .find(|d| d.name().ok().as_deref() == Some(name))
+    });
+    let default_name = host
+        .default_output_device()
+        .and_then(|d| d.name().ok())
+        .unwrap_or_else(|| "Default output".into());
+    match named {
+        Some(d) => (Some(d), wanted.unwrap_or_default().into(), false),
+        None => (None, default_name, wanted.is_some()),
+    }
+}
+/// Output devices Windows offers, and which one is the default.
+pub fn output_devices() -> (Vec<String>, Option<String>) {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let host = rodio::cpal::default_host();
+    let names = host
+        .output_devices()
+        .map(|all| all.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default();
+    (
+        names,
+        host.default_output_device().and_then(|d| d.name().ok()),
+    )
+}
 pub struct Mixer(pub Arc<Mutex<RenderState>>);
 impl Iterator for Mixer {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
-        Some(self.0.lock().unwrap().sample())
+        let mut r = self.0.lock().unwrap();
+        let sample = r.sample();
+        r.channel ^= 1;
+        Some(sample)
     }
 }
 impl Source for Mixer {
@@ -238,6 +370,15 @@ impl Engine {
         state.error = None;
         state.sleep_at = None;
         state.sleep_end_of_track = false;
+        state.output = None;
+        state.gain_db = None;
+        if !["off", "track", "album", "smart"].contains(&state.levelling.as_str()) {
+            state.levelling = "smart".into();
+        }
+        if state.eq.validate().is_err() {
+            state.eq = crate::dsp::EqSettings::default();
+        }
+        let eq = crate::dsp::Equalizer::new(&state.eq, RATE as f64);
         state.volume = state.volume.clamp(0., 1.);
         state.crossfade = state.crossfade.clamp(0., 12.);
         if state.queue.is_empty() {
@@ -265,6 +406,9 @@ impl Engine {
                 stopping: false,
                 next_attempt: None,
                 renamed: HashMap::new(),
+                eq,
+                channel: 0,
+                reopen: false,
             })),
             db,
             command_lock: Mutex::new(()),
@@ -277,6 +421,47 @@ impl Engine {
         let mut s = self.snapshot();
         s.playing = false;
         let _ = self.db.set("session", &serde_json::to_value(s).unwrap());
+    }
+    /// Applies changed sound settings to the playing song and prepares the next one again.
+    fn reshape(&self) {
+        let (current, levelling, queue) = {
+            let r = self.render.lock().unwrap();
+            (
+                r.current.as_ref().map(|d| (d.id.clone(), d.index)),
+                r.state.levelling.clone(),
+                r.state.queue.clone(),
+            )
+        };
+        if let Some((id, index)) = current {
+            if let Ok(t) = self.db.track(&id) {
+                // Shape a stand-in deck, then copy its results onto the playing one.
+                let mut probe = Deck {
+                    id: id.clone(),
+                    index,
+                    source: Box::new(rodio::source::Empty::new()),
+                    samples: 0,
+                    duration: t.duration,
+                    gain: 1.,
+                    gain_db: None,
+                    gain_kind: "off".into(),
+                    audible_end: t.duration,
+                    start_silence: 0.,
+                    continues_album: false,
+                };
+                self.shape(&mut probe, &t, &levelling, &queue);
+                let mut r = self.render.lock().unwrap();
+                if let Some(d) = r.current.as_mut().filter(|d| d.id == id) {
+                    d.gain = probe.gain;
+                    d.gain_db = probe.gain_db;
+                    d.gain_kind = probe.gain_kind;
+                    d.audible_end = probe.audible_end.min(d.duration);
+                }
+            }
+        }
+        let mut r = self.render.lock().unwrap();
+        r.next = None;
+        r.epoch += 1;
+        r.next_attempt = None;
     }
     /// Points the listening session at the new IDs of songs whose files moved.
     pub fn remap(&self, moved: &[(String, String)]) {
@@ -345,6 +530,11 @@ impl Engine {
         self.save();
     }
     fn prepare(&self, id: &str, index: usize) -> Result<Deck> {
+        let queue = self.render.lock().unwrap().state.queue.clone();
+        self.prepare_in(id, index, &queue)
+    }
+    /// Prepares a song as it will sit in `queue` (which may not be the current queue yet).
+    fn prepare_in(&self, id: &str, index: usize, queue: &[String]) -> Result<Deck> {
         let t = self.db.track(id)?;
         if !std::path::Path::new(&t.path).is_file() {
             let _ = self.db.missing(id, true);
@@ -353,7 +543,73 @@ impl Engine {
                 t.title
             ));
         }
-        Deck::load(&t, index)
+        let mut deck = Deck::load(&t, index)?;
+        let levelling = self.render.lock().unwrap().state.levelling.clone();
+        self.shape(&mut deck, &t, &levelling, queue);
+        Ok(deck)
+    }
+    /// Sets a deck's loudness gain, audible end and album continuity from the library's
+    /// measurements and its neighbours in the queue.
+    fn shape(&self, deck: &mut Deck, t: &Track, levelling: &str, queue: &[String]) {
+        let neighbour = |i: Option<usize>| {
+            i.and_then(|i| queue.get(i))
+                .and_then(|id| self.db.track(id).ok())
+        };
+        let previous = neighbour(deck.index.checked_sub(1));
+        let following = neighbour(Some(deck.index + 1));
+        let same_album = |o: &Track| {
+            o.album == t.album && o.album_artist == t.album_artist && !t.album.is_empty()
+        };
+        deck.continues_album = previous.as_ref().is_some_and(|p| {
+            same_album(p)
+                && ((t.disc == p.disc && t.track == p.track + 1)
+                    || (t.disc == p.disc + 1 && t.track == 1))
+        });
+        let own = self
+            .db
+            .loudness(&[crate::loudness::key(t)])
+            .ok()
+            .and_then(|mut m| m.remove(&crate::loudness::key(t)));
+        if let Some(l) = &own {
+            // Never trust a measurement that would cut more than half the song.
+            deck.audible_end = (deck.duration - l.end_silence).max(deck.duration / 2.);
+            deck.start_silence = l.start_silence.min(deck.duration / 2.);
+        }
+        let album_mode = levelling == "album"
+            || (levelling == "smart"
+                && (previous.as_ref().is_some_and(same_album)
+                    || following.as_ref().is_some_and(same_album)));
+        let album = if album_mode {
+            self.db.tracks().ok().and_then(|tracks| {
+                let songs: Vec<Track> = tracks
+                    .into_iter()
+                    .filter(|o| !o.missing && same_album(o))
+                    .collect();
+                let keys: Vec<String> = songs.iter().map(crate::loudness::key).collect();
+                let measured = self.db.loudness(&keys).ok()?;
+                let list: Vec<_> = songs
+                    .iter()
+                    .filter_map(|o| {
+                        measured
+                            .get(&crate::loudness::key(o))
+                            .map(|l| (l.clone(), o.duration))
+                    })
+                    .collect();
+                crate::loudness::album_gain(&list)
+            })
+        } else {
+            None
+        };
+        let (gain, kind) = match (levelling, album, &own) {
+            ("off", _, _) => (None, "off"),
+            (_, Some(g), _) => (Some(g), "album"),
+            (_, None, Some(l)) => (Some(crate::loudness::track_gain(l)), "track"),
+            _ => (None, "unmeasured"),
+        };
+        deck.gain = gain.map_or(1., |(db, peak)| crate::loudness::linear(db, peak));
+        // Report what is really applied, after the boost limit and clip protection.
+        deck.gain_db = gain.map(|_| 20. * (deck.gain as f64).log10());
+        deck.gain_kind = kind.into();
     }
     fn load(&self, index: usize, position: f64, playing: bool) -> Result<()> {
         let (id, epoch) = {
@@ -433,7 +689,7 @@ impl Engine {
                         index = 0;
                     }
                     // Decode first: an unavailable replacement must not destroy the current session.
-                    let deck = self.prepare(&valid[index], index)?;
+                    let deck = self.prepare_in(&valid[index], index, &valid)?;
                     {
                         let mut r = self.render.lock().unwrap();
                         r.state.queue = valid;
@@ -618,6 +874,32 @@ impl Engine {
                     }
                 }
                 "dismiss_error" => {}
+                "levelling" => {
+                    let mode = value.as_str().unwrap_or("smart");
+                    if !["off", "track", "album", "smart"].contains(&mode) {
+                        return Err("Invalid levelling mode".into());
+                    }
+                    self.render.lock().unwrap().state.levelling = mode.into();
+                    self.reshape();
+                }
+                "smart_crossfade" => {
+                    self.render.lock().unwrap().state.smart_crossfade =
+                        value.as_bool().unwrap_or(true);
+                    self.reshape();
+                }
+                "eq" => {
+                    let settings: crate::dsp::EqSettings =
+                        serde_json::from_value(value).map_err(|_| "Invalid equalizer settings")?;
+                    settings.validate()?;
+                    let mut r = self.render.lock().unwrap();
+                    r.eq = crate::dsp::Equalizer::new(&settings, RATE as f64);
+                    r.state.eq = settings;
+                }
+                "device" => {
+                    let mut r = self.render.lock().unwrap();
+                    r.state.output_device = value.as_str().map(str::to_owned);
+                    r.reopen = true;
+                }
                 "remove" => {
                     let index = value.as_u64().ok_or("Missing queue index")? as usize;
                     let mut r = self.render.lock().unwrap();
@@ -742,9 +1024,19 @@ impl Engine {
                             .into(),
                     );
                 }
-                if output.is_none() && tick % 12 == 1 {
+                let reopen = std::mem::take(&mut engine.render.lock().unwrap().reopen);
+                if reopen {
+                    output.take();
+                }
+                if output.is_none() && (reopen || tick % 12 == 1) {
                     let signal = lost.clone();
-                    let opened = OutputStreamBuilder::from_default_device().and_then(|b| {
+                    let wanted = engine.render.lock().unwrap().state.output_device.clone();
+                    let (device, name, fallback) = choose_device(wanted.as_deref());
+                    let opened = match device {
+                        Some(d) => OutputStreamBuilder::from_device(d),
+                        None => OutputStreamBuilder::from_default_device(),
+                    }
+                    .and_then(|b| {
                         b.with_error_callback(move |_| {
                             signal.store(true, Ordering::SeqCst);
                         })
@@ -753,12 +1045,19 @@ impl Engine {
                     match opened {
                         Ok(mut stream) => {
                             stream.log_on_drop(false);
+                            let info = OutputInfo {
+                                device: name,
+                                sample_rate: stream.config().sample_rate(),
+                                channels: stream.config().channel_count(),
+                                fallback,
+                            };
                             let sink = Sink::connect_new(stream.mixer());
                             sink.append(Mixer(engine.render.clone()));
                             output = Some((stream, sink));
                             let mut r = engine.render.lock().unwrap();
                             r.state.engine_ready = true;
                             r.state.error = None;
+                            r.state.output = Some(info);
                         }
                         Err(e) => {
                             let mut r = engine.render.lock().unwrap();
@@ -792,7 +1091,18 @@ impl Engine {
                 };
                 if let Some((id, index, epoch)) = target {
                     match engine.prepare(&id, index) {
-                        Ok(deck) => {
+                        Ok(mut deck) => {
+                            let (crossfade, smart) = {
+                                let r = engine.render.lock().unwrap();
+                                (r.state.crossfade, r.state.smart_crossfade)
+                            };
+                            if smart
+                                && crossfade > 0.
+                                && !deck.continues_album
+                                && deck.start_silence > 0.3
+                            {
+                                let _ = deck.skip_to((deck.start_silence - 0.1).min(8.));
+                            }
                             let mut r = engine.render.lock().unwrap();
                             if r.epoch == epoch {
                                 r.next = Some(deck);
@@ -873,6 +1183,12 @@ mod tests {
             )),
             samples: 0,
             duration: frames as f64 / RATE as f64,
+            gain: 1.,
+            gain_db: None,
+            gain_kind: "off".into(),
+            audible_end: frames as f64 / RATE as f64,
+            start_silence: 0.,
+            continues_album: false,
         }
     }
     fn render() -> RenderState {
@@ -890,6 +1206,9 @@ mod tests {
             stopping: false,
             next_attempt: None,
             renamed: HashMap::new(),
+            eq: crate::dsp::Equalizer::default(),
+            channel: 0,
+            reopen: false,
         }
     }
     #[test]
@@ -1173,6 +1492,161 @@ mod tests {
             .unwrap()
             .sleep_at
             .is_none());
+    }
+    #[test]
+    fn loudness_gain_scales_each_song() {
+        let mut r = render();
+        r.current.as_mut().unwrap().gain = 0.5;
+        assert_eq!(r.sample(), 0.125);
+    }
+    #[test]
+    fn songs_that_continue_an_album_are_never_crossfaded() {
+        let mut r = render();
+        r.state.crossfade = 0.005;
+        r.next.as_mut().unwrap().continues_album = true;
+        let v: Vec<_> = (0..960).map(|_| r.sample()).collect();
+        assert_eq!(
+            v,
+            vec![0.25; 960],
+            "the first song plays unblended to its end"
+        );
+        assert_eq!(r.sample(), 0.5, "then the next starts, gaplessly");
+    }
+    #[test]
+    fn smart_crossfade_skips_trailing_silence() {
+        let mut r = render();
+        r.state.crossfade = 0.001;
+        // The music of "a" ends after 240 of its 480 frames.
+        r.current.as_mut().unwrap().audible_end = 240. / RATE as f64;
+        let before: Vec<_> = (0..480).map(|_| r.sample()).collect();
+        assert!(before.iter().all(|x| *x >= 0.25 && *x <= 0.5));
+        let _ = r.sample();
+        assert_eq!(
+            r.snapshot().current_id.as_deref(),
+            Some("b"),
+            "switched at the music's end"
+        );
+        r.state.smart_crossfade = false;
+        let mut plain = render();
+        plain.state.crossfade = 0.001;
+        plain.state.smart_crossfade = false;
+        plain.current.as_mut().unwrap().audible_end = 240. / RATE as f64;
+        for _ in 0..481 {
+            plain.sample();
+        }
+        assert_eq!(
+            plain.snapshot().current_id.as_deref(),
+            Some("a"),
+            "off: plays the silence too"
+        );
+    }
+    #[test]
+    fn levelling_uses_album_gain_while_an_album_plays_in_order() {
+        let (_dir, engine) = test_engine();
+        for (id, n) in [("a", 1), ("b", 2), ("c", 7)] {
+            let mut t = engine.db.track(id).unwrap();
+            (t.album, t.album_artist, t.track, t.size) = ("LP".into(), "Band".into(), n, 1);
+            t.artist = "Band".into();
+            engine.db.upsert(&t, 1).unwrap();
+            let lufs = if id == "a" { -10. } else { -20. };
+            engine
+                .db
+                .set_loudness(
+                    &crate::loudness::key(&t),
+                    &crate::loudness::Loudness {
+                        lufs,
+                        peak: 0.1,
+                        end_silence: 0.5,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let state = engine
+            .command("queue", serde_json::json!({"ids":["a","b"],"index":0}))
+            .unwrap();
+        assert_eq!(
+            state.gain_kind, "album",
+            "a and b are consecutive songs of one album"
+        );
+        let album_db = state.gain_db.unwrap();
+        let state = engine
+            .command("levelling", serde_json::json!("track"))
+            .unwrap();
+        assert_eq!(state.gain_kind, "track");
+        assert!((state.gain_db.unwrap() - (-8.)).abs() < 1e-4, "−18 − (−10)");
+        // Album of −10, −20 and −20 LUFS songs of equal length: 10·log10(0.04) ≈ −14 LUFS.
+        assert!(
+            (album_db - (-18. + 13.98)).abs() < 0.01,
+            "album gain {album_db}"
+        );
+        // A very quiet song is boosted by at most +12 dB, and that is what is reported.
+        let mut t = engine.db.track("c").unwrap();
+        t.size = 2;
+        engine.db.upsert(&t, 1).unwrap();
+        engine
+            .db
+            .set_loudness(
+                &crate::loudness::key(&t),
+                &crate::loudness::Loudness {
+                    lufs: -45.,
+                    peak: 0.01,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        engine.render.lock().unwrap().state.levelling = "track".into();
+        let quiet = engine.prepare("c", 2).unwrap();
+        assert!(
+            (quiet.gain_db.unwrap() - 12.).abs() < 1e-4,
+            "{:?}",
+            quiet.gain_db
+        );
+        let state = engine
+            .command("levelling", serde_json::json!("off"))
+            .unwrap();
+        assert_eq!((state.gain_kind.as_str(), state.gain_db), ("off", None));
+        assert!(engine
+            .command("levelling", serde_json::json!("loud"))
+            .is_err());
+        // "c" (track 7) does not follow "b" (track 2): it may be crossfaded into.
+        engine
+            .command("levelling", serde_json::json!("smart"))
+            .unwrap();
+        let t = engine.db.track("b").unwrap();
+        let mut deck = engine.prepare("b", 1).unwrap();
+        assert!(deck.continues_album);
+        assert!((deck.audible_end - (t.duration.max(deck.duration) - 0.5)).abs() < 0.05);
+        engine.render.lock().unwrap().state.queue = vec!["b".into(), "c".into()];
+        deck = engine.prepare("c", 1).unwrap();
+        assert!(!deck.continues_album);
+    }
+    #[test]
+    fn equalizer_and_output_device_settings_are_checked_and_applied() {
+        let (_dir, engine) = test_engine();
+        assert!(engine
+            .command(
+                "eq",
+                serde_json::json!({"enabled": true, "preamp": 0, "bands": [20,0,0,0,0,0,0,0,0,0]})
+            )
+            .is_err());
+        let state = engine
+            .command("eq", serde_json::json!({"enabled": true, "preamp": -3, "bands": [6,3,0,0,0,0,0,0,2,4], "preset": "Bass boost"}))
+            .unwrap();
+        assert_eq!(state.eq.preset, "Bass boost");
+        assert!(engine.render.lock().unwrap().eq.active());
+        let state = engine
+            .command("device", serde_json::json!("USB DAC"))
+            .unwrap();
+        assert_eq!(state.output_device.as_deref(), Some("USB DAC"));
+        assert!(engine.render.lock().unwrap().reopen);
+        let restored = Engine::new(engine.db.clone()).snapshot();
+        assert_eq!(
+            restored.eq.preset, "Bass boost",
+            "sound settings survive a restart"
+        );
+        assert_eq!(restored.output_device.as_deref(), Some("USB DAC"));
+        assert!(restored.output.is_none());
     }
     #[test]
     fn sleep_deadline_pauses_playback_and_clears_even_when_already_paused() {
