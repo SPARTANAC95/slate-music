@@ -1,3 +1,4 @@
+mod artists;
 mod audio;
 mod db;
 mod desktop;
@@ -215,12 +216,42 @@ fn open_link(url: String) -> Result<()> {
     if u.scheme() != "https"
         || !matches!(
             u.host_str(),
-            Some("developer.spotify.com" | "open.spotify.com" | "github.com")
+            Some(
+                "developer.spotify.com"
+                    | "open.spotify.com"
+                    | "github.com"
+                    | "en.wikipedia.org"
+                    | "commons.wikimedia.org"
+            )
         )
     {
         return Err("This link is not supported".into());
     }
     open::that(url).map_err(err)
+}
+/// Listening history between two times (Unix ms), as [track ID, time played] pairs.
+#[tauri::command]
+async fn listening_history(from: i64, to: i64, state: tauri::State<'_, AppState>) -> Result<Value> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(json!(db.history(from, to)?)))
+        .await
+        .map_err(err)?
+}
+/// An artist's photo and bio (see artists.rs); may look it up when enabled in Settings.
+#[tauri::command]
+async fn artist_info(name: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || artists::info(&db, &name))
+        .await
+        .map_err(err)?
+}
+/// Artist photos that are already saved, for the Artists page.
+#[tauri::command]
+fn artist_photos(
+    names: Vec<String>,
+    state: tauri::State<AppState>,
+) -> Result<serde_json::Map<String, Value>> {
+    artists::photos(&state.db, &names)
 }
 /// Output devices Windows offers, for Settings.
 #[tauri::command]
@@ -413,6 +444,9 @@ pub fn run() {
             remove_missing,
             song_lyrics,
             audio_devices,
+            listening_history,
+            artist_info,
+            artist_photos,
             open_link,
             mini_player,
             show_main,

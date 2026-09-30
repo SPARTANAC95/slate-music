@@ -146,6 +146,12 @@ export default function SettingsPanel({
           checked={!!settings.lookupLyrics}
           onChange={(v) => onSettings({ ...settings, lookupLyrics: v })}
         />
+        <Toggle
+          label="Show artist photos and bios"
+          description="When you open an artist, Slate Music looks them up once on MusicBrainz and Wikipedia and saves a photo and a short bio. Only the artist’s name is sent."
+          checked={!!settings.lookupArtists}
+          onChange={(v) => onSettings({ ...settings, lookupArtists: v })}
+        />
         {data.scan.errors.length > 0 && (
           <details className="scan-errors">
             <summary>

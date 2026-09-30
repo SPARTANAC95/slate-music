@@ -70,6 +70,10 @@ pub fn supported(path: &Path) -> bool {
         "flac" | "mp3" | "wav" | "ogg" | "m4a" | "aac" | "aif" | "aiff"
     )
 }
+/// Stores an image with the artwork (both sizes) and returns its hash, as covers are.
+pub fn store_art(data: &[u8], db: &Database) -> Option<String> {
+    cache_art(data, db)
+}
 fn cache_art(data: &[u8], db: &Database) -> Option<String> {
     if data.len() > 24_000_000 {
         return None;

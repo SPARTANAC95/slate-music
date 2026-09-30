@@ -2925,3 +2925,648 @@ input[type='range']:disabled {
 .eq-bands.off input[type='range'] {
   cursor: default;
 }
+
+/* Command bar (Ctrl+K) */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: #0008;
+  backdrop-filter: blur(6px);
+  animation: page-in 0.15s ease-out;
+}
+.palette {
+  width: min(640px, 92vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: #141317;
+  border: 1px solid #34303a;
+  border-radius: 12px;
+  box-shadow: 0 30px 80px #000c;
+  overflow: hidden;
+}
+.palette-input {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.palette-input input {
+  flex: 1;
+  background: none;
+  border: 0;
+  outline: none;
+  font-size: 16px;
+  color: var(--text);
+  padding: 0;
+  min-height: 0;
+}
+.palette-results {
+  overflow-y: auto;
+  padding: 6px;
+}
+.palette-results h4 {
+  padding: 10px 10px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+.palette-item.selected {
+  background: #ffffff10;
+}
+.palette-icon,
+.palette-art {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: #ffffff0a;
+  color: var(--muted);
+  overflow: hidden;
+}
+.palette-art.round {
+  border-radius: 50%;
+}
+.palette-art .art {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+}
+.palette-art .art.placeholder svg {
+  width: 16px;
+  height: 16px;
+}
+.palette-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.palette-text strong {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-text small {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-enter {
+  color: var(--dim);
+}
+.palette-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.palette-foot {
+  display: flex;
+  gap: 18px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--dim);
+}
+.palette-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.palette kbd,
+.palette-foot kbd {
+  font-size: 9px;
+}
+.search-box kbd[role='button'] {
+  cursor: pointer;
+}
+
+/* Grouped search results */
+.search-groups section {
+  margin-bottom: 18px;
+}
+.artist-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.artist-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 6px 16px 6px 6px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.artist-chip:hover {
+  background: var(--hover);
+}
+.artist-chip .art {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.artist-chip .art.placeholder svg {
+  width: 18px;
+  height: 18px;
+}
+.artist-chip span {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+.artist-chip strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.artist-chip small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.search-albums {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+}
+
+/* Your year */
+.your-year {
+  display: flex;
+  flex-direction: column;
+  gap: 34px;
+  padding-bottom: 20px;
+}
+.your-year h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.year-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 32px 30px;
+  border-radius: 14px;
+  background: radial-gradient(circle at 15% 20%, color-mix(in srgb, var(--art, #b8a0da) 45%, transparent), transparent 60%),
+    linear-gradient(135deg, #1b1822, #121115);
+  border: 1px solid var(--line);
+}
+.year-kicker {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.year-hero h1 {
+  font-size: clamp(56px, 9vw, 110px);
+  line-height: 1;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  margin: 6px 0 12px;
+}
+.year-hero p:last-child {
+  max-width: 520px;
+  font-size: 14px;
+  color: #ffffffc0;
+  line-height: 1.6;
+}
+.year-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.year-pills button {
+  min-height: 0;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.year-pills button.active {
+  background: #fff;
+  color: #111;
+}
+.year-numbers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.year-numbers > div {
+  padding: 18px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.year-numbers strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.year-numbers strong svg {
+  color: var(--art, var(--accent));
+}
+.year-numbers span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.year-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+}
+.year-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.year-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px;
+  border-radius: 8px;
+}
+.year-list li:hover {
+  background: var(--hover);
+}
+.year-list .art {
+  width: 44px;
+  height: 44px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+.year-list.artists .art {
+  border-radius: 50%;
+}
+.year-list li > span:nth-of-type(2),
+.year-list li > button {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+  align-items: flex-start;
+  justify-content: center;
+}
+.year-list strong {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.year-list small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.year-list em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.year-rank {
+  width: 20px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--art, var(--accent));
+}
+.year-albums {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+}
+.year-album {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none !important;
+  text-align: left;
+}
+.year-album .art {
+  width: 100%;
+  aspect-ratio: 1;
+  height: auto;
+  border-radius: 6px;
+  box-shadow: 0 8px 20px #0004;
+}
+.year-album strong {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.year-album small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.year-months {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 8px;
+  height: 150px;
+  align-items: end;
+}
+.year-months > div {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+.year-months span {
+  width: 100%;
+  max-width: 34px;
+  border-radius: 4px 4px 1px 1px;
+  background: #ffffff1f;
+  transition: height 0.4s ease-out;
+}
+.year-months span.peak {
+  background: var(--art, var(--accent));
+}
+.year-months small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.year-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 90px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+.year-empty h1 {
+  font-size: 26px;
+  color: var(--text);
+}
+.home-section h2 svg {
+  vertical-align: -3px;
+  margin-right: 4px;
+  color: var(--art, var(--accent));
+}
+@media (max-width: 1100px) {
+  .year-grid,
+  .year-numbers {
+    grid-template-columns: 1fr 1fr;
+  }
+  .year-albums {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Smart playlists */
+.playlist-spark {
+  flex-shrink: 0;
+  color: var(--art, var(--accent));
+}
+.smart-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.smart-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.smart-presets button {
+  min-height: 0;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+.smart-presets button.active {
+  border-color: var(--art, var(--accent));
+  color: var(--text);
+}
+.smart-match {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.smart-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.smart-rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.smart-rule select,
+.smart-rule input {
+  min-height: 34px;
+  font-size: 12px;
+}
+.smart-rule input {
+  flex: 1;
+  min-width: 80px;
+}
+.smart-unit {
+  font-size: 11px;
+  color: var(--muted);
+}
+.smart-rules > .quiet {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+/* Artist pages */
+.artist-hero {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 30px;
+  margin: 20px 0 34px;
+  padding: 30px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--art, var(--accent)) 12%, transparent), transparent 70%);
+}
+.artist-backdrop {
+  position: absolute;
+  inset: -40px;
+  z-index: -1;
+  width: calc(100% + 80px);
+  height: calc(100% + 80px);
+  object-fit: cover;
+  filter: blur(42px) saturate(1.2);
+  opacity: 0.28;
+}
+.artist-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(90deg, var(--bg) 0%, transparent 85%);
+  opacity: 0.55;
+}
+.artist-photo {
+  flex-shrink: 0;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+.artist-photo .art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 25%;
+}
+.artist-photo.loading {
+  animation: artist-pulse 1.4s ease-in-out infinite;
+}
+@keyframes artist-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+.artist-text {
+  min-width: 0;
+  flex: 1;
+}
+.artist-text .eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.artist-text h1 {
+  margin: 6px 0 8px;
+  font-size: clamp(30px, 4.4vw, 56px);
+  line-height: 1.02;
+}
+.artist-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+.artist-bio {
+  max-width: 720px;
+  margin-top: 14px;
+}
+.artist-bio > p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--text) 82%, transparent);
+}
+.artist-bio > p.open {
+  display: block;
+}
+.artist-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 6px;
+}
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--art, var(--accent));
+}
+.link-button:hover {
+  background: none;
+  text-decoration: underline;
+}
+.link-button.subtle {
+  color: var(--muted);
+}
+.artist-text .button-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+.artist-text .button-row button {
+  font-size: 11px;
+}
+.artist-card > .art.photo {
+  filter: none;
+  object-fit: cover;
+  object-position: center 25%;
+}
+@media (max-width: 760px) {
+  .artist-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 20px;
+  }
+  .artist-photo {
+    width: 130px;
+    height: 130px;
+  }
+}
+.year-list.artists .art.photo {
+  object-fit: cover;
+  object-position: center 25%;
+}
+.artist-chip .art.photo {
+  object-fit: cover;
+  object-position: center 25%;
+}

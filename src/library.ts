@@ -34,6 +34,8 @@ export function albumsFrom(tracks: Track[]): Album[] {
     ),
   }));
 }
+/** "1 song", "12 songs". */
+export const plural = (n: number, word: string, many = `${word}s`) => `${n.toLocaleString()} ${n === 1 ? word : many}`;
 export const time = (seconds: number) => {
   const n = Math.max(0, Math.floor(seconds || 0));
   return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;

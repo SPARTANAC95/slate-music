@@ -13,6 +13,12 @@
 - **Equalizer:** 10 bands with a preamp and presets (Bass boost, Vocal, Loudness, Late night and more), remembered separately for each output device.
 - **Output device:** choose where Slate Music plays; it switches immediately and falls back to the Windows default when the chosen device is disconnected.
 - **Signal path:** Now Playing lists every step from the file to the device: source format, levelling, equalizer, conversion to 48 kHz, and the output device.
+- **Command bar (Ctrl+K):** find songs, albums, artists and playlists and run actions (shuffle, sleep timer, new smart playlist, settings) from one box; Enter plays a song or opens the rest.
+- **Better search:** tolerates typos and missing letters, ranks whole-word matches first, and groups matching artists and albums above the songs.
+- **Home shelves:** Jump back in, Recently added, On this day, Forgotten favourites and Recently played, all worked out from your own listening on this PC.
+- **Your year:** a private year in review with plays, minutes, longest streak, new artists, top songs, artists and albums, and plays per month. Earlier years are one click away.
+- **Smart playlists:** build playlists from rules (artist, album, year, format, lossless, plays, favourite, length, last played, added) matched all or any, ordered and limited as you like. They update themselves; ready-made presets include Forgotten favourites, Most played, Never played and Songs from the 80s. Shuffled smart playlists keep the same order through the day.
+- **Artist photos and bios:** with "Show artist photos and bios" on, opening an artist looks them up once on MusicBrainz, Wikidata and Wikipedia and saves a photo and short bio (only the artist's name is sent). The photos also appear on the Artists page, in search and in Your year.
 
 ## 1.0.3 — 2026-09-30
 

@@ -15,7 +15,11 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 - Now Playing (click the song in the player bar or press Ctrl+L) shows a large cover and synced lyrics. Lyrics come from an .lrc file with the same name beside the song, lyrics stored in the file, or LRCLIB when **Find lyrics online** is on in Settings. Click a line to jump there.
 - Hover over Slate Music's taskbar button for Previous, Play/Pause, Next and Favorite buttons in the preview.
 - Right-click a song or album for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer. The Queue page can save the queue as a playlist or clear everything after the current song. The moon button beside the volume sets a sleep timer.
-- Search titles, artists and albums; sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
+- Search titles, artists and albums; small typos are forgiven, and matching artists and albums appear above the songs. Sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
+- Press Ctrl+K anywhere for the command bar: type a song, album, artist, playlist or action (for example "shuffle" or "sleep") and press Enter.
+- Home suggests albums to jump back into, recent additions, songs you played on this day in earlier years and favourites you have not heard in a while. **Your year** is a private year in review built from your listening history on this PC.
+- Smart playlists (Playlists → **New smart playlist**) fill themselves from rules such as "Favorite is yes" and "Last played not in the last 90 days". Start from a preset or build your own; open one and choose **Edit rules** to change it.
+- Artist pages show a photo and a short bio from Wikipedia when **Show artist photos and bios** is on in Settings. Each artist is looked up once when you open their page; only the name is sent.
 - Add songs to a playlist using its folder button. Open a playlist and choose **Edit playlist** to rename, reorder or remove entries. This only changes Slate Music's database.
 - Double-click a song or use its play button. Reorder upcoming songs in Queue. Play/pause, previous/next, seeking, volume, shuffle and repeat work with the native audio engine.
 - Use the mini-player or Windows media controls. The app restores its queue and position paused, including after an update.
@@ -29,7 +33,8 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 | Space | Play / pause |
 | Left / Right | Seek 5 seconds |
 | Ctrl + Left / Right | Previous / next |
-| Ctrl + K | Search |
+| Ctrl + K | Command bar: search and actions |
+| Ctrl + L | Now Playing |
 | Ctrl + M | Mini-player |
 | Escape | Close dialog |
 
@@ -68,7 +73,7 @@ As verified September 25, 2026, Spotify Development Mode requires an active Prem
 
 The SQLite database and artwork cache live in `%APPDATA%\com.spartanac95.slate-music`. The database stores library paths, metadata, favorites, playlists, play counts, history, settings and the paused listening session. SQLite migrations and WAL journaling protect normal restarts. Settings includes a JSON export of favorites and playlists; to back up the full profile, close the app and copy its data directory. Do not publish that directory.
 
-Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup and update checks/downloads. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
+Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup, optional LRCLIB lyrics, optional artist photos and bios (MusicBrainz, Wikidata, Wikipedia and Wikimedia Commons) and update checks/downloads. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
 
 Updates are checked and downloaded automatically by default. The updater verifies both the artifact signature and signed version. It only installs after you confirm while paused or choose the install option on exit. Installation keeps your database, artwork and settings.
 

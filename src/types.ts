@@ -69,10 +69,38 @@ export interface Entry {
   /** The user chose "Leave this song missing"; updates keep it unmatched. */
   rejected?: boolean;
 }
+export type SmartField =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'year'
+  | 'format'
+  | 'lossless'
+  | 'favorite'
+  | 'plays'
+  | 'lastPlayed'
+  | 'added'
+  | 'duration';
+export type SmartOp = 'contains' | 'is' | 'isNot' | 'gt' | 'lt' | 'withinDays' | 'olderThanDays';
+export interface SmartRule {
+  field: SmartField;
+  op: SmartOp;
+  value: string | number | boolean;
+}
+/** A smart playlist's rules: its songs are worked out from the library each time. */
+export interface SmartRules {
+  match: 'all' | 'any';
+  rules: SmartRule[];
+  sort: 'random' | 'plays' | 'recent' | 'added' | 'year' | 'title';
+  /** 0 = no limit. */
+  limit: number;
+}
 export interface Collection {
   id: string;
   name: string;
-  kind: 'playlist' | 'virtual';
+  kind: 'playlist' | 'virtual' | 'smart';
+  /** Only for smart playlists. */
+  rules?: SmartRules;
   entries: Entry[];
   created: number;
   sourceUrl?: string;
@@ -93,6 +121,8 @@ export interface Settings {
   lookupYears: boolean;
   /** Look up lyrics on LRCLIB when a song has none of its own. */
   lookupLyrics: boolean;
+  /** Look up artist photos and bios (MusicBrainz, Wikidata, Wikipedia). */
+  lookupArtists?: boolean;
   /** Equalizer per output device name ("" = Windows default). */
   eqByDevice?: Record<string, EqSettings>;
 }

@@ -318,6 +318,41 @@ try {
     await page.getByRole('button', { name: 'Close Now Playing (Esc)' }).click();
     await page.locator('.now-playing').waitFor({ state: 'detached' });
   });
+  await test('Command bar finds and plays a song, and runs actions', async () => {
+    const song = initial.tracks.find((t) => !t.missing);
+    await page.keyboard.press('Control+k');
+    await page.locator('.palette').waitFor();
+    await page.keyboard.type(song.title);
+    await page.locator('.palette-item.selected', { hasText: song.title }).waitFor();
+    await page.keyboard.press('Enter');
+    await waitFor(async () => (await snap()).playback.currentId === song.id);
+    await invoke('playback', { action: 'pause' });
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('new smart');
+    await page.keyboard.press('Enter');
+    await page.locator('.smart-editor').waitFor();
+    await page.getByRole('button', { name: 'Close dialog' }).first().click();
+  });
+  await test('Smart playlist from a preset fills and edits itself', async () => {
+    const name = `QA smart ${Date.now() % 100000}`;
+    await page.getByRole('button', { name: 'Playlists', exact: true }).first().click();
+    await page.getByRole('button', { name: 'New smart playlist' }).click();
+    await page.locator('.smart-presets button', { hasText: 'Lossless only' }).click();
+    await page.getByLabel('Name').fill(name);
+    await page.getByRole('button', { name: 'Create smart playlist' }).click();
+    await page.locator('h1', { hasText: name }).waitFor();
+    const lossless = initial.tracks.filter((t) => !t.missing && /flac|wav|alac|aiff/i.test(t.format));
+    if (lossless.length) await page.locator('main').getByText(lossless[0].title).first().waitFor();
+    await page.getByRole('button', { name: /Edit rules/ }).click();
+    await page.getByLabel('Rule 1 field').selectOption('title');
+    await page.getByLabel('Rule 1 value').fill('zz-no-song-has-this');
+    await page.getByRole('button', { name: 'Save smart playlist' }).click();
+    await page.locator('.smart-editor').waitFor({ state: 'detached' });
+    const saved = (await snap()).collections.find((c) => c.name === name);
+    assert.equal(saved.kind, 'smart');
+    assert.equal(saved.rules.rules[0].field, 'title');
+    await invoke('delete_collection', { id: saved.id });
+  });
   await test('Offline library and native playback', async () => {
     await context.setOffline(true);
     await page.getByRole('button', { name: 'Songs', exact: true }).click();

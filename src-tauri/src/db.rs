@@ -72,6 +72,7 @@ impl Database {
    CREATE TABLE IF NOT EXISTS original_years(key TEXT PRIMARY KEY,year INTEGER NOT NULL,checked INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS lyrics(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS loudness(key TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS artist_info(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    INSERT OR IGNORE INTO migrations VALUES(1,strftime('%s','now'));
    PRAGMA user_version=1;").map_err(err)?;
         Ok(Self {
@@ -192,6 +193,19 @@ impl Database {
         let rows = s.query_map([], |r| r.get(0)).map_err(err)?;
         rows.collect::<std::result::Result<_, _>>().map_err(err)
     }
+    /// Plays between two times (Unix ms), oldest first, as (track ID, time played).
+    pub fn history(&self, from: i64, to: i64) -> Result<Vec<(String, i64)>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c
+            .prepare(
+                "SELECT track_id,played FROM history WHERE played>=? AND played<? ORDER BY played",
+            )
+            .map_err(err)?;
+        let rows = s
+            .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(err)
+    }
     pub fn loudness_count(&self) -> Result<u64> {
         self.conn
             .lock()
@@ -225,6 +239,38 @@ impl Database {
             }
         }
         Ok(out)
+    }
+    pub fn artist_info(&self, key: &str) -> Result<Option<Value>> {
+        let c = self.conn.lock().unwrap();
+        match c.query_row("SELECT data FROM artist_info WHERE key=?", [key], |r| {
+            r.get::<_, String>(0)
+        }) {
+            Ok(data) => Ok(serde_json::from_str(&data).ok()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(err(e)),
+        }
+    }
+    /// Saved artist photos, by artist key.
+    pub fn artist_photos(&self) -> Result<std::collections::HashMap<String, String>> {
+        let c = self.conn.lock().unwrap();
+        let mut q = c
+            .prepare("SELECT key, json_extract(data,'$.photo') FROM artist_info WHERE json_extract(data,'$.photo') IS NOT NULL")
+            .map_err(err)?;
+        let rows = q
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(err)
+    }
+    pub fn set_artist_info(&self, key: &str, data: &Value) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO artist_info VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                params![key, data.to_string()],
+            )
+            .map_err(err)?;
+        Ok(())
     }
     /// Lyrics remembered from LRCLIB (see lyrics.rs), by song.
     pub fn lyrics(&self, key: &str) -> Result<Option<Value>> {
