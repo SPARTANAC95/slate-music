@@ -63,6 +63,12 @@ pub fn key(artist: &str, title: &str) -> String {
 /// The earliest first-release year among MusicBrainz recordings that match both the title
 /// and the artist. Later live versions and reissues are ignored by taking the earliest.
 pub fn earliest_year(response: &Value, artist: &str, title: &str) -> Option<u32> {
+    let parts: Vec<String> = artist
+        .split(['&', ',', ';', '/'])
+        .flat_map(|p| p.split(" feat. ").flat_map(|p| p.split(" ft. ")).flat_map(|p| p.split(" and ")))
+        .map(words)
+        .filter(|p| !p.is_empty())
+        .collect();
     let (artist, title) = (words(artist), plain_title(title));
     response["recordings"]
         .as_array()?
@@ -70,16 +76,18 @@ pub fn earliest_year(response: &Value, artist: &str, title: &str) -> Option<u32>
         .filter(|r| r["score"].as_u64().unwrap_or(0) >= 90)
         .filter(|r| plain_title(r["title"].as_str().unwrap_or_default()) == title)
         .filter(|r| {
-            let credit = words(
-                &r["artist-credit"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|a| a["name"].as_str())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            );
-            !credit.is_empty() && (credit.contains(&artist) || artist.contains(&credit))
+            // Compare artist by artist: "Queen" matches a Queen & David Bowie recording but
+            // not Queen Latifah, and a tag like "Queen & David Bowie" matches either credit.
+            let credits: Vec<String> = r["artist-credit"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|a| a["name"].as_str())
+                .map(words)
+                .collect();
+            !artist.is_empty()
+                && (credits.join(" ") == artist
+                    || credits.iter().any(|c| *c == artist || parts.contains(c)))
         })
         .filter_map(|r| r["first-release-date"].as_str()?.get(..4)?.parse().ok())
         .filter(|year| (1900..=2100).contains(year))
@@ -90,7 +98,9 @@ fn quoted(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 fn search(client: &reqwest::blocking::Client, artist: &str, title: &str) -> Result<Value> {
-    let query = format!("recording:{} AND artist:{}", quoted(title), quoted(artist));
+    // Search by the plain title: reissue labels ("- Remastered 2009") are rarely part of
+    // MusicBrainz titles and would make the search miss.
+    let query = format!("recording:{} AND artist:{}", quoted(&plain_title(title)), quoted(artist));
     for attempt in 0..3 {
         let r = client
             .get("https://musicbrainz.org/ws/2/recording")
@@ -181,6 +191,13 @@ mod tests {
         ]});
         assert_eq!(earliest_year(&response, "Cliff Richard", "Wired For Sound"), Some(1981));
         assert_eq!(earliest_year(&response, "Nobody", "Wired For Sound"), None);
+        let queen = json!({"recordings": [r("Ladies First", "Queen Latifah", "1989", 100)]});
+        assert_eq!(earliest_year(&queen, "Queen", "Ladies First"), None, "whole words only");
+        // MusicBrainz lists each artist of a joint recording separately.
+        let duo = json!({"recordings": [{"title": "Under Pressure", "score": 100, "first-release-date": "1981-10-26",
+            "artist-credit": [{"name": "Queen"}, {"name": "David Bowie"}]}]});
+        assert_eq!(earliest_year(&duo, "Queen", "Under Pressure"), Some(1981));
+        assert_eq!(earliest_year(&duo, "Queen & David Bowie", "Under Pressure"), Some(1981));
         assert_eq!(earliest_year(&json!({}), "Cliff Richard", "Wired For Sound"), None);
     }
 }

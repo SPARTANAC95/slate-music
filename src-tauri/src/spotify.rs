@@ -19,6 +19,15 @@ fn client() -> Result<reqwest::blocking::Client> {
         .build()
         .map_err(err)
 }
+/// Spotify's own explanation from an error body, lowercased ("" when there is none).
+fn reason(body: &Value) -> String {
+    body["error"]["message"]
+        .as_str()
+        .or(body["error_description"].as_str())
+        .or(body["error"].as_str())
+        .unwrap_or_default()
+        .to_lowercase()
+}
 fn response(r: reqwest::blocking::Response) -> Result<Value> {
     let status = r.status();
     let retry = r
@@ -27,21 +36,51 @@ fn response(r: reqwest::blocking::Response) -> Result<Value> {
         .and_then(|s| s.to_str().ok())
         .unwrap_or("60")
         .to_string();
-    if status.as_u16() == 429 {
-        return Err(format!("Spotify rate or quota limit reached. Try again after {retry} seconds; a daily quota may take longer."));
+    if status.is_success() {
+        return r.json().map_err(err);
     }
-    if status.as_u16() == 403 {
-        return Err("Spotify refused access. Check the app owner's Premium subscription and add your account to the app's Users Management allowlist.".into());
+    let body: Value = r.json().unwrap_or_default();
+    let why = reason(&body);
+    Err(match status.as_u16() {
+        429 => format!("Spotify rate or quota limit reached. Try again after {retry} seconds; a daily quota may take longer."),
+        400 if why.contains("invalid_grant") || why.contains("refresh token") => {
+            "Spotify sign-in expired or was revoked. Choose Reconnect in Settings.".into()
+        }
+        401 => "Spotify sign-in expired. Choose Reconnect in Settings.".into(),
+        403 if why.contains("scope") => {
+            "Spotify needs one more permission. Choose Reconnect in Settings and approve it.".into()
+        }
+        403 => "Spotify refused access. Check the app owner's Premium subscription and add your account to the app's Users Management allowlist.".into(),
+        _ => format!("Spotify request failed ({status}). Check your connection and Developer Dashboard."),
+    })
+}
+/// GET with a short automatic wait when Spotify asks to slow down (429 with Retry-After).
+fn get(
+    client: &reqwest::blocking::Client,
+    token: &str,
+    url: &str,
+    query: &[(&str, &str)],
+    read: fn(reqwest::blocking::Response) -> Result<Value>,
+) -> Result<Value> {
+    for attempt in 0..3 {
+        let r = client
+            .get(url)
+            .query(query)
+            .bearer_auth(token)
+            .send()
+            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?;
+        let wait = r
+            .headers()
+            .get("retry-after")
+            .and_then(|s| s.to_str().ok()?.parse::<u64>().ok())
+            .unwrap_or(5);
+        if r.status().as_u16() == 429 && attempt < 2 && wait <= 30 {
+            std::thread::sleep(Duration::from_secs(wait.max(1)));
+            continue;
+        }
+        return read(r);
     }
-    if status.as_u16() == 401 {
-        return Err("Spotify sign-in expired. Connect again in Settings.".into());
-    }
-    if !status.is_success() {
-        return Err(format!(
-            "Spotify request failed ({status}). Check your connection and Developer Dashboard."
-        ));
-    }
-    r.json().map_err(err)
+    unreachable!("the last attempt always returns")
 }
 #[cfg(windows)]
 fn protect(data: &[u8], decrypt: bool) -> Result<Vec<u8>> {
@@ -256,13 +295,12 @@ pub fn top(db: &Database, source: &str) -> Result<Value> {
     if !top_access(db) {
         return Err("Reconnect Spotify to allow Slate Music to read your top songs.".into());
     }
-    let data = response(
-        client()?
-            .get("https://api.spotify.com/v1/me/top/tracks")
-            .query(&[("time_range", *range), ("limit", "50")])
-            .bearer_auth(token(db)?)
-            .send()
-            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
+    let data = get(
+        &client()?,
+        &token(db)?,
+        "https://api.spotify.com/v1/me/top/tracks",
+        &[("time_range", *range), ("limit", "50")],
+        response,
     )?;
     // Top songs are plain track objects; wrap them like playlist items.
     let items: Vec<Value> = data["items"]
@@ -279,6 +317,7 @@ pub fn top(db: &Database, source: &str) -> Result<Value> {
         "url": source,
         "tracks": tracks,
         "skipped": skipped,
+        "revision": null,
     }))
 }
 const NOT_YOURS: &str = "Spotify only lets apps read playlists you created or collaborate on. To import someone else's playlist, copy its songs into a new playlist of your own in Spotify, then import that.";
@@ -286,8 +325,16 @@ const NOT_YOURS: &str = "Spotify only lets apps read playlists you created or co
 /// not own or collaborate on, and 404 for Spotify-made mixes such as Discover Weekly.
 fn playlist_response(r: reqwest::blocking::Response) -> Result<Value> {
     match r.status().as_u16() {
-        403 => Err(NOT_YOURS.into()),
-        404 => Err("Spotify could not find this playlist. Playlists made by Spotify, such as Discover Weekly or Today's Top Hits, cannot be read by apps; copy the songs into a playlist of your own first.".into()),
+        403 => {
+            let why = reason(&r.json().unwrap_or_default());
+            Err(if why.contains("scope") {
+                "Spotify needs one more permission. Choose Reconnect in Settings and approve it."
+            } else {
+                NOT_YOURS
+            }
+            .into())
+        }
+        404 => Err("Spotify could not find this playlist. It may have been deleted, or it is a Spotify-made mix such as Discover Weekly or Today's Top Hits, which apps cannot read; copy its songs into a playlist of your own first.".into()),
         _ => response(r),
     }
 }
@@ -324,41 +371,36 @@ pub fn playlist_id(input: &str) -> Result<String> {
         _ => Err("Invalid Spotify playlist ID".into()),
     }
 }
-/// Follows Spotify's `next` links, refusing any page outside `path` on the API host.
+const PAGE: usize = 50;
+/// Reads every page of a list by asking for successive offsets of `url` itself. Spotify's
+/// own `next` links are not followed: they may point at a different path (for example
+/// /users/{id}/playlists), and building them here keeps requests on the expected endpoint.
 fn pages(
     client: &reqwest::blocking::Client,
     token: &str,
-    first: String,
-    path: &str,
+    url: &str,
+    query: &[(&str, &str)],
     max_pages: usize,
     read: fn(reqwest::blocking::Response) -> Result<Value>,
 ) -> Result<(Vec<Value>, Option<u64>)> {
-    let (mut items, mut total, mut next, mut count) = (Vec::new(), None, Some(first), 0);
-    while let Some(address) = next.take() {
-        let url = url::Url::parse(&address).map_err(err)?;
-        if url.scheme() != "https"
-            || url.host_str() != Some("api.spotify.com")
-            || url.path() != path
-        {
-            return Err("Spotify returned an unexpected pagination URL".into());
-        }
-        count += 1;
-        if count > max_pages {
+    let (mut items, mut total) = (Vec::new(), None);
+    for page in 0.. {
+        if page >= max_pages {
             return Err("This list is too large to import".into());
         }
-        let data = read(
-            client
-                .get(url)
-                .bearer_auth(token)
-                .send()
-                .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
-        )?;
+        let (limit, offset) = (PAGE.to_string(), (page * PAGE).to_string());
+        let mut q = query.to_vec();
+        q.extend([("limit", limit.as_str()), ("offset", offset.as_str())]);
+        let data = get(client, token, url, &q, read)?;
         total = total.or(data["total"].as_u64());
-        let page = data["items"]
+        let batch = data["items"]
             .as_array()
             .ok_or("Spotify returned no item list")?;
-        items.extend(page.iter().cloned());
-        next = data["next"].as_str().map(str::to_owned);
+        items.extend(batch.iter().cloned());
+        let done = total.map_or(data["next"].is_null(), |t| items.len() as u64 >= t);
+        if batch.is_empty() || done {
+            break;
+        }
     }
     Ok((items, total))
 }
@@ -366,19 +408,13 @@ fn pages(
 pub fn playlists(db: &Database) -> Result<Value> {
     let token = token(db)?;
     let client = client()?;
-    let me = response(
-        client
-            .get("https://api.spotify.com/v1/me")
-            .bearer_auth(&token)
-            .send()
-            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
-    )?;
+    let me = get(&client, &token, "https://api.spotify.com/v1/me", &[], response)?;
     let me = me["id"].as_str().unwrap_or_default();
     let (items, _) = pages(
         &client,
         &token,
-        "https://api.spotify.com/v1/me/playlists?limit=50".into(),
-        "/v1/me/playlists",
+        "https://api.spotify.com/v1/me/playlists",
+        &[],
         40,
         response,
     )?;
@@ -406,19 +442,18 @@ pub fn playlist(db: &Database, input: &str) -> Result<Value> {
     let id = playlist_id(input)?;
     let token = token(db)?;
     let client = client()?;
-    let meta = playlist_response(
-        client
-            .get(format!("https://api.spotify.com/v1/playlists/{id}"))
-            .query(&[("fields", "name,owner(id,display_name)")])
-            .bearer_auth(&token)
-            .send()
-            .map_err(|_| "Cannot reach Spotify. Check your connection.".to_string())?,
+    let meta = get(
+        &client,
+        &token,
+        &format!("https://api.spotify.com/v1/playlists/{id}"),
+        &[("fields", "name,owner(id,display_name),snapshot_id")],
+        playlist_response,
     )?;
     let (items, total) = pages(
         &client,
         &token,
-        format!("https://api.spotify.com/v1/playlists/{id}/items?limit=50&additional_types=track"),
-        &format!("/v1/playlists/{id}/items"),
+        &format!("https://api.spotify.com/v1/playlists/{id}/items"),
+        &[("additional_types", "track")],
         250,
         playlist_response,
     )?;
@@ -434,7 +469,36 @@ pub fn playlist(db: &Database, input: &str) -> Result<Value> {
         "url": format!("https://open.spotify.com/playlist/{id}"),
         "tracks": tracks,
         "skipped": skipped,
+        "revision": meta["snapshot_id"],
     }))
+}
+/// A cheap fingerprint of a source's current contents, or null when it has none (top songs).
+/// Playlists use Spotify's snapshot ID; Liked Songs use the count plus the newest like.
+pub fn revision(db: &Database, source: &str) -> Result<Value> {
+    if source.starts_with("spotify:top:") {
+        return Ok(Value::Null);
+    }
+    let (client, token) = (client()?, token(db)?);
+    if source == LIKED_URL {
+        let data = get(&client, &token, "https://api.spotify.com/v1/me/tracks", &[("limit", "1")], response)?;
+        return Ok(json!(liked_revision(data["total"].as_u64(), &data["items"])));
+    }
+    let id = playlist_id(source)?;
+    let data = get(
+        &client,
+        &token,
+        &format!("https://api.spotify.com/v1/playlists/{id}"),
+        &[("fields", "snapshot_id")],
+        playlist_response,
+    )?;
+    Ok(data["snapshot_id"].clone())
+}
+fn liked_revision(total: Option<u64>, items: &Value) -> String {
+    format!(
+        "{}:{}",
+        total.map_or_else(|| "?".into(), |t| t.to_string()),
+        items[0]["added_at"].as_str().unwrap_or_default()
+    )
 }
 /// The user's Liked Songs, newest first, in the same shape as a playlist.
 pub fn liked(db: &Database) -> Result<Value> {
@@ -445,8 +509,8 @@ pub fn liked(db: &Database) -> Result<Value> {
     let (items, total) = pages(
         &client()?,
         &token,
-        "https://api.spotify.com/v1/me/tracks?limit=50".into(),
-        "/v1/me/tracks",
+        "https://api.spotify.com/v1/me/tracks",
+        &[],
         250,
         response,
     )?;
@@ -461,6 +525,7 @@ pub fn liked(db: &Database) -> Result<Value> {
         "url": LIKED_URL,
         "tracks": tracks,
         "skipped": skipped,
+        "revision": liked_revision(total, &Value::Array(items)),
     }))
 }
 /// Songs in playlist order. Podcast episodes and removed/unavailable entries are counted, not kept.
@@ -528,6 +593,55 @@ mod tests {
         assert_eq!(tracks[0]["artists"], json!([{"name":"A"},{"name":"B"}]));
         assert_eq!(tracks[0]["album"], "Album");
         assert!(tracks[2]["id"].is_null());
+    }
+    /// A tiny local server standing in for Spotify: 120 items in pages of 50, with one
+    /// "slow down" (429) answer first. Records every requested path and query.
+    fn fake_spotify() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for (n, stream) in listener.incoming().enumerate() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 4096];
+                let len = stream.read(&mut buf).unwrap();
+                let line = String::from_utf8_lossy(&buf[..len]).lines().next().unwrap_or("").to_string();
+                let target = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                log.lock().unwrap().push(target.clone());
+                let reply = if n == 0 {
+                    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+                } else {
+                    let u = url::Url::parse(&format!("http://x{target}")).unwrap();
+                    let offset: usize = u.query_pairs().find(|(k, _)| k == "offset").map_or(0, |(_, v)| v.parse().unwrap());
+                    let items: Vec<Value> = (offset..(offset + 50).min(120)).map(|i| json!({"n": i})).collect();
+                    // `next` deliberately points elsewhere, as Spotify's sometimes does.
+                    let body = json!({"items": items, "total": 120, "next": "https://api.spotify.com/v1/users/me/playlists"}).to_string();
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                };
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        (base, seen)
+    }
+    #[test]
+    fn reads_every_page_by_offset_and_waits_when_asked_to_slow_down() {
+        let (base, seen) = fake_spotify();
+        let (items, total) = pages(&client().unwrap(), "t", &format!("{base}/v1/me/playlists"), &[("x", "1")], 10, response).unwrap();
+        assert_eq!(total, Some(120));
+        assert_eq!(items.len(), 120);
+        assert_eq!(items[119]["n"], 119);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 4, "one retry after 429, then three pages");
+        assert!(seen.iter().all(|t| t.starts_with("/v1/me/playlists?x=1&limit=50&offset=")));
+        assert!(seen[3].ends_with("offset=100"));
+    }
+    #[test]
+    fn liked_songs_revision_changes_with_count_and_newest_like() {
+        let items = json!([{"added_at": "2026-09-30T10:00:00Z"}]);
+        assert_eq!(liked_revision(Some(812), &items), "812:2026-09-30T10:00:00Z");
+        assert_ne!(liked_revision(Some(811), &items), liked_revision(Some(812), &items));
+        assert_eq!(liked_revision(None, &json!([])), "?:");
     }
     #[test]
     fn top_songs_need_a_known_period_and_permission() {

@@ -80,7 +80,7 @@ import {
 import SettingsPanel from './SettingsPanel';
 import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
-import { updateAll } from './spotifySources';
+import { followsSpotify, updateAll } from './spotifySources';
 
 type Page =
   | 'Home'
@@ -158,6 +158,7 @@ export default function App() {
     initialPicker = useRef(false),
     initialized = useRef(false),
     spotifyChecked = useRef(false),
+    editingRef = useRef<string | null>(null),
     exitAllowed = useRef(false),
     goBackRef = useRef<() => void>(() => {});
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -230,7 +231,8 @@ export default function App() {
     if (!data || mini || spotifyChecked.current || data.scan.scanning || !data.spotify.connected)
       return;
     spotifyChecked.current = true;
-    updateAll(data).then(async (updated) => {
+    // A playlist open in the editor is left alone, so the update never undoes an edit.
+    updateAll((id) => editingRef.current === id).then(async (updated) => {
       if (!updated) return;
       await refresh();
       notify(`Updated ${updated} Spotify playlist${updated === 1 ? '' : 's'}`);
@@ -448,9 +450,21 @@ export default function App() {
     restoreScroll.current = 0;
   }
   function goBack() {
-    const view = history.current.pop();
+    // Skip pages that no longer exist (a deleted playlist, an album whose songs are gone).
+    let view = history.current.pop();
+    while (
+      view &&
+      ((view.page === 'Collection' && !data?.collections.some((c) => c.id === view!.collection)) ||
+        (view.page === 'Album' && !albums.some((a) => a.key === view!.album)))
+    )
+      view = history.current.pop();
     if (!view) {
-      if (page !== 'Home') navigate('Home');
+      if (page !== 'Home') {
+        setPage('Home');
+        setQuery('');
+        setFilter('all');
+        restoreScroll.current = 0;
+      }
       return;
     }
     setSelectedAlbum(view.album);
@@ -462,6 +476,7 @@ export default function App() {
     restoreScroll.current = view.scroll;
   }
   goBackRef.current = goBack;
+  editingRef.current = dialog === 'editCollection' ? selectedCollection : null;
   function openArtist(name: string) {
     setSelectedArtist(name);
     navigate('Artist');
@@ -634,22 +649,33 @@ export default function App() {
     setDialog('addToPlaylist');
   }
   async function addToPlaylist(c: Collection) {
-    const present = new Set(c.entries.map((e) => e.trackId));
-    const fresh = adding.filter((t, i) => !present.has(t.id) && adding.indexOf(t) === i);
-    if (!fresh.length) {
+    const unique = adding.filter((t, i) => adding.indexOf(t) === i);
+    const has = (t: Track) => c.entries.some((e) => e.trackId === t.id);
+    // An old entry saved as missing (added while its file was unavailable) is repaired
+    // instead of counting as "already there".
+    const repaired = unique.filter((t) =>
+      c.entries.some((e) => e.trackId === t.id && e.status !== 'available'),
+    );
+    const fresh = unique.filter((t) => !has(t));
+    if (!fresh.length && !repaired.length) {
       setDialog(null);
       return notify(
         adding.length === 1 ? `Already in ${c.name}` : `These songs are already in ${c.name}`,
       );
     }
+    const repairedIds = new Set(repaired.map((t) => t.id));
+    const entries = c.entries.map((e) =>
+      e.trackId && repairedIds.has(e.trackId) ? { ...e, status: 'available' as const } : e,
+    );
     await invoke('save_collection', {
-      collection: { ...c, entries: [...c.entries, ...fresh.map(entryFrom)] },
+      collection: { ...c, entries: [...entries, ...fresh.map(entryFrom)] },
     });
     await refresh();
     setDialog(null);
-    const skipped = adding.length - fresh.length;
+    const added = [...repaired, ...fresh];
+    const skipped = adding.length - added.length;
     notify(
-      `Added ${fresh.length === 1 ? fresh[0].title : `${fresh.length} songs`} to ${c.name}${skipped ? ` (${skipped} already there)` : ''}`,
+      `Added ${added.length === 1 ? added[0].title : `${added.length} songs`} to ${c.name}${skipped ? ` (${skipped} already there)` : ''}`,
     );
   }
   /** `row` is the song's position among the playlist's playable songs. */
@@ -663,8 +689,10 @@ export default function App() {
       await refresh();
     }, `Removed from ${c.name}`);
   }
-  async function saveCollection(c: Collection) {
+  /** Saves first and hearts afterwards, so nothing is hearted if saving fails. */
+  async function saveCollection(c: Collection, hearts: string[] = []) {
     await invoke('save_collection', { collection: c });
+    if (hearts.length) await invoke('favorite_many', { ids: hearts });
     await refresh();
     setDialog(null);
     openCollection(c);
@@ -732,7 +760,10 @@ export default function App() {
                 disabled: index === pb?.cursor,
                 run: () => command('remove', index),
               }
-            : page === 'Collection' && collection?.kind === 'playlist' && !compact
+            : page === 'Collection' &&
+                collection?.kind === 'playlist' &&
+                !followsSpotify(collection) &&
+                !compact
               ? {
                   label: 'Remove from this playlist',
                   run: () => removeFromCollection(collection, index),
@@ -1707,6 +1738,7 @@ export default function App() {
             <ImportPanel
               tracks={tracks}
               existing={dialog === 'editCollection' ? collection : undefined}
+              collections={data.collections}
               spotify={data.spotify}
               onSave={saveCollection}
               onSettings={() => setDialog('settings')}
@@ -1737,7 +1769,7 @@ export default function App() {
               </p>
               <div className="playlist-choices">
                 {data.collections
-                  .filter((c) => c.kind === 'playlist')
+                  .filter((c) => c.kind === 'playlist' && !followsSpotify(c))
                   .map((c) => (
                     <button key={c.id} onClick={() => task(() => addToPlaylist(c))}>
                       <ListMusic size={18} />
@@ -1746,6 +1778,11 @@ export default function App() {
                     </button>
                   ))}
               </div>
+              {data.collections.some(followsSpotify) && (
+                <p className="fine-print">
+                  Playlists that follow Spotify aren’t listed: their songs come from Spotify.
+                </p>
+              )}
               <button className="primary" onClick={() => setDialog('newPlaylist')}>
                 <Plus size={16} />
                 New playlist

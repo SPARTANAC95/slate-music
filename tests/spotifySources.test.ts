@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyUpdate, canRead, LIKED_URL, sourceKind, topUrl } from '../src/spotifySources';
+import { applyUpdate, canRead, compact, followsSpotify, LIKED_URL, savedAsPlaylist, sourceKind, topUrl } from '../src/spotifySources';
 import type { Collection, Snapshot, SpotifyPlaylist, Track } from '../src/types';
 
 const track = (id: string, title: string): Track => ({
@@ -100,5 +100,48 @@ describe('Spotify sources', () => {
     };
     const result = applyUpdate(liked, list([song('s2', 'Afterglow'), song('s1', 'Neon Rain')]), tracks);
     expect(result.hearts).toEqual(['b']);
+  });
+  it('keeps "leave missing" choices and local-file matches, and re-matches files that left', () => {
+    const tracks = [track('a', 'Neon Rain'), track('b', 'Afterglow')];
+    const saved: Collection = {
+      id: 'c',
+      name: 'Mix',
+      kind: 'playlist',
+      created: 0,
+      sourceUrl: 'https://open.spotify.com/playlist/p',
+      entries: [
+        { spotifyId: 's1', trackId: null, title: 'Neon Rain', artist: 'Aurora Lane', duration: 200, status: 'missing', rejected: true },
+        { trackId: 'b', title: 'Home recording', artist: 'Aurora Lane', duration: 200, status: 'available' },
+        { spotifyId: 's3', trackId: 'gone', title: 'Afterglow', artist: 'Aurora Lane', duration: 200, status: 'available' },
+      ],
+    };
+    const local = { id: null, name: 'Home recording', artists: [{ name: 'Aurora Lane' }], duration_ms: 200000 };
+    const result = applyUpdate(saved, list([song('s1', 'Neon Rain'), local, song('s3', 'Afterglow')]), tracks);
+    expect(result.collection.entries.map((e) => [e.trackId, e.status])).toEqual([
+      [null, 'missing'], // rejected stays rejected
+      ['b', 'available'], // local file keeps its manual match
+      ['b', 'available'], // "gone" left the library, so Afterglow was matched again
+    ]);
+  });
+  it('stores saved playlists compactly and re-matches them from their own entries', () => {
+    const c: Collection = {
+      id: 'c',
+      name: 'Mix',
+      kind: 'playlist',
+      created: 0,
+      sourceUrl: LIKED_URL,
+      entries: [
+        { trackId: 'a', title: 'x', artist: 'A, B', duration: 1, status: 'available', candidates: [{ id: 'a', score: 0.9912345, reason: 'r' }] },
+        { trackId: null, title: 'y', artist: 'A', duration: 2, status: 'uncertain',
+          candidates: [1, 2, 3, 4].map((n) => ({ id: `c${n}`, score: 0.7123456, reason: 'r' })) },
+      ],
+    };
+    const small = compact(c);
+    expect(small.entries[0].candidates).toBeUndefined();
+    expect(small.entries[1].candidates).toHaveLength(3);
+    expect(small.entries[1].candidates![0].score).toBe(0.712);
+    expect(savedAsPlaylist(c).tracks[0].artists).toEqual([{ name: 'A' }, { name: 'B' }]);
+    expect(followsSpotify(c)).toBe(true);
+    expect(followsSpotify({ ...c, autoUpdate: false })).toBe(false);
   });
 });

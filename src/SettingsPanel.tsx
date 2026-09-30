@@ -36,6 +36,8 @@ export default function SettingsPanel({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const missing = data.tracks.filter((t) => t.missing).length;
+  const [confirmRemove, setConfirmRemove] = useState(false),
+    [removed, setRemoved] = useState<number | null>(null);
   const available = data.tracks.length - missing;
   const known = data.tracks.filter((t) => !t.missing && t.originalYear > 0).length;
   async function run(label: string, action: () => Promise<unknown>) {
@@ -79,19 +81,52 @@ export default function SettingsPanel({
             {data.scan.scanning ? 'Scanning…' : 'Rescan'}
           </button>
         </div>
-        {missing > 0 && (
+        {(missing > 0 || removed !== null) && (
           <div className="missing-songs">
-            <p>
-              {missing} song{missing === 1 ? ' is' : 's are'} unavailable: deleted, or on a drive
-              that isn’t connected. Moved songs are recognized automatically and keep their
-              favorites, plays and playlist places.
-            </p>
-            <button
-              disabled={!!busy || data.scan.scanning}
-              onClick={() => run('missing', () => invoke('remove_missing'))}
-            >
-              Remove unavailable songs
-            </button>
+            {removed !== null ? (
+              <p>
+                Removed {removed} unavailable song{removed === 1 ? '' : 's'}.
+                {missing > 0 &&
+                  ` ${missing} on a drive that isn’t connected ${missing === 1 ? 'was' : 'were'} kept.`}
+              </p>
+            ) : confirmRemove ? (
+              <>
+                <p>
+                  Forget {missing} unavailable song{missing === 1 ? '' : 's'}? Their favorites, play
+                  counts and history are lost; playlists show them as missing. Songs on a drive
+                  that isn’t connected right now are kept. Your files are not touched.
+                </p>
+                <div className="button-row">
+                  <button
+                    className="danger"
+                    disabled={!!busy}
+                    onClick={() =>
+                      run('missing', async () => {
+                        setRemoved(await invoke<number>('remove_missing'));
+                        setConfirmRemove(false);
+                      })
+                    }
+                  >
+                    Remove
+                  </button>
+                  <button onClick={() => setConfirmRemove(false)}>Cancel</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>
+                  {missing} song{missing === 1 ? ' is' : 's are'} unavailable: deleted, or on a drive
+                  that isn’t connected. Moved songs are recognized automatically and keep their
+                  favorites, plays and playlist places.
+                </p>
+                <button
+                  disabled={!!busy || data.scan.scanning}
+                  onClick={() => setConfirmRemove(true)}
+                >
+                  Remove unavailable songs
+                </button>
+              </>
+            )}
           </div>
         )}
         <Toggle

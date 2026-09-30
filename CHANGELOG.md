@@ -20,6 +20,17 @@
 - Adding a song that is already in a playlist no longer duplicates it.
 - Song lists are no longer re-sorted several times a second during playback, and the Artists page is computed once per library change.
 - Show a system tray icon with playback controls and keep Slate Music grouped correctly on the taskbar.
+- Previous, Play/Pause, Next and Favorite buttons in the taskbar preview (hover over Slate Music's taskbar button), like other Windows music players.
+- Review fixes:
+  - Spotify: read every page of long lists by offset (lists over 50 playlists failed before), wait and retry when Spotify asks to slow down, and explain errors more clearly (expired sign-in, missing permission, deleted playlist).
+  - Automatic updates work from fresh data and re-read each playlist just before saving, so a playlist deleted, renamed or edited meanwhile is never overwritten. Playlists Spotify reports unchanged are not downloaded again; their missing songs are still matched against new files.
+  - Importing the same Spotify source again updates the earlier import instead of adding a copy. "Leave this song missing" and matches for Spotify local files are remembered across updates; a match whose file has left the library can be matched again.
+  - Saved playlists are stored compactly and may be much larger; songs are hearted only after the playlist saved. Playlists that follow Spotify are not offered for adding or removing songs by hand.
+  - Sleep timer: "End of this song" plays to the real end with no crossfade and waits at the next song; a timer that runs out while paused no longer stops the next play.
+  - Cover search is faster in large folders, and a broken cover image no longer causes re-reads on every scan (the next image is used).
+  - Original years: search by the plain title (without "Remastered" labels) and match artists exactly.
+  - "Remove unavailable songs" asks first and keeps songs on a drive that isn't connected. Songs added to a playlist while unavailable become playable when their file returns.
+  - Back skips pages that no longer exist and no longer bounces between two pages.
 
 ## 1.0.2 — 2026-09-26
 

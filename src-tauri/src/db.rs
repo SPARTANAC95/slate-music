@@ -272,11 +272,11 @@ impl Database {
     }
     pub fn save_collection(&self, value: Value) -> Result<()> {
         let id = value["id"].as_str().ok_or("Missing collection ID")?;
-        if id.len() > 100
-            || value["name"].as_str().unwrap_or("").trim().is_empty()
-            || value.to_string().len() > 5_000_000
-        {
+        if id.len() > 100 || value["name"].as_str().unwrap_or("").trim().is_empty() {
             return Err("Invalid collection".into());
+        }
+        if value.to_string().len() > 20_000_000 {
+            return Err("This playlist is too large to save. Remove some songs and try again.".into());
         }
         self.conn.lock().unwrap().execute("INSERT INTO collections VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",params![id,value.to_string()]).map_err(err)?;
         Ok(())
@@ -394,18 +394,28 @@ impl Database {
             .map(|(old, new)| (old.id.clone(), new.id.clone()))
             .collect())
     }
-    /// Forgets every unavailable song. Playlists keep their entries, shown as missing.
+    /// Forgets unavailable songs: deleted files, and songs from folders no longer in the
+    /// library. Songs whose library folder is only unreachable right now (an unplugged drive)
+    /// are kept. Playlists keep their entries, shown as missing. Returns the removed IDs.
     pub fn remove_missing(&self) -> Result<Vec<String>> {
+        let folders = self.folders();
+        let offline = |folder: &str| folders.iter().any(|f| f == folder) && !Path::new(folder).is_dir();
         let c = self.conn.lock().unwrap();
-        let ids: Vec<String> = {
+        let candidates: Vec<(String, String)> = {
             let mut s = c
-                .prepare("SELECT id FROM tracks WHERE missing=1")
+                .prepare("SELECT id,folder FROM tracks WHERE missing=1")
                 .map_err(err)?;
-            let rows = s.query_map([], |r| r.get(0)).map_err(err)?;
+            let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(err)?;
             rows.collect::<std::result::Result<_, _>>().map_err(err)?
         };
-        c.execute("DELETE FROM tracks WHERE missing=1", [])
-            .map_err(err)?;
+        let ids: Vec<String> = candidates
+            .into_iter()
+            .filter(|(_, folder)| !offline(folder))
+            .map(|(id, _)| id)
+            .collect();
+        for id in &ids {
+            c.execute("DELETE FROM tracks WHERE id=?", [id]).map_err(err)?;
+        }
         Ok(ids)
     }
     pub fn snapshot(&self) -> Result<Value> {

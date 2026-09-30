@@ -94,11 +94,23 @@ const COVER_NAMES: [&str; 6] = [
     "Folder.jpg",
     "Cover.jpg",
 ];
-/// Finds album art beside a song: the usual names first, then an image named like a front
-/// cover, then the folder's only image (e.g. "Artist - Album [2008].jpg"). Songs in disc
+/// Cover images that could not be read (empty, corrupt, too large). They are skipped for the
+/// rest of the session so their songs are not re-read on every scan.
+static FAILED_COVERS: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+fn cover_failed(file: &Path) -> bool {
+    FAILED_COVERS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|set| set.contains(file))
+}
+/// Album art candidates beside a song, best first: the usual names, then images named like a
+/// front cover, then the folder's only image (e.g. "Artist - Album [2008].jpg"). Songs in disc
 /// folders ("CD1", "Disc 2") also look in the album folder above.
-fn folder_cover(path: &Path) -> Option<PathBuf> {
-    let folder = path.parent()?;
+fn folder_covers(path: &Path) -> Vec<PathBuf> {
+    let Some(folder) = path.parent() else {
+        return Vec::new();
+    };
     let is_disc = |name: &str| {
         let name = name.to_lowercase();
         ["cd", "disc", "disk"].iter().any(|p| {
@@ -113,48 +125,55 @@ fn folder_cover(path: &Path) -> Option<PathBuf> {
         .and_then(|n| n.to_str())
         .filter(|n| is_disc(n))
         .and_then(|_| folder.parent());
+    let mut found = Vec::new();
     for dir in std::iter::once(folder).chain(parent) {
-        if let Some(file) = COVER_NAMES.iter().map(|n| dir.join(n)).find(|f| f.is_file()) {
-            return Some(file);
-        }
+        // The extension is checked from the listing first, so large folders of songs cost
+        // no extra file-system calls.
         let images: Vec<PathBuf> = std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.is_file()
-                    && p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                        matches!(e.to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp")
-                    })
+            .filter(|e| {
+                Path::new(&e.file_name())
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .is_some_and(|x| matches!(x.to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp"))
+                    && e.file_type().is_ok_and(|t| t.is_file())
             })
+            .map(|e| e.path())
             .collect();
         let stem = |p: &PathBuf| {
             p.file_stem()
                 .map(|s| s.to_string_lossy().to_lowercase())
                 .unwrap_or_default()
         };
-        let front = images.iter().find(|p| {
-            let s = stem(p);
-            ["cover", "front", "folder", "albumart"]
+        let named = |name: &str| images.iter().find(|p| p.file_name().is_some_and(|f| f.eq_ignore_ascii_case(name)));
+        found.extend(COVER_NAMES.iter().filter_map(|n| named(n)).cloned());
+        found.extend(
+            images
                 .iter()
-                .any(|k| s.contains(k))
-                && !s.contains("back")
-        });
-        let only = match images.as_slice() {
-            [one] if !["back", "inlay", "tray", "cd", "disc", "booklet"]
+                .filter(|p| {
+                    let s = stem(p);
+                    ["cover", "front", "folder", "albumart"].iter().any(|k| s.contains(k))
+                        && !s.contains("back")
+                })
+                .cloned(),
+        );
+        if let [one] = images.as_slice() {
+            if !["back", "inlay", "tray", "cd", "disc", "booklet"]
                 .iter()
-                .any(|k| stem(one).contains(k)) =>
+                .any(|k| stem(one).contains(k))
             {
-                Some(one)
+                found.push(one.clone());
             }
-            _ => None,
-        };
-        if let Some(file) = front.or(only) {
-            return Some(file.clone());
         }
     }
-    None
+    let mut seen = HashSet::new();
+    found.retain(|f| seen.insert(f.clone()) && !cover_failed(f));
+    found
+}
+fn folder_cover(path: &Path) -> Option<PathBuf> {
+    folder_covers(path).into_iter().next()
 }
 pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
     let tagged = lofty::read_from_path(path).map_err(err)?;
@@ -195,9 +214,17 @@ pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
         .and_then(|t| t.pictures().first())
         .and_then(|p| cache_art(p.data(), db));
     if artwork.is_none() {
-        artwork = folder_cover(path)
-            .and_then(|file| std::fs::read(file).ok())
-            .and_then(|data| cache_art(&data, db));
+        for file in folder_covers(path) {
+            artwork = std::fs::read(&file).ok().and_then(|data| cache_art(&data, db));
+            if artwork.is_some() {
+                break;
+            }
+            FAILED_COVERS
+                .lock()
+                .unwrap()
+                .get_or_insert_with(HashSet::new)
+                .insert(file);
+        }
     }
     let meta = path.metadata().map_err(err)?;
     Ok(Track {
@@ -239,6 +266,8 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
         .iter()
         .map(|track| (track.id.as_str(), track))
         .collect();
+    // Whether a folder has a usable cover, looked up once per folder per scan.
+    let mut cover_here: HashMap<PathBuf, bool> = HashMap::new();
     for folder in db.folders() {
         let root = Path::new(&folder);
         let mut seen = HashSet::new();
@@ -286,7 +315,9 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
             let new_cover = known_by_id
                 .get(id.as_str())
                 .is_some_and(|t| t.artwork.is_none())
-                && folder_cover(path).is_some();
+                && *cover_here
+                    .entry(path.parent().map(Path::to_path_buf).unwrap_or_default())
+                    .or_insert_with(|| folder_cover(path).is_some());
             if new_cover || !db.unchanged(&id, mtime, meta.len()) {
                 match read_track(path, &folder, db) {
                     Ok(mut t) => {
@@ -477,8 +508,11 @@ mod tests {
         std::fs::remove_file(song(&music, "c")).unwrap();
         let status = scan(&db, |_| {});
         assert!(status.relinked.is_empty());
-        assert_eq!(db.remove_missing().unwrap().len(), 2);
-        assert!(db.tracks().unwrap().iter().all(|t| !t.missing));
+        // Cleanup removes the deleted file but keeps the song on the unplugged drive.
+        assert_eq!(db.remove_missing().unwrap().len(), 1);
+        let left: Vec<_> = db.tracks().unwrap().into_iter().filter(|t| t.missing).collect();
+        assert_eq!(left.len(), 1);
+        assert!(left[0].path.contains("usb"));
     }
     #[test]
     fn a_cover_added_later_is_picked_up_without_changing_the_song() {
@@ -495,6 +529,22 @@ mod tests {
         assert_eq!(scan(&db, |_| {}).changed, 1);
         assert!(db.tracks().unwrap()[0].artwork.is_some());
         assert_eq!(scan(&db, |_| {}).changed, 0);
+    }
+    #[test]
+    fn a_broken_cover_falls_back_to_the_next_image_and_is_not_retried_every_scan() {
+        let d = tempfile::tempdir().unwrap();
+        let music = d.path().join("music");
+        wav(&music.join("A").join("song.wav"), 4800);
+        std::fs::write(music.join("A").join("cover.jpg"), b"").unwrap(); // empty file
+        image::RgbImage::new(8, 8).save(music.join("A").join("front.png")).unwrap();
+        wav(&music.join("B").join("song.wav"), 2400);
+        std::fs::write(music.join("B").join("folder.jpg"), b"not an image").unwrap();
+        let db = library(d.path(), &[&music]);
+        assert_eq!(scan(&db, |_| {}).changed, 2);
+        let tracks = db.tracks().unwrap();
+        let art = |dir: &str| tracks.iter().find(|t| t.path.contains(dir)).unwrap().artwork.clone();
+        assert!(art("\\A\\").is_some() || art("/A/").is_some(), "front.png is used instead");
+        assert_eq!(scan(&db, |_| {}).changed, 0, "the broken cover does not cause re-reads");
     }
     #[test]
     fn finds_covers_named_after_the_album_and_above_disc_folders() {

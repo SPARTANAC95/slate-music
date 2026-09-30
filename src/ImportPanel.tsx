@@ -23,13 +23,23 @@ import type {
   SpotifyPlaylistSummary,
   Track,
 } from './types';
-import { keepConfirmed, matchTracks } from './matching';
-import { canRead, LIKED_URL, readSource, sourceKind, TOP_RANGES, topUrl } from './spotifySources';
+import { keepConfirmed, matchInBatches } from './matching';
+import {
+  canRead,
+  compact,
+  followsSpotify,
+  LIKED_URL,
+  readSource,
+  sourceKind,
+  TOP_RANGES,
+  topUrl,
+} from './spotifySources';
 import { normalize, time, reorder, entryStatus } from './library';
 import { Art, IconButton, Toggle } from './components';
 export default function ImportPanel({
   tracks,
   existing,
+  collections,
   spotify,
   onSave,
   onSettings,
@@ -37,8 +47,10 @@ export default function ImportPanel({
 }: {
   tracks: Track[];
   existing?: Collection;
+  collections: Collection[];
   spotify: Snapshot['spotify'];
-  onSave: (c: Collection) => Promise<void>;
+  /** Saves the collection, then hearts `hearts` (so nothing is hearted if saving fails). */
+  onSave: (c: Collection, hearts: string[]) => Promise<void>;
   onSettings: () => void;
   onConnected: () => Promise<void>;
 }) {
@@ -71,6 +83,7 @@ export default function ImportPanel({
   useEffect(() => {
     if (!existing && ready && playlists === null) loadPlaylists();
   }, [ready]);
+  /** Reads a Spotify source and matches it, keeping the busy state until both are done. */
   async function readPlaylist(source: string, key = source) {
     setBusy('fetch');
     setLoading(key);
@@ -78,10 +91,11 @@ export default function ImportPanel({
     setNotice('');
     try {
       const playlist = await readSource(source);
+      const matched = await matchInBatches(playlist.tracks, tracks);
       const skipped = playlist.skipped
         ? ` ${playlist.skipped} podcast episode${playlist.skipped === 1 ? '' : 's'} or unavailable item${playlist.skipped === 1 ? ' was' : 's were'} left out.`
         : '';
-      return { playlist, skipped };
+      return { playlist, matched, skipped };
     } finally {
       setBusy('');
       setLoading(null);
@@ -89,7 +103,18 @@ export default function ImportPanel({
   }
   async function importPlaylist(source: string, key?: string) {
     try {
-      const { playlist, skipped } = await readPlaylist(source, key);
+      const { playlist, matched, skipped } = await readPlaylist(source, key);
+      // Importing a source again updates the earlier import instead of adding a copy.
+      const earlier = collections.find((c) => c.kind === 'playlist' && c.sourceUrl === playlist.url);
+      if (earlier) {
+        setCollection({
+          ...earlier,
+          entries: keepConfirmed(earlier.entries, matched, trackMap),
+          revision: playlist.revision ?? null,
+        });
+        setNotice(`You imported this before as “${earlier.name}”. Saving updates it.${skipped}`);
+        return;
+      }
       setNotice(skipped.trim());
       setCollection({
         id: crypto.randomUUID(),
@@ -98,9 +123,10 @@ export default function ImportPanel({
         kind: 'playlist',
         sourceUrl: playlist.url,
         created: Date.now(),
-        entries: matchTracks(playlist.tracks, tracks),
+        entries: matched,
         autoUpdate: true,
         heartMatches: sourceKind(playlist.url) === 'liked',
+        revision: playlist.revision ?? null,
       });
     } catch (e) {
       setError(String(e));
@@ -109,11 +135,15 @@ export default function ImportPanel({
   async function refreshFromSpotify() {
     if (!collection?.sourceUrl) return;
     try {
-      const { playlist, skipped } = await readPlaylist(collection.sourceUrl);
-      setCollection({
-        ...collection,
-        entries: keepConfirmed(collection.entries, matchTracks(playlist.tracks, tracks)),
-      });
+      const { playlist, matched, skipped } = await readPlaylist(collection.sourceUrl);
+      // Apply to the latest state, in case anything changed while Spotify was being read.
+      setCollection((c) =>
+        c && {
+          ...c,
+          entries: keepConfirmed(c.entries, matched, trackMap),
+          revision: playlist.revision ?? null,
+        },
+      );
       setNotice(
         `Updated to Spotify's current ${playlist.tracks.length} songs. Songs you already matched stay matched. Save to keep the update.${skipped}`,
       );
@@ -141,7 +171,9 @@ export default function ImportPanel({
     if (collection && picking !== null) {
       editEntries(
         collection.entries.map((e, i) =>
-          i === picking ? { ...e, trackId: id, status: id ? 'available' : 'missing' } : e,
+          i === picking
+            ? { ...e, trackId: id, status: id ? 'available' : 'missing', rejected: !id || undefined }
+            : e,
         ),
       );
       setPicking(null);
@@ -226,6 +258,7 @@ export default function ImportPanel({
             Name
             <input
               value={collection.name}
+              disabled={busy === 'fetch'}
               onChange={(e) => setCollection({ ...collection, name: e.target.value })}
             />
           </label>
@@ -283,6 +316,8 @@ export default function ImportPanel({
           <p className="fine-print">
             Only confirmed, available files enter playback. Review uncertain versions before saving.
             Your files and tags stay unchanged.
+            {followsSpotify(collection) &&
+              ' This playlist follows Spotify, so songs are added, removed and ordered there. Turn off automatic updates to arrange it yourself.'}
           </p>
           <div className="import-tracks">
             {collection.entries.map((e, i) => {
@@ -304,6 +339,7 @@ export default function ImportPanel({
                   </div>
                   <button
                     className={`status ${status}`}
+                    disabled={busy === 'fetch'}
                     onClick={() => {
                       setPicking(i);
                       setQuery('');
@@ -315,7 +351,7 @@ export default function ImportPanel({
                         ? 'Review match'
                         : 'Find file'}
                   </button>
-                  {collection.kind === 'playlist' && (
+                  {collection.kind === 'playlist' && !followsSpotify(collection) && (
                     <div className="row-actions">
                       <IconButton
                         label={`Move song ${i + 1} up`}
@@ -355,17 +391,22 @@ export default function ImportPanel({
               onClick={async () => {
                 setBusy('save');
                 try {
-                  if (collection.heartMatches) {
-                    // Only songs matched in this session, so earlier un-hearts are respected.
-                    const before = new Set(existing?.entries.map((e) => e.status === 'available' && e.trackId));
-                    const ids = collection.entries.flatMap((e) =>
-                      e.trackId && entryStatus(e, trackMap) === 'available' && !before.has(e.trackId)
-                        ? [e.trackId]
-                        : [],
-                    );
-                    if (ids.length) await invoke('favorite_many', { ids });
-                  }
-                  await onSave(collection);
+                  // Heart songs matched since the last save; if hearting was just switched on,
+                  // heart every match. Earlier un-hearts are respected otherwise.
+                  const saved = collections.find((c) => c.id === collection.id);
+                  const before = new Set(
+                    saved?.heartMatches
+                      ? saved.entries.filter((e) => e.status === 'available').map((e) => e.trackId)
+                      : [],
+                  );
+                  const hearts = collection.heartMatches
+                    ? collection.entries.flatMap((e) =>
+                        e.trackId && entryStatus(e, trackMap) === 'available' && !before.has(e.trackId)
+                          ? [e.trackId]
+                          : [],
+                      )
+                    : [];
+                  await onSave(compact(collection), hearts);
                 } catch (e) {
                   setError(String(e));
                   setBusy('');

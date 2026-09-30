@@ -11,6 +11,7 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 ## Listen and organize
 
 - Home, Songs, Albums, Artists, Favorites, Recently Played, Playlists, saved virtual albums and Queue.
+- Hover over Slate Music's taskbar button for Previous, Play/Pause, Next and Favorite buttons in the preview.
 - Right-click a song or album for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer. The Queue page can save the queue as a playlist or clear everything after the current song. The moon button beside the volume sets a sleep timer.
 - Search titles, artists and albums; sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
 - Add songs to a playlist using its folder button. Open a playlist and choose **Edit playlist** to rename, reorder or remove entries. This only changes Slate Music's database.
@@ -51,7 +52,7 @@ This feature reads a Spotify playlist's song list and matches it to music you al
 
 **Your top songs** (this month, last 6 months, last year) are listed next: Spotify's 50 most played songs for that period, saved as a playlist.
 
-Imported playlists, Liked Songs and top songs update themselves each time Slate Music opens (after the library scan): the song list follows Spotify, confirmed matches stay, and newly matched Liked Songs are hearted if that option is on. Switch **Update automatically when Slate Music opens** off in a playlist's edit screen to keep it as it is.
+Imported playlists, Liked Songs and top songs update themselves each time Slate Music opens (after the library scan): the song list follows Spotify, confirmed matches stay, and newly matched Liked Songs are hearted if that option is on. Switch **Update automatically when Slate Music opens** off in a playlist's edit screen to keep it as it is, or to add, remove and reorder its songs yourself (a playlist that follows Spotify gets its songs from Spotify). Importing the same playlist again updates the earlier import.
 
 **Liked Songs** appears first in the list. Importing it saves a "Liked Songs" playlist and, unless you switch it off on the review screen, adds every matched song to Favorites. Connections made before this feature need one **Reconnect** for it.
 

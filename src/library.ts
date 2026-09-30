@@ -42,12 +42,14 @@ export const durationLabel = (s: number) =>
   s >= 3600
     ? `${Math.floor(s / 3600)} hr ${Math.floor((s % 3600) / 60)} min`
     : `${Math.ceil(s / 60)} min`;
+/** A confirmed playlist entry for a local song. It stays confirmed even if the file is
+ * unavailable right now; it is shown as missing until the file returns (see entryStatus). */
 export const entryFrom = (t: Track): Entry => ({
   trackId: t.id,
   title: t.title,
   artist: t.artist,
   duration: t.duration,
-  status: t.missing ? 'missing' : 'available',
+  status: 'available',
 });
 export function entryStatus(entry: Entry, tracks: Map<string, Track>): Entry['status'] {
   const track = entry.trackId ? tracks.get(entry.trackId) : undefined;

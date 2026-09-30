@@ -91,7 +91,8 @@ function rank(r: Remote, l: Local) {
               : 'Title, artist and duration agree';
   return { id: local.id, score: Math.max(0, score), reason };
 }
-export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
+/** Prepares `local` once and returns a function that matches one Spotify song against it. */
+export function createMatcher(local: Track[]): (r: SpotifyTrack) => Entry {
   // A song sharing no title word scores at most 0.47, below the 0.55 candidate threshold, so
   // only songs found through a shared title word need ranking. This keeps large imports fast.
   const prepared = local.filter((t) => !t.missing).map(prepareLocal);
@@ -104,7 +105,7 @@ export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
       else byWord.set(word, [i]);
     }
   });
-  return remote.map((r) => {
+  return (r) => {
     const features = prepareRemote(r);
     const nearby = new Set(features.rec.base.split(' ').flatMap((w) => byWord.get(w) || []));
     const candidates = [...nearby]
@@ -125,17 +126,44 @@ export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
       status: confident ? 'available' : top ? 'uncertain' : 'missing',
       candidates,
     };
-  });
+  };
 }
-/** After re-reading a playlist from Spotify, keep every song the user already matched. */
-export function keepConfirmed(previous: Entry[], next: Entry[]): Entry[] {
-  const confirmed = new Map(
-    previous.flatMap((e): [string, string][] =>
-      e.spotifyId && e.trackId && e.status === 'available' ? [[e.spotifyId, e.trackId]] : [],
-    ),
-  );
+export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
+  return remote.map(createMatcher(local));
+}
+/** Same result as `matchTracks`, but pauses between batches so very large imports
+ * (thousands of Liked Songs) never freeze the window. */
+export async function matchInBatches(remote: SpotifyTrack[], local: Track[], batch = 300) {
+  const match = createMatcher(local);
+  const out: Entry[] = [];
+  for (let i = 0; i < remote.length; i += batch) {
+    out.push(...remote.slice(i, i + batch).map(match));
+    if (i + batch < remote.length) await new Promise((r) => setTimeout(r, 0));
+  }
+  return out;
+}
+/** Identifies an entry across updates: its Spotify ID, or for Spotify local files (which
+ * have none) its title, artist and length. */
+export const entryKey = (e: Entry) =>
+  e.spotifyId || `~${normalize(e.title)}|${normalize(e.artist)}|${Math.round(e.duration)}`;
+/** After re-reading a playlist from Spotify, keep the user's decisions: songs they matched
+ * stay matched (unless that file has left the library, so it can be matched again), and
+ * songs they chose to leave missing stay missing. */
+export function keepConfirmed(previous: Entry[], next: Entry[], tracks?: Map<string, Track>): Entry[] {
+  const confirmed = new Map<string, string>();
+  const rejected = new Set<string>();
+  for (const e of previous) {
+    if (e.rejected) rejected.add(entryKey(e));
+    else if (e.trackId && e.status === 'available') {
+      const t = tracks?.get(e.trackId);
+      if (!tracks || (t && !t.missing)) confirmed.set(entryKey(e), e.trackId);
+    }
+  }
   return next.map((e) => {
-    const trackId = e.spotifyId && confirmed.get(e.spotifyId);
-    return trackId ? { ...e, trackId, status: 'available' } : e;
+    const key = entryKey(e);
+    const trackId = confirmed.get(key);
+    if (trackId) return { ...e, trackId, status: 'available' };
+    if (rejected.has(key)) return { ...e, trackId: null, status: 'missing', rejected: true };
+    return e;
   });
 }

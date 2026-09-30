@@ -61,15 +61,6 @@ pub struct Playback {
     pub sleep_at: Option<i64>,
     pub sleep_end_of_track: bool,
 }
-/// Whether the sleep timer should pause now. "End of track" stops just before the song ends,
-/// ahead of any crossfade, so the next song never starts playing.
-fn sleep_due(s: &Playback, now: i64) -> bool {
-    s.playing
-        && (s.sleep_at.is_some_and(|at| now >= at)
-            || (s.sleep_end_of_track
-                && s.duration > 0.
-                && s.duration - s.position <= s.crossfade.min(s.duration / 2.) + 0.25))
-}
 impl Default for Playback {
     fn default() -> Self {
         Self {
@@ -103,6 +94,14 @@ pub struct RenderState {
     pub renamed: HashMap<String, String>,
 }
 impl RenderState {
+    /// Ends a sleep timer whose time is up: pauses if playing, and clears it either way (a
+    /// deadline that passes while paused must not stop the next play).
+    fn apply_sleep(&mut self, now: i64) {
+        if self.state.sleep_at.is_some_and(|at| now >= at) {
+            self.state.playing = false;
+            self.state.sleep_at = None;
+        }
+    }
     fn remove_queued(&mut self, index: usize) {
         let cursor = self.snapshot().cursor;
         self.state.queue.remove(index);
@@ -160,9 +159,9 @@ impl RenderState {
             return 0.;
         };
         if let Some(mut sample) = current.source.next() {
-            let fade = self
-                .state
-                .crossfade
+            // "End of this song" plays the song to its real end, so no crossfade.
+            let crossfade = if self.state.sleep_end_of_track { 0. } else { self.state.crossfade };
+            let fade = crossfade
                 .min(current.duration / 2.)
                 .min(self.next.as_ref().map(|d| d.duration / 2.).unwrap_or(0.))
                 .max(0.);
@@ -186,8 +185,15 @@ impl RenderState {
             self.transition += 1;
             self.epoch += 1;
             self.next_attempt = None;
+            if self.state.sleep_end_of_track {
+                // Sleep timer: the next song is ready but waits, paused at its start.
+                self.state.sleep_end_of_track = false;
+                self.state.playing = false;
+                return 0.;
+            }
             return self.sample();
         }
+        self.state.sleep_end_of_track = false;
         self.state.playing = false;
         self.state.position = self.current.as_ref().map(|d| d.duration).unwrap_or(0.);
         0.
@@ -291,16 +297,43 @@ impl Engine {
         }
         self.save();
     }
-    /// Drops forgotten songs from the queue, except the one that is loaded.
+    /// Drops forgotten songs from the queue in one pass, except the one that is loaded.
     pub fn forget(&self, ids: &HashSet<String>) {
         {
             let mut r = self.render.lock().unwrap();
+            let cursor = r.snapshot().cursor;
             let loaded = r.current.as_ref().map(|d| d.index);
-            for i in (0..r.state.queue.len()).rev() {
-                if ids.contains(&r.state.queue[i]) && Some(i) != loaded {
-                    r.remove_queued(i);
-                }
+            let keep: Vec<bool> = r
+                .state
+                .queue
+                .iter()
+                .enumerate()
+                .map(|(i, id)| !ids.contains(id) || Some(i) == loaded)
+                .collect();
+            if keep.iter().all(|k| *k) {
+                return;
             }
+            let removed_before = keep.iter().take(cursor).filter(|k| !**k).count();
+            let cursor_removed = keep.get(cursor) == Some(&false);
+            let mut i = 0;
+            r.state.queue.retain(|_| {
+                i += 1;
+                keep[i - 1]
+            });
+            let next_cursor = (cursor - removed_before).min(r.state.queue.len().saturating_sub(1));
+            r.state.cursor = next_cursor;
+            if let Some(deck) = r.current.as_mut() {
+                deck.index = next_cursor;
+            }
+            r.state.current_id = r.state.queue.get(next_cursor).cloned();
+            if cursor_removed {
+                r.state.position = 0.;
+                r.state.duration = 0.;
+                r.state.playing = false;
+            }
+            r.next = None;
+            r.epoch += 1;
+            r.next_attempt = None;
         }
         self.save();
     }
@@ -769,20 +802,15 @@ impl Engine {
                         }
                     }
                 }
-                if sleep_due(&engine.snapshot(), crate::db::now()) {
+                // One lock, so a moved song is never mistaken for a new play.
+                let (s, transition) = {
                     let mut r = engine.render.lock().unwrap();
-                    r.state.playing = false;
-                    r.state.sleep_at = None;
-                    r.state.sleep_end_of_track = false;
-                }
-                let s = engine.snapshot();
-                let transition = {
-                    let mut r = engine.render.lock().unwrap();
+                    r.apply_sleep(crate::db::now());
                     if let Some(new) = r.renamed.remove(&last_play) {
                         last_play = new;
                     }
                     r.renamed.clear();
-                    r.transition
+                    (r.snapshot(), r.transition)
                 };
                 if s.playing {
                     if let Some(id) = s.current_id.as_ref() {
@@ -1107,23 +1135,28 @@ mod tests {
             .is_none());
     }
     #[test]
-    fn sleep_due_respects_deadline_track_end_crossfade_and_pause() {
-        let s = |playing, at, end, position, crossfade| Playback {
-            playing,
-            sleep_at: at,
-            sleep_end_of_track: end,
-            position,
-            duration: 200.,
-            crossfade,
-            ..Default::default()
-        };
-        assert!(sleep_due(&s(true, Some(1000), false, 10., 0.), 1000));
-        assert!(!sleep_due(&s(true, Some(1000), false, 10., 0.), 999));
-        assert!(!sleep_due(&s(false, Some(1000), false, 10., 0.), 5000));
-        assert!(sleep_due(&s(true, None, true, 199.8, 0.), 0));
-        assert!(!sleep_due(&s(true, None, true, 199.0, 0.), 0));
-        assert!(sleep_due(&s(true, None, true, 194.0, 6.), 0));
-        assert!(!sleep_due(&s(true, None, false, 199.9, 0.), 0));
+    fn sleep_deadline_pauses_playback_and_clears_even_when_already_paused() {
+        let mut r = render();
+        r.state.sleep_at = Some(1000);
+        r.apply_sleep(999);
+        assert!(r.state.playing && r.state.sleep_at.is_some());
+        r.apply_sleep(1000);
+        assert!(!r.state.playing && r.state.sleep_at.is_none());
+        r.state.sleep_at = Some(1000);
+        r.apply_sleep(5000); // passed while paused: cleared, still paused
+        assert!(!r.state.playing && r.state.sleep_at.is_none());
+    }
+    #[test]
+    fn end_of_song_sleep_plays_to_the_real_end_and_waits_at_the_next_song() {
+        let mut r = render();
+        r.state.crossfade = 0.005; // would normally blend the last 5 ms
+        r.state.sleep_end_of_track = true;
+        let first: Vec<_> = (0..960).map(|_| r.sample()).collect();
+        assert_eq!(first, vec![0.25; 960], "the whole song, with no fade into the next");
+        assert_eq!(r.sample(), 0.);
+        assert!(!r.state.playing && !r.state.sleep_end_of_track);
+        assert_eq!(r.snapshot().current_id.as_deref(), Some("b"));
+        assert_eq!(r.current.as_ref().unwrap().samples, 0, "the next song waits at its start");
     }
     #[test]
     fn repairs_stale_queue_positions_from_older_saved_sessions() {

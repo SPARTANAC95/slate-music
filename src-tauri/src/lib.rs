@@ -3,6 +3,8 @@ mod db;
 mod desktop;
 mod library;
 mod spotify;
+#[cfg(windows)]
+mod taskbar;
 mod years;
 use db::{err, Database, Result};
 use serde_json::{json, Value};
@@ -182,6 +184,22 @@ async fn spotify_top(source: String, state: tauri::State<'_, AppState>) -> Resul
         .map_err(err)?
 }
 #[tauri::command]
+async fn spotify_revision(source: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || spotify::revision(&db, &source))
+        .await
+        .map_err(err)?
+}
+#[tauri::command]
+fn collection(id: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    Ok(state
+        .db
+        .collections()?
+        .into_iter()
+        .find(|c| c["id"].as_str() == Some(id.as_str()))
+        .unwrap_or(Value::Null))
+}
+#[tauri::command]
 async fn spotify_playlist(url: String, state: tauri::State<'_, AppState>) -> Result<Value> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || spotify::playlist(&db, &url))
@@ -335,6 +353,8 @@ pub fn run() {
                 engine: engine.clone(),
             });
             desktop::setup(app.handle())?;
+            #[cfg(windows)]
+            taskbar::setup(app.handle(), hwnd);
             engine.start(app.handle().clone(), hwnd);
             library::watch(db.clone(), library.clone(), app.handle().clone());
             library::start_scan(db, library, app.handle().clone());
@@ -358,6 +378,8 @@ pub fn run() {
             spotify_playlist,
             spotify_liked,
             spotify_top,
+            spotify_revision,
+            collection,
             reveal_track,
             remove_missing,
             open_link,

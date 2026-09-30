@@ -48,6 +48,8 @@ export interface Entry {
   status: 'available' | 'uncertain' | 'missing';
   candidates?: { id: string; score: number; reason: string }[];
   spotifyId?: string;
+  /** The user chose "Leave this song missing"; updates keep it unmatched. */
+  rejected?: boolean;
 }
 export interface Collection {
   id: string;
@@ -62,6 +64,8 @@ export interface Collection {
   autoUpdate?: boolean;
   /** Add songs to Favorites when they are matched (Liked Songs). */
   heartMatches?: boolean;
+  /** Spotify's fingerprint of the contents when last read; unchanged sources are skipped. */
+  revision?: string | null;
 }
 export interface Settings {
   autoCheck: boolean;
@@ -125,4 +129,5 @@ export interface SpotifyPlaylist {
   tracks: SpotifyTrack[];
   /** Podcast episodes and removed or unavailable entries. */
   skipped: number;
+  revision?: string | null;
 }

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Collection, Entry, Snapshot, SpotifyPlaylist, Track } from './types';
-import { keepConfirmed, matchTracks } from './matching';
+import { keepConfirmed, matchInBatches, matchTracks } from './matching';
 
 /** Slate's address for the Liked Songs collection (matches spotify.rs). */
 export const LIKED_URL = 'https://open.spotify.com/collection/tracks';
@@ -34,6 +34,10 @@ export function canRead(spotify: Snapshot['spotify'], url?: string) {
           : false)
   );
 }
+/** A collection that follows Spotify: its song list is replaced on every update, so songs
+ * added or removed by hand would not last. */
+export const followsSpotify = (c: Collection) =>
+  sourceKind(c.sourceUrl) !== null && c.autoUpdate !== false;
 export function readSource(url: string): Promise<SpotifyPlaylist> {
   const kind = sourceKind(url);
   return kind === 'liked'
@@ -43,38 +47,92 @@ export function readSource(url: string): Promise<SpotifyPlaylist> {
       : invoke('spotify_playlist', { url });
 }
 
-/** Applies a fresh Spotify song list to a saved collection, keeping confirmed matches.
+/** Drops matching details that are only needed while reviewing, keeping saved playlists
+ * small (Liked Songs can run to thousands of songs). */
+export function compact(c: Collection): Collection {
+  return {
+    ...c,
+    entries: c.entries.map((e) =>
+      e.status === 'available' || !e.candidates?.length
+        ? { ...e, candidates: undefined }
+        : {
+            ...e,
+            candidates: e.candidates
+              .slice(0, 3)
+              .map((x) => ({ ...x, score: Math.round(x.score * 1000) / 1000 })),
+          },
+    ),
+  };
+}
+
+/** Merges freshly matched entries into the current saved collection.
  * `hearts` lists songs matched for the first time, for collections that heart matches. */
-export function applyUpdate(c: Collection, playlist: SpotifyPlaylist, tracks: Track[]) {
-  const entries = keepConfirmed(c.entries, matchTracks(playlist.tracks, tracks));
+export function mergeUpdate(
+  current: Collection,
+  matched: Entry[],
+  tracks: Track[],
+  revision?: string | null,
+) {
+  const byId = new Map(tracks.map((t) => [t.id, t]));
+  const entries = keepConfirmed(current.entries, matched, byId);
   const signature = (list: Entry[]) =>
     JSON.stringify(list.map((e) => [e.spotifyId, e.title, e.trackId, e.status]));
-  const before = new Set(c.entries.filter((e) => e.trackId && e.status === 'available').map((e) => e.trackId));
-  const hearts = c.heartMatches
+  const before = new Set(
+    current.entries.filter((e) => e.trackId && e.status === 'available').map((e) => e.trackId),
+  );
+  const hearts = current.heartMatches
     ? entries.flatMap((e) =>
         e.trackId && e.status === 'available' && !before.has(e.trackId) ? [e.trackId] : [],
       )
     : [];
   return {
-    collection: { ...c, entries },
-    changed: signature(entries) !== signature(c.entries),
+    collection: { ...current, entries, revision: revision ?? current.revision ?? null },
+    changed: signature(entries) !== signature(current.entries) || revision !== current.revision,
     hearts,
   };
 }
+export const applyUpdate = (c: Collection, playlist: SpotifyPlaylist, tracks: Track[]) =>
+  mergeUpdate(c, matchTracks(playlist.tracks, tracks), tracks, playlist.revision);
 
-/** Refreshes every imported collection that updates automatically. Collections Spotify
- * cannot currently be asked about (offline, missing permission) are left as they are. */
-export async function updateAll(data: Snapshot): Promise<number> {
+/** The saved entries as a song list, to match them again against new local files without
+ * asking Spotify (used when Spotify reports no change). */
+export const savedAsPlaylist = (c: Collection): SpotifyPlaylist => ({
+  id: c.id,
+  name: c.name,
+  owner: '',
+  url: c.sourceUrl || '',
+  skipped: 0,
+  revision: c.revision,
+  tracks: c.entries.map((e) => ({
+    id: e.spotifyId ?? null,
+    name: e.title,
+    artists: e.artist.split(', ').map((name) => ({ name })),
+    duration_ms: e.duration * 1000,
+  })),
+});
+
+/** Brings every imported collection that updates automatically up to date. Works from a
+ * fresh snapshot and re-reads each collection just before saving it, so a collection deleted,
+ * renamed or edited meanwhile is never overwritten with an older copy. Sources Spotify says
+ * are unchanged are not downloaded again; their missing songs are still matched against new
+ * files. Sources that cannot be read now (offline, no permission) are left as they are. */
+export async function updateAll(isEditing: (id: string) => boolean): Promise<number> {
+  const start = await invoke<Snapshot>('snapshot');
   let updated = 0;
-  for (const c of data.collections) {
-    if (c.autoUpdate === false || !canRead(data.spotify, c.sourceUrl)) continue;
+  for (const c of start.collections) {
+    if (!followsSpotify(c) || !canRead(start.spotify, c.sourceUrl) || isEditing(c.id)) continue;
     try {
-      const result = applyUpdate(c, await readSource(c.sourceUrl!), data.tracks);
+      const revision = await invoke<string | null>('spotify_revision', { source: c.sourceUrl });
+      const source =
+        revision && revision === c.revision ? savedAsPlaylist(c) : await readSource(c.sourceUrl!);
+      const matched = await matchInBatches(source.tracks, start.tracks);
+      const current = await invoke<Collection | null>('collection', { id: c.id });
+      if (!current || !followsSpotify(current) || isEditing(c.id)) continue;
+      const result = mergeUpdate(current, matched, start.tracks, source.revision ?? revision);
+      if (!result.changed) continue;
+      await invoke('save_collection', { collection: compact(result.collection) });
       if (result.hearts.length) await invoke('favorite_many', { ids: result.hearts });
-      if (result.changed) {
-        await invoke('save_collection', { collection: result.collection });
-        updated += 1;
-      }
+      updated += 1;
     } catch {
       // Offline or refused: try again next time the app opens.
     }
