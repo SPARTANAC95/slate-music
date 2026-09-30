@@ -236,6 +236,16 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
   const rate = track.sampleRate;
   const out = pb.output;
   const kHz = (hz: number) => `${Math.round(hz / 100) / 10} kHz`;
+  const exclusive = !!out?.exclusive;
+  // What keeps the device from getting exactly what is in the file.
+  const changes = [
+    !q.lossless && 'a lossy file',
+    pb.volume < 1 && `volume at ${Math.round(pb.volume * 100)}%`,
+    pb.eq?.enabled && 'the equalizer',
+    pb.gainKind !== 'off' && 'loudness levelling',
+    out && rate && out.sampleRate !== rate && 'a rate conversion',
+    out?.bits && track.bitDepth > out.bits && `${out.bits}-bit output`,
+  ].filter(Boolean) as string[];
   const steps: [string, string][] = [
     ['Source', `${track.format}${q.detail ? ` · ${q.detail}` : ''}${q.label ? ` · ${q.label}` : ''}`],
     [
@@ -250,14 +260,29 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
       'Equalizer',
       pb.eq?.enabled ? `${pb.eq.preset || 'Custom'}${pb.eq.preamp ? ` · preamp ${pb.eq.preamp} dB` : ''}` : 'Off',
     ],
-    ['Mixing', rate && rate !== 48000 ? `Converted from ${kHz(rate)} to 48 kHz` : '48 kHz, no conversion'],
+    ['Volume', pb.volume >= 1 ? '100%' : `${Math.round(pb.volume * 100)}%`],
+    [
+      'Mixing',
+      exclusive && out
+        ? rate && rate !== out.sampleRate
+          ? `Converted from ${kHz(rate)} to ${kHz(out.sampleRate)}; the device doesn’t take ${kHz(rate)}`
+          : `${kHz(out.sampleRate)}, no conversion`
+        : rate && rate !== 48000
+          ? `Converted from ${kHz(rate)} to 48 kHz`
+          : '48 kHz, no conversion',
+    ],
     [
       'Output',
       out
-        ? `${out.device} · Windows shared mode · ${kHz(out.sampleRate)}${out.fallback ? ' (chosen device not connected)' : ''}`
+        ? `${out.device} · ${exclusive ? `Exclusive mode · ${kHz(out.sampleRate)} · ${out.bits}-bit` : `Windows shared mode · ${kHz(out.sampleRate)}`}${out.fallback ? ' (chosen device not connected)' : ''}`
         : 'No output device',
     ],
   ];
+  const verdict = !exclusive
+    ? null
+    : changes.length
+      ? `Not bit-perfect: ${changes.join(', ')}.`
+      : 'Bit-perfect: the device receives exactly what is in the file.';
   return (
     <ol className="np-path">
       {steps.map(([label, value]) => (
@@ -266,6 +291,7 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
           <strong>{value}</strong>
         </li>
       ))}
+      {verdict && <li className={`np-verdict ${changes.length ? '' : 'perfect'}`}>{verdict}</li>}
     </ol>
   );
 }

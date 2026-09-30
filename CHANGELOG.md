@@ -29,6 +29,7 @@
 - **Last.fm scrobbling:** with your own free Last.fm API account, songs are scrobbled once you have heard half of them (or four minutes) and shown as "now playing" while they play. Scrobbles made offline wait and are sent later. The secret and sign-in are encrypted with Windows DPAPI.
 - **Discord status:** with your own Discord application ID, Discord shows "Listening to Slate Music" with the song, artist and a progress bar while music plays, and nothing while paused. Slate Music only talks to the Discord app on this PC.
 - A disabled main button no longer loses its label under the mouse.
+- **Exclusive mode (bit-perfect):** Settings → Playback can give Slate Music the output device to itself (WASAPI exclusive mode). Each song is sent at its own sample rate as whole-number samples, with no Windows mixing or resampling; songs at the same rate stay gapless and a change of rate reopens the device between songs. With volume at 100% and the equalizer and levelling off, the device receives exactly what is in the file, and Now Playing's signal path says so (or says what changes the sound). The device is let go a few seconds after music pauses so other apps can play. If a device can't be used exclusively, Slate Music explains why and plays through Windows instead.
 
 ## 1.0.3 — 2026-09-30
 

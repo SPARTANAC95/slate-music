@@ -49,7 +49,13 @@ Shortcuts do not intercept typing in form fields. Standard media keys are routed
 
 Tested decoding: FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Seeking was tested for the container formats above; raw ADTS AAC seeking depends on its available seek index. Opus, WMA, APE, DSD and protected files are not supported in this version.
 
-The engine streams decoded audio through one 48 kHz stereo mixer and the Windows default output device. This provides gapless transitions and crossfade; it is not a bit-perfect or exclusive-mode player. A disconnected audio device pauses playback; the engine attempts to reconnect without starting audio unexpectedly.
+Normally the engine mixes decoded audio at 48 kHz in stereo and plays it through Windows' shared output, which allows gapless playback, crossfades and other apps' sounds at the same time.
+
+**Exclusive mode (bit-perfect)** in Settings → Playback gives Slate Music the chosen output device to itself. Each song is sent at its own sample rate (44.1, 48, 88.2, 96, 176.4 or 192 kHz and up, as the device allows) in whole-number samples with as many bits as the file has. Songs at the same rate play gaplessly; a song at another rate reopens the device between songs, with a short silence. Crossfades aren't used. With the volume at 100% and the equalizer and loudness levelling off, the device receives exactly the numbers in the file: Now Playing → Signal path confirms "Bit-perfect", or lists what changes the sound. When a device doesn't take a song's rate, the nearest rate it does take is used and the signal path says so.
+
+While exclusive mode plays, other apps can't make sound through that device. Slate Music lets it go a few seconds after you pause and takes it back when you press play. If Windows doesn't allow exclusive use (Sound settings → the device → Properties → Advanced → "Allow applications to take exclusive control of this device"), or another app holds it, Slate Music says so and plays through Windows instead.
+
+A disconnected audio device pauses playback; the engine attempts to reconnect without starting audio unexpectedly.
 
 ## Spotify playlist import
 

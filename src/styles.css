@@ -3689,3 +3689,14 @@ input[type='range']:disabled {
 .setting-row.disabled .switch {
   cursor: not-allowed;
 }
+.np-path .np-verdict {
+  display: block;
+  padding-top: 8px;
+  border-top: 1px solid #ffffff14;
+  font-size: 11px;
+  color: #ffffffb0;
+}
+.np-path .np-verdict.perfect {
+  color: var(--np-accent, var(--accent));
+  font-weight: 600;
+}

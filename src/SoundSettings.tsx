@@ -54,6 +54,8 @@ export default function SoundSettings({
     // Each device keeps its own equalizer, e.g. one for headphones and one for speakers.
     await onPlayback('eq', eqFor(settings, device));
   }
+  /** Nothing changes the samples: full volume, no EQ, no levelling. */
+  const untouched = pb.volume >= 1 && !pb.eq?.enabled && pb.levelling === 'off';
   const total = data.tracks.filter((t) => !t.missing).length;
   const measured = Math.min(data.loudnessMeasured ?? 0, total);
   return (
@@ -79,6 +81,22 @@ export default function SoundSettings({
           )}
         </select>
       </label>
+      <Toggle
+        label="Exclusive mode (bit-perfect)"
+        description={
+          !pb.exclusive
+            ? 'Sends each song to your device untouched, at its own sample rate, with no Windows mixing or conversion. Other apps can’t play sound through that device while music plays, and crossfades are skipped.'
+            : !pb.output?.exclusive
+              ? 'On, but the device can’t be used exclusively right now, so Slate Music plays through Windows. The message at the top of the window says why.'
+              : `On: ${pb.output.device} plays each song at its own rate and is let go a few seconds after you pause.${
+                  untouched
+                    ? ' Songs reach it exactly as they are in the file.'
+                    : ' For bit-perfect sound, set the volume to 100% and turn the equalizer and levelling off.'
+                }`
+        }
+        checked={!!pb.exclusive}
+        onChange={(v) => onPlayback('exclusive', v)}
+      />
       <label className="setting-row">
         <span>
           <strong>Loudness levelling</strong>

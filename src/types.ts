@@ -44,8 +44,19 @@ export interface Playback {
   eq: EqSettings;
   /** The chosen output device; null follows the Windows default. */
   outputDevice: string | null;
+  /** Play through the device exclusively, at each song's own rate. */
+  exclusive?: boolean;
   /** What is actually playing, for the signal path. */
-  output: { device: string; sampleRate: number; channels: number; fallback: boolean } | null;
+  output: {
+    device: string;
+    sampleRate: number;
+    channels: number;
+    fallback: boolean;
+    /** Slate Music has the device to itself (exclusive mode). */
+    exclusive?: boolean;
+    /** Bits per sample sent in exclusive mode. */
+    bits?: number;
+  } | null;
   /** Levelling applied to the current song, in dB. */
   gainDb: number | null;
   gainKind: 'off' | 'track' | 'album' | 'unmeasured';

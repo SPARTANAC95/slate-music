@@ -4,6 +4,7 @@ mod db;
 mod desktop;
 mod discord;
 mod dsp;
+mod exclusive;
 mod library;
 mod loudness;
 mod lyrics;
@@ -11,6 +12,8 @@ mod scrobble;
 mod spotify;
 #[cfg(windows)]
 mod taskbar;
+#[cfg(windows)]
+mod wasapi;
 mod years;
 use db::{err, Database, Result};
 use serde_json::{json, Value};

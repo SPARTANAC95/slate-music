@@ -179,7 +179,11 @@ export default function SettingsPanel({
         <label className="setting-row">
           <span>
             <strong>Crossfade</strong>
-            <small>Blend the end of one track into the next.</small>
+            <small>
+              {pb.exclusive
+                ? 'Not used in exclusive mode, which sends every song untouched.'
+                : 'Blend the end of one track into the next.'}
+            </small>
           </span>
           <select
             aria-label="Crossfade"
@@ -208,7 +212,8 @@ export default function SettingsPanel({
         />
         <p className="fine-print">
           FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Songs are mixed at 48 kHz in Windows’
-          shared mode. If an output device disconnects, playback pauses and reconnects automatically.
+          shared mode, or sent at their own rate in exclusive mode. If an output device disconnects,
+          playback pauses and reconnects automatically.
         </p>
       </section>
       <section>

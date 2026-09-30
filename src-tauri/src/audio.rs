@@ -31,18 +31,24 @@ pub struct Deck {
     pub start_silence: f64,
     /// Follows the previous song on the same album, so it plays gaplessly, never faded.
     pub continues_album: bool,
+    /// The rate this song is mixed at: 48 kHz normally, its own rate in exclusive mode.
+    pub rate: u32,
+    /// Bits per sample in the file (0 for lossy formats).
+    pub bits: u16,
 }
 impl Deck {
-    fn load(track: &Track, index: usize) -> Result<Self> {
+    /// Opens a song, mixed at the rate `rate_for` picks for the file's own rate.
+    fn load(track: &Track, index: usize, rate_for: impl Fn(u32) -> u32) -> Result<Self> {
         let decoder = Decoder::try_from(File::open(&track.path).map_err(err)?).map_err(err)?;
         let duration = decoder
             .total_duration()
             .map(|d| d.as_secs_f64())
             .unwrap_or(track.duration);
+        let rate = rate_for(decoder.sample_rate());
         Ok(Self {
             id: track.id.clone(),
             index,
-            source: Box::new(UniformSourceIterator::new(decoder, 2, RATE)),
+            source: Box::new(UniformSourceIterator::new(decoder, 2, rate)),
             samples: 0,
             duration,
             gain: 1.,
@@ -51,6 +57,8 @@ impl Deck {
             audible_end: duration,
             start_silence: 0.,
             continues_album: false,
+            rate,
+            bits: track.bit_depth as u16,
         })
     }
     /// Jumps forward, keeping the position count in whole stereo frames.
@@ -59,11 +67,11 @@ impl Deck {
         self.source
             .try_seek(Duration::from_secs_f64(target))
             .map_err(err)?;
-        self.samples = (target * RATE as f64) as u64 * 2;
+        self.samples = (target * self.rate as f64) as u64 * 2;
         Ok(())
     }
     fn position(&self) -> f64 {
-        self.samples as f64 / (RATE * 2) as f64
+        self.samples as f64 / (self.rate * 2) as f64
     }
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -93,6 +101,8 @@ pub struct Playback {
     pub eq: crate::dsp::EqSettings,
     /// The chosen output device's name; None follows the Windows default.
     pub output_device: Option<String>,
+    /// Play through the device exclusively, at each song's own rate (bit-perfect).
+    pub exclusive: bool,
     /// The device actually playing, for the signal path. Not restored.
     pub output: Option<OutputInfo>,
     /// Levelling applied to the current song, in dB, and whether by song or album.
@@ -107,6 +117,10 @@ pub struct OutputInfo {
     pub channels: u16,
     /// The chosen device was missing, so the Windows default is used.
     pub fallback: bool,
+    /// Exclusive mode: Slate Music has the device to itself.
+    pub exclusive: bool,
+    /// Bits per sample sent to the device in exclusive mode.
+    pub bits: u16,
 }
 impl Default for Playback {
     fn default() -> Self {
@@ -130,6 +144,7 @@ impl Default for Playback {
             smart_crossfade: true,
             eq: crate::dsp::EqSettings::default(),
             output_device: None,
+            exclusive: false,
             output: None,
             gain_db: None,
             gain_kind: "off".into(),
@@ -151,8 +166,33 @@ pub struct RenderState {
     pub channel: usize,
     /// The output device changed; the audio thread opens it again.
     pub reopen: bool,
+    /// The rate the output runs at: 48 kHz, or the song's own in exclusive mode.
+    pub rate: u32,
+    /// Exclusive mode is running, and what the device takes.
+    pub exclusive: Option<crate::exclusive::Support>,
+    /// The next song needs the device at another rate; silence until it is reopened.
+    pub rate_pending: bool,
 }
 impl RenderState {
+    /// The rate a song whose file is at `native` Hz is mixed at.
+    fn deck_rate(&self, native: u32) -> u32 {
+        self.exclusive.as_ref().map_or(RATE, |s| s.rate_for(native))
+    }
+    pub fn current_rate(&self) -> u32 {
+        self.current.as_ref().map_or(self.rate, |d| d.rate)
+    }
+    pub fn current_bits(&self) -> u16 {
+        self.current.as_ref().map_or(16, |d| d.bits)
+    }
+    /// The output now runs at `rate`.
+    pub fn use_rate(&mut self, rate: u32) {
+        if self.rate != rate {
+            self.rate = rate;
+            self.eq = crate::dsp::Equalizer::new(&self.state.eq, rate as f64);
+        }
+        self.rate_pending = false;
+        self.channel = 0;
+    }
     /// Ends a sleep timer whose time is up: pauses if playing, and clears it either way (a
     /// deadline that passes while paused must not stop the next play).
     fn apply_sleep(&mut self, now: i64) {
@@ -200,6 +240,8 @@ impl RenderState {
         };
         self.state.cursor = next.index;
         self.state.current_id = Some(next.id.clone());
+        // In exclusive mode a song at another rate waits for the device to be reopened.
+        self.rate_pending = self.exclusive.is_some() && next.rate != self.rate;
         self.current = Some(next);
         self.transition += 1;
         self.epoch += 1;
@@ -225,12 +267,13 @@ impl RenderState {
             None
         }
     }
-    fn sample(&mut self) -> f32 {
-        if !self.state.playing || self.stopping {
+    pub fn sample(&mut self) -> f32 {
+        if !self.state.playing || self.stopping || self.rate_pending {
             return 0.;
         }
-        // "End of this song" plays the song to its real end, so no crossfade.
-        let crossfade = if self.state.sleep_end_of_track {
+        // "End of this song" plays the song to its real end, so no crossfade; exclusive mode
+        // sends songs untouched, so never mixes two.
+        let crossfade = if self.state.sleep_end_of_track || self.exclusive.is_some() {
             0.
         } else {
             self.state.crossfade
@@ -300,8 +343,6 @@ impl RenderState {
         0.
     }
 }
-/// The output device to open: the named one when it is connected, else the Windows default.
-/// Returns the device (None = default), its name, and whether the named one was missing.
 /// The new order of a list of `len` items after moving `rows` (kept in their order) to sit
 /// before position `to` of the original list (`to == len` moves them to the end).
 pub fn move_rows(len: usize, rows: &[usize], to: usize) -> Vec<usize> {
@@ -311,6 +352,8 @@ pub fn move_rows(len: usize, rows: &[usize], to: usize) -> Vec<usize> {
     order.splice(at..at, moving);
     order
 }
+/// The output device to open: the named one when it is connected, else the Windows default.
+/// Returns the device (None = default), its name, and whether the named one was missing.
 fn choose_device(wanted: Option<&str>) -> (Option<rodio::Device>, String, bool) {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let host = rodio::cpal::default_host();
@@ -352,6 +395,14 @@ pub fn output_devices() -> (Vec<String>, Option<String>) {
         names,
         host.default_output_device().and_then(|d| d.name().ok()),
     )
+}
+/// Where sound goes: Windows' shared mixer, or the device to ourselves (exclusive mode).
+/// Holding one keeps it playing; dropping it stops it, so its parts are never read.
+#[allow(dead_code)]
+enum Output {
+    Shared(rodio::OutputStream, Sink),
+    #[cfg(windows)]
+    Exclusive(crate::wasapi::Exclusive),
 }
 pub struct Mixer(pub Arc<Mutex<RenderState>>);
 impl Iterator for Mixer {
@@ -430,6 +481,9 @@ impl Engine {
                 eq,
                 channel: 0,
                 reopen: false,
+                rate: RATE,
+                exclusive: None,
+                rate_pending: false,
             })),
             db,
             command_lock: Mutex::new(()),
@@ -468,6 +522,8 @@ impl Engine {
                     audible_end: t.duration,
                     start_silence: 0.,
                     continues_album: false,
+                    rate: RATE,
+                    bits: 0,
                 };
                 self.shape(&mut probe, &t, &levelling, &queue);
                 let mut r = self.render.lock().unwrap();
@@ -550,6 +606,30 @@ impl Engine {
         }
         self.save();
     }
+    /// Starts or ends exclusive mode (with what the device takes), reloading the playing song
+    /// where it was, at the rate the new output needs.
+    fn use_exclusive(&self, support: Option<crate::exclusive::Support>) {
+        let reload = {
+            let mut r = self.render.lock().unwrap();
+            if r.exclusive == support {
+                return;
+            }
+            r.exclusive = support;
+            if r.exclusive.is_none() {
+                r.use_rate(RATE);
+            }
+            r.next = None;
+            r.epoch += 1;
+            r.next_attempt = None;
+            let s = r.snapshot();
+            r.current
+                .is_some()
+                .then_some((s.cursor, s.position, s.playing))
+        };
+        if let Some((index, position, playing)) = reload {
+            let _ = self.load(index, position, playing);
+        }
+    }
     fn prepare(&self, id: &str, index: usize) -> Result<Deck> {
         let queue = self.render.lock().unwrap().state.queue.clone();
         self.prepare_in(id, index, &queue)
@@ -564,7 +644,9 @@ impl Engine {
                 t.title
             ));
         }
-        let mut deck = Deck::load(&t, index)?;
+        let mut deck = Deck::load(&t, index, |native| {
+            self.render.lock().unwrap().deck_rate(native)
+        })?;
         let levelling = self.render.lock().unwrap().state.levelling.clone();
         self.shape(&mut deck, &t, &levelling, queue);
         Ok(deck)
@@ -646,7 +728,7 @@ impl Engine {
             deck.source
                 .try_seek(Duration::from_secs_f64(target))
                 .map_err(err)?;
-            deck.samples = (target * (RATE * 2) as f64) as u64;
+            deck.samples = (target * (deck.rate * 2) as f64) as u64;
         }
         let mut r = self.render.lock().unwrap();
         if r.epoch != epoch {
@@ -913,12 +995,18 @@ impl Engine {
                         serde_json::from_value(value).map_err(|_| "Invalid equalizer settings")?;
                     settings.validate()?;
                     let mut r = self.render.lock().unwrap();
-                    r.eq = crate::dsp::Equalizer::new(&settings, RATE as f64);
+                    r.eq = crate::dsp::Equalizer::new(&settings, r.rate as f64);
                     r.state.eq = settings;
                 }
                 "device" => {
                     let mut r = self.render.lock().unwrap();
                     r.state.output_device = value.as_str().map(str::to_owned);
+                    r.reopen = true;
+                }
+                "exclusive" => {
+                    let on = value.as_bool().ok_or("Missing exclusive mode setting")?;
+                    let mut r = self.render.lock().unwrap();
+                    r.state.exclusive = on;
                     r.reopen = true;
                 }
                 "remove" => {
@@ -1025,7 +1113,10 @@ impl Engine {
         let engine = self.clone();
         std::thread::spawn(move || {
             let lost = Arc::new(AtomicBool::new(false));
-            let mut output: Option<(rodio::OutputStream, Sink)> = None;
+            let mut output: Option<Output> = None;
+            // Why exclusive mode stopped, and whether to stay shared until it is asked for again.
+            let problem = Arc::new(Mutex::new(None::<String>));
+            let mut exclusive_blocked = false;
             let mut media = souvlaki::MediaControls::new(souvlaki::PlatformConfig {
                 dbus_name: "slate_music",
                 display_name: "Slate Music",
@@ -1073,19 +1164,54 @@ impl Engine {
                 tick += 1;
                 if lost.swap(false, Ordering::SeqCst) {
                     output.take();
+                    let why = problem.lock().unwrap().take();
                     let mut r = engine.render.lock().unwrap();
                     r.state.playing = false;
                     r.state.engine_ready = false;
-                    r.state.error = Some(
-                        "Audio device disconnected. Reconnecting; playback will stay paused."
-                            .into(),
-                    );
+                    r.state.error = Some(match why {
+                        Some(why) => {
+                            exclusive_blocked = true;
+                            format!("Exclusive mode stopped: {why}. Slate Music plays through Windows instead until you turn exclusive mode on again.")
+                        }
+                        None => {
+                            "Audio device disconnected. Reconnecting; playback will stay paused."
+                                .into()
+                        }
+                    });
                 }
                 let reopen = std::mem::take(&mut engine.render.lock().unwrap().reopen);
                 if reopen {
                     output.take();
+                    exclusive_blocked = false;
                 }
+                let mut notice = None;
+                #[cfg(windows)]
                 if output.is_none() && (reopen || tick % 12 == 1) {
+                    let (wanted, exclusive) = {
+                        let r = engine.render.lock().unwrap();
+                        (r.state.output_device.clone(), r.state.exclusive)
+                    };
+                    if exclusive && !exclusive_blocked {
+                        match crate::wasapi::probe(wanted.clone()) {
+                            Ok(support) => {
+                                engine.use_exclusive(Some(support.clone()));
+                                output = Some(Output::Exclusive(crate::wasapi::Exclusive::start(
+                                    support,
+                                    wanted,
+                                    engine.render.clone(),
+                                    problem.clone(),
+                                    lost.clone(),
+                                )));
+                            }
+                            Err(why) => {
+                                exclusive_blocked = true;
+                                notice = Some(format!("Exclusive mode isn't available: {why}. Slate Music plays through Windows instead."));
+                            }
+                        }
+                    }
+                }
+                if output.is_none() && (reopen || notice.is_some() || tick % 12 == 1) {
+                    engine.use_exclusive(None);
                     let signal = lost.clone();
                     let wanted = engine.render.lock().unwrap().state.output_device.clone();
                     let (device, name, fallback) = choose_device(wanted.as_deref());
@@ -1107,13 +1233,14 @@ impl Engine {
                                 sample_rate: stream.config().sample_rate(),
                                 channels: stream.config().channel_count(),
                                 fallback,
+                                ..Default::default()
                             };
                             let sink = Sink::connect_new(stream.mixer());
                             sink.append(Mixer(engine.render.clone()));
-                            output = Some((stream, sink));
+                            output = Some(Output::Shared(stream, sink));
                             let mut r = engine.render.lock().unwrap();
                             r.state.engine_ready = true;
-                            r.state.error = None;
+                            r.state.error = notice.take();
                             r.state.output = Some(info);
                         }
                         Err(e) => {
@@ -1246,6 +1373,8 @@ mod tests {
             audible_end: frames as f64 / RATE as f64,
             start_silence: 0.,
             continues_album: false,
+            rate: RATE,
+            bits: 16,
         }
     }
     fn render() -> RenderState {
@@ -1266,7 +1395,114 @@ mod tests {
             eq: crate::dsp::Equalizer::default(),
             channel: 0,
             reopen: false,
+            rate: RATE,
+            exclusive: None,
+            rate_pending: false,
         }
+    }
+    /// Writes a WAV of pseudo-random samples and returns them as whole numbers.
+    fn noise_wav(path: &std::path::Path, rate: u32, bits: u16, frames: usize) -> Vec<i32> {
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: rate,
+            bits_per_sample: bits,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        let mut seed = 12345u64;
+        let top = 1i64 << (bits - 1);
+        let values: Vec<i32> = (0..frames * 2)
+            .map(|i| {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                // Include the extremes, where rounding mistakes would show.
+                match i {
+                    0 => (-top) as i32,
+                    1 => (top - 1) as i32,
+                    _ => ((seed >> 33) as i64 % (2 * top) - top) as i32,
+                }
+            })
+            .collect();
+        for v in &values {
+            w.write_sample(*v).unwrap();
+        }
+        w.finalize().unwrap();
+        values
+    }
+    #[test]
+    fn exclusive_mode_sends_the_files_own_numbers() {
+        use crate::exclusive::{to_pcm, Layout, Support};
+        let dir = tempfile::tempdir().unwrap();
+        for (rate, bits, layout) in [
+            (
+                44100,
+                16,
+                Layout {
+                    container: 16,
+                    valid: 16,
+                },
+            ),
+            (
+                96000,
+                24,
+                Layout {
+                    container: 32,
+                    valid: 24,
+                },
+            ),
+        ] {
+            let path = dir.path().join(format!("{rate}-{bits}.wav"));
+            let values = noise_wav(&path, rate, bits, 4000);
+            let track = Track {
+                id: "n".into(),
+                path: path.to_string_lossy().into(),
+                bit_depth: bits as u8,
+                ..Default::default()
+            };
+            let mut r = render();
+            r.exclusive = Some(Support {
+                device: "DAC".into(),
+                fallback: false,
+                formats: vec![(rate, layout)],
+            });
+            let deck = Deck::load(&track, 0, |native| r.deck_rate(native)).unwrap();
+            assert_eq!((deck.rate, deck.bits), (rate, bits));
+            r.current = Some(deck);
+            r.next = None;
+            r.use_rate(rate);
+            let mut out = [0u8; 4];
+            for (i, want) in values.iter().enumerate() {
+                let sample = r.sample();
+                r.channel ^= 1;
+                to_pcm(sample, layout, &mut out);
+                let got = match layout.container {
+                    16 => i16::from_le_bytes([out[0], out[1]]) as i32,
+                    _ => i32::from_le_bytes(out) >> (32 - layout.valid),
+                };
+                assert_eq!(got, *want, "{bits}-bit sample {i}");
+            }
+        }
+    }
+    #[test]
+    fn a_song_at_another_rate_waits_for_the_device_in_exclusive_mode() {
+        let mut r = render();
+        r.exclusive = Some(Default::default());
+        r.next.as_mut().unwrap().rate = 44100;
+        let first: Vec<f32> = (0..960).map(|_| r.sample()).collect();
+        assert_eq!(first, vec![0.25; 960]);
+        // The first song ends; the next one is at 44.1 kHz, so nothing plays until reopened.
+        assert_eq!(r.sample(), 0.);
+        assert!(r.rate_pending);
+        assert_eq!(r.current_rate(), 44100);
+        assert_eq!(r.current.as_ref().unwrap().samples, 0, "nothing consumed");
+        r.use_rate(44100);
+        assert!(!r.rate_pending);
+        assert_eq!(r.sample(), 0.5);
+        // Shared mode never waits: every song is mixed at 48 kHz.
+        let mut shared = render();
+        let _: Vec<f32> = (0..961).map(|_| shared.sample()).collect();
+        assert!(!shared.rate_pending);
     }
     #[test]
     fn sample_exact_gapless_boundary() {
@@ -1819,6 +2055,7 @@ mod tests {
                     ..Default::default()
                 },
                 index,
+                |_| RATE,
             )
             .unwrap()
         };
