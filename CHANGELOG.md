@@ -3,7 +3,11 @@
 ## 1.0.3 — unreleased
 
 - Import Spotify playlists instead of albums. Pick from your own playlists or paste a playlist link, then update an imported playlist from Spotify later without losing songs you already matched. Uses Spotify's 2026 playlist API; earlier connections need one Reconnect for playlist access.
+- Import Spotify Liked Songs as a playlist and, optionally, add the matched songs to Favorites (needs one Reconnect for the `user-library-read` permission). Large imports are matched much faster.
 - Use the album name to choose between an album cut and a compilation copy of the same song.
+- Recognize songs whose files were moved or renamed inside the library: favorites, play counts, history, playlist places and the queue carry over, and no "Unavailable" copy is left behind. Songs on a disconnected drive are left alone, and ambiguous duplicates are not guessed.
+- Settings can remove unavailable songs (deleted files or disconnected drives); playlists keep them as missing entries.
+- Find album covers with other file names, such as "Artist - Album [2008].jpg" or a front image in the album folder above "CD1"/"Disc 2" folders, and pick up cover images added after a song was indexed.
 - Right-click a song for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer; right-click an album to play or queue it. The browser's own context menu no longer appears.
 - Add Play next, Clear up next (keeps the current song playing) and Save queue as playlist. Albums are added to the queue in one step.
 - Add a sleep timer (15 minutes to 1½ hours, or end of the current song).

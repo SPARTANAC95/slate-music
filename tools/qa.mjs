@@ -44,6 +44,8 @@ initial = await snap();
 const selectedTitle = initial.tracks.find((t) => !t.missing && t.duration > 60)?.title;
 assert(selectedTitle, 'QA needs one available track longer than a minute');
 let testCollectionId;
+// Unique per run, because a QA profile may be reused.
+const queueName = `QA saved queue ${Date.now() % 100000}`;
 try {
   await test('Read-only scan indexed real library with artwork', async () => {
     assert(initial.tracks.length > 0);
@@ -169,17 +171,21 @@ try {
   await test('Spotify playlist import reports setup requirement honestly', async () => {
     await page.getByRole('button', { name: 'Import Spotify playlist', exact: true }).click();
     const { spotify } = await snap();
-    if (!spotify.connected) {
-      await page.getByText('Connect Spotify once').waitFor();
-      assert(await page.getByRole('button', { name: 'Set up Spotify', exact: true }).count());
-    } else if (!spotify.playlistAccess) {
-      assert(await page.getByRole('button', { name: 'Allow playlist access' }).count());
-    } else {
-      await page.getByText('Your Spotify playlists').waitFor();
+    try {
+      if (!spotify.connected) {
+        await page.getByText('Connect Spotify once').waitFor();
+        assert(await page.getByRole('button', { name: 'Set up Spotify', exact: true }).count());
+      } else if (!spotify.playlistAccess) {
+        assert(await page.getByRole('button', { name: 'Allow playlist access' }).count());
+      } else {
+        await page.getByRole('heading', { name: 'Your Spotify playlists' }).waitFor();
+        assert(await page.getByRole('button', { name: /Liked Songs/ }).count());
+      }
+      assert(!(await page.getByText(/album link|album URL/i).count()));
+      await page.screenshot({ path: path.join(output, 'spotify-setup.png') });
+    } finally {
+      await page.getByRole('button', { name: 'Close dialog' }).click();
     }
-    assert(!(await page.getByText(/album link|album URL/i).count()));
-    await page.screenshot({ path: path.join(output, 'spotify-setup.png') });
-    await page.getByRole('button', { name: 'Close dialog' }).click();
   });
   await test('Right-click menu plays next, adds to queue and opens the album', async () => {
     const songs = initial.tracks.filter((t) => !t.missing);
@@ -255,10 +261,10 @@ try {
     await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await page.getByRole('button', { name: 'Save as playlist' }).click();
     await page.getByRole('button', { name: 'New playlist', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Playlist name', exact: true }).fill('QA saved queue');
+    await page.getByRole('textbox', { name: 'Playlist name', exact: true }).fill(queueName);
     await page.getByRole('button', { name: 'Create playlist', exact: true }).last().click();
     await waitFor(async () =>
-      (await snap()).collections.some((c) => c.name === 'QA saved queue' && c.entries.length === 3),
+      (await snap()).collections.some((c) => c.name === queueName && c.entries.length === 3),
     );
     await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await page.getByRole('button', { name: 'Clear up next' }).click();
@@ -269,15 +275,20 @@ try {
     await invoke('playback', { action: 'pause' });
   });
   await test('Adding a song already in a playlist is not duplicated', async () => {
-    const saved = (await snap()).collections.find((c) => c.name === 'QA saved queue');
+    const saved = (await snap()).collections.find((c) => c.name === queueName);
     const title = initial.tracks.find((t) => t.id === saved.entries[0].trackId).title;
     await page.getByRole('button', { name: 'Songs', exact: true }).first().click();
     await page
       .getByRole('button', { name: `Add ${title} to playlist`, exact: true })
       .first()
       .click();
-    await page.getByRole('dialog').getByRole('button', { name: 'QA saved queue' }).click();
-    await page.getByText('Already in QA saved queue').waitFor();
+    try {
+      await page.getByRole('dialog').getByRole('button', { name: queueName }).click();
+      await page.getByText(`Already in ${queueName}`).waitFor();
+    } finally {
+      if (await page.getByRole('dialog').count())
+        await page.getByRole('button', { name: 'Close dialog' }).click();
+    }
     assert.equal(
       (await snap()).collections.find((c) => c.id === saved.id).entries.length,
       saved.entries.length,

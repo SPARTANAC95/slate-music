@@ -92,11 +92,24 @@ function rank(r: Remote, l: Local) {
   return { id: local.id, score: Math.max(0, score), reason };
 }
 export function matchTracks(remote: SpotifyTrack[], local: Track[]): Entry[] {
+  // A song sharing no title word scores at most 0.47, below the 0.55 candidate threshold, so
+  // only songs found through a shared title word need ranking. This keeps large imports fast.
   const prepared = local.filter((t) => !t.missing).map(prepareLocal);
+  const byWord = new Map<string, number[]>();
+  prepared.forEach((l, i) => {
+    for (const word of new Set(l.rec.base.split(' '))) {
+      if (!word) continue;
+      const list = byWord.get(word);
+      if (list) list.push(i);
+      else byWord.set(word, [i]);
+    }
+  });
   return remote.map((r) => {
     const features = prepareRemote(r);
-    const candidates = prepared
-      .map((l) => rank(features, l))
+    const nearby = new Set(features.rec.base.split(' ').flatMap((w) => byWord.get(w) || []));
+    const candidates = [...nearby]
+      .sort((a, b) => a - b)
+      .map((i) => rank(features, prepared[i]))
       .filter((c) => c.score >= 0.55)
       .sort((a, b) => b.score - a.score)
       .slice(0, 6);

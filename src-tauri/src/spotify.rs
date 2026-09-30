@@ -9,7 +9,9 @@ use std::{
 };
 
 pub const REDIRECT: &str = "http://127.0.0.1:43829/callback";
-const SCOPES: &str = "playlist-read-private playlist-read-collaborative";
+const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-library-read";
+/// The Liked Songs collection has no playlist ID; this address stands for it.
+pub const LIKED_URL: &str = "https://open.spotify.com/collection/tracks";
 fn client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(25))
@@ -223,10 +225,16 @@ fn token(db: &Database) -> Result<String> {
     store(db, next, Some(&value))?;
     Ok(access)
 }
-pub fn playlist_access(db: &Database) -> bool {
+fn granted(db: &Database, scope: &str) -> bool {
     db.get("spotify_scope")
         .as_str()
-        .is_some_and(|s| s.split(' ').any(|scope| scope == "playlist-read-private"))
+        .is_some_and(|s| s.split(' ').any(|granted| granted == scope))
+}
+pub fn playlist_access(db: &Database) -> bool {
+    granted(db, "playlist-read-private")
+}
+pub fn liked_access(db: &Database) -> bool {
+    granted(db, "user-library-read")
 }
 const NOT_YOURS: &str = "Spotify only lets apps read playlists you created or collaborate on. To import someone else's playlist, copy its songs into a new playlist of your own in Spotify, then import that.";
 /// Playlist reads get their own messages: Spotify answers 403 for playlists the user does
@@ -379,6 +387,33 @@ pub fn playlist(db: &Database, input: &str) -> Result<Value> {
         "name": meta["name"].as_str().unwrap_or("Spotify playlist"),
         "owner": owner["display_name"].as_str().or(owner["id"].as_str()).unwrap_or_default(),
         "url": format!("https://open.spotify.com/playlist/{id}"),
+        "tracks": tracks,
+        "skipped": skipped,
+    }))
+}
+/// The user's Liked Songs, newest first, in the same shape as a playlist.
+pub fn liked(db: &Database) -> Result<Value> {
+    if !liked_access(db) {
+        return Err("Reconnect Spotify to allow Slate Music to read your Liked Songs.".into());
+    }
+    let token = token(db)?;
+    let (items, total) = pages(
+        &client()?,
+        &token,
+        "https://api.spotify.com/v1/me/tracks?limit=50".into(),
+        "/v1/me/tracks",
+        250,
+        response,
+    )?;
+    if total.is_some_and(|n| n as usize != items.len()) {
+        return Err("Spotify returned an incomplete list of Liked Songs. Please try again.".into());
+    }
+    let (tracks, skipped) = playlist_tracks(&items);
+    Ok(json!({
+        "id": "liked",
+        "name": "Liked Songs",
+        "owner": "",
+        "url": LIKED_URL,
         "tracks": tracks,
         "skipped": skipped,
     }))

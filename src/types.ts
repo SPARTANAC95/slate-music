@@ -79,6 +79,7 @@ export interface Snapshot {
   spotify: {
     connected: boolean;
     playlistAccess: boolean;
+    likedAccess: boolean;
     clientId: string | null;
     redirectUri: string;
   };

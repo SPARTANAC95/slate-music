@@ -35,6 +35,7 @@ export default function SettingsPanel({
   const [clientId, setClientId] = useState(data.spotify.clientId || '');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  const missing = data.tracks.filter((t) => t.missing).length;
   async function run(label: string, action: () => Promise<unknown>) {
     setBusy(label);
     setMessage('');
@@ -76,6 +77,21 @@ export default function SettingsPanel({
             {data.scan.scanning ? 'Scanning…' : 'Rescan'}
           </button>
         </div>
+        {missing > 0 && (
+          <div className="missing-songs">
+            <p>
+              {missing} song{missing === 1 ? ' is' : 's are'} unavailable: deleted, or on a drive
+              that isn’t connected. Moved songs are recognized automatically and keep their
+              favorites, plays and playlist places.
+            </p>
+            <button
+              disabled={!!busy || data.scan.scanning}
+              onClick={() => run('missing', () => invoke('remove_missing'))}
+            >
+              Remove unavailable songs
+            </button>
+          </div>
+        )}
         {data.scan.errors.length > 0 && (
           <details className="scan-errors">
             <summary>
@@ -133,13 +149,14 @@ export default function SettingsPanel({
           {data.spotify.connected && <span className="badge">Connected</span>}
         </div>
         <p>
-          Bring your Spotify playlists into your local library. Slate Music reads each playlist’s
-          song list and matches it to files you already own. Only metadata is requested.
+          Bring your Spotify playlists and Liked Songs into your local library. Slate Music reads
+          each song list and matches it to files you already own. Only metadata is requested.
         </p>
-        {data.spotify.connected && !data.spotify.playlistAccess && (
+        {data.spotify.connected && (!data.spotify.playlistAccess || !data.spotify.likedAccess) && (
           <p className="inline-error">
-            This connection was made before playlist import and cannot read your playlists yet.
-            Choose Reconnect and approve the request in your browser.
+            This connection was made before {data.spotify.playlistAccess ? 'Liked Songs' : 'playlist'}{' '}
+            import and cannot read your {data.spotify.playlistAccess ? 'Liked Songs' : 'playlists'}{' '}
+            yet. Choose Reconnect and approve the request in your browser.
           </p>
         )}
         <ol className="setup-steps">

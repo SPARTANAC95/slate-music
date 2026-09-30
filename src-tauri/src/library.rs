@@ -7,14 +7,14 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
     time::UNIX_EPOCH,
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,9 @@ pub struct ScanStatus {
     pub changed: usize,
     pub errors: Vec<String>,
     pub last_scan: i64,
+    /// (old ID, new ID) for songs recognized as moved during this scan.
+    #[serde(skip)]
+    pub relinked: Vec<(String, String)>,
 }
 pub struct Library {
     pub status: Mutex<ScanStatus>,
@@ -82,6 +85,77 @@ fn cache_art(data: &[u8], db: &Database) -> Option<String> {
     }
     Some(hash)
 }
+/// Album images next to the songs, used when a file has no embedded artwork.
+const COVER_NAMES: [&str; 6] = [
+    "cover.jpg",
+    "folder.jpg",
+    "front.jpg",
+    "cover.png",
+    "Folder.jpg",
+    "Cover.jpg",
+];
+/// Finds album art beside a song: the usual names first, then an image named like a front
+/// cover, then the folder's only image (e.g. "Artist - Album [2008].jpg"). Songs in disc
+/// folders ("CD1", "Disc 2") also look in the album folder above.
+fn folder_cover(path: &Path) -> Option<PathBuf> {
+    let folder = path.parent()?;
+    let is_disc = |name: &str| {
+        let name = name.to_lowercase();
+        ["cd", "disc", "disk"].iter().any(|p| {
+            name.strip_prefix(p).is_some_and(|rest| {
+                rest.trim_start_matches([' ', '-', '_', '.'])
+                    .starts_with(|c: char| c.is_ascii_digit())
+            })
+        })
+    };
+    let parent = folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| is_disc(n))
+        .and_then(|_| folder.parent());
+    for dir in std::iter::once(folder).chain(parent) {
+        if let Some(file) = COVER_NAMES.iter().map(|n| dir.join(n)).find(|f| f.is_file()) {
+            return Some(file);
+        }
+        let images: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                        matches!(e.to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp")
+                    })
+            })
+            .collect();
+        let stem = |p: &PathBuf| {
+            p.file_stem()
+                .map(|s| s.to_string_lossy().to_lowercase())
+                .unwrap_or_default()
+        };
+        let front = images.iter().find(|p| {
+            let s = stem(p);
+            ["cover", "front", "folder", "albumart"]
+                .iter()
+                .any(|k| s.contains(k))
+                && !s.contains("back")
+        });
+        let only = match images.as_slice() {
+            [one] if !["back", "inlay", "tray", "cd", "disc", "booklet"]
+                .iter()
+                .any(|k| stem(one).contains(k)) =>
+            {
+                Some(one)
+            }
+            _ => None,
+        };
+        if let Some(file) = front.or(only) {
+            return Some(file.clone());
+        }
+    }
+    None
+}
 pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
     let tagged = lofty::read_from_path(path).map_err(err)?;
     let props = tagged.properties();
@@ -121,21 +195,9 @@ pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
         .and_then(|t| t.pictures().first())
         .and_then(|p| cache_art(p.data(), db));
     if artwork.is_none() {
-        for name in [
-            "cover.jpg",
-            "folder.jpg",
-            "front.jpg",
-            "cover.png",
-            "Folder.jpg",
-            "Cover.jpg",
-        ] {
-            if let Ok(data) = std::fs::read(path.parent().unwrap_or(Path::new(".")).join(name)) {
-                artwork = cache_art(&data, db);
-                if artwork.is_some() {
-                    break;
-                }
-            }
-        }
+        artwork = folder_cover(path)
+            .and_then(|file| std::fs::read(file).ok())
+            .and_then(|data| cache_art(&data, db));
     }
     let meta = path.metadata().map_err(err)?;
     Ok(Track {
@@ -216,7 +278,12 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
-            if !db.unchanged(&id, mtime, meta.len()) {
+            // An unchanged song is read again when a cover image has since appeared beside it.
+            let new_cover = known_by_id
+                .get(id.as_str())
+                .is_some_and(|t| t.artwork.is_none())
+                && folder_cover(path).is_some();
+            if new_cover || !db.unchanged(&id, mtime, meta.len()) {
                 match read_track(path, &folder, db) {
                     Ok(mut t) => {
                         if let Some(old) = known_by_id.get(id.as_str()) {
@@ -252,6 +319,10 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
             }
         }
     }
+    match db.relink_moved() {
+        Ok(moved) => status.relinked = moved,
+        Err(e) => status.errors.push(format!("Could not update moved songs: {e}")),
+    }
     status.scanning = false;
     status.last_scan = now();
     progress(status.clone());
@@ -267,10 +338,13 @@ pub fn start_scan(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
     };
     std::thread::spawn(move || loop {
         lib.pending.store(false, Ordering::SeqCst);
-        scan(&db, |s| {
+        let status = scan(&db, |s| {
             *lib.status.lock().unwrap() = s.clone();
             let _ = app.emit("scan", s);
         });
+        if let Some(state) = app.try_state::<crate::AppState>() {
+            state.engine.remap(&status.relinked);
+        }
         let _ = app.emit("library-changed", ());
         if !lib.continue_scan() {
             break;
@@ -322,6 +396,127 @@ mod tests {
         library.pending.store(false, Ordering::SeqCst);
         assert!(!library.continue_scan());
         assert!(library.request_scan());
+    }
+    fn wav(path: &Path, frames: u32) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        for _ in 0..frames * 2 {
+            w.write_sample(0i16).unwrap()
+        }
+        w.finalize().unwrap();
+    }
+    fn library(root: &Path, folders: &[&Path]) -> Database {
+        let db = Database::open(&root.join("db")).unwrap();
+        db.set("folders", &serde_json::json!(folders)).unwrap();
+        db
+    }
+    #[test]
+    fn moved_song_keeps_favorite_plays_history_and_playlist_places() {
+        let d = tempfile::tempdir().unwrap();
+        let music = d.path().join("music");
+        // Untagged files take their album name from the folder, so the album folder is kept.
+        let before = music.join("Downloads").join("Night Drive").join("song.wav");
+        let after = music.join("Aurora Lane").join("Night Drive").join("song.wav");
+        wav(&before, 9600);
+        let db = library(d.path(), &[&music]);
+        scan(&db, |_| {});
+        let old = db.tracks().unwrap()[0].id.clone();
+        db.favorite(&old, true).unwrap();
+        db.played(&old).unwrap();
+        db.save_collection(serde_json::json!({"id":"p","name":"Mix","entries":[{"trackId":old,"candidates":[{"id":old}]}]}))
+            .unwrap();
+        std::fs::create_dir_all(after.parent().unwrap()).unwrap();
+        std::fs::rename(&before, &after).unwrap();
+        let status = scan(&db, |_| {});
+        let tracks = db.tracks().unwrap();
+        assert_eq!(tracks.len(), 1, "the leftover entry is gone");
+        let t = &tracks[0];
+        assert_eq!(status.relinked, vec![(old.clone(), t.id.clone())]);
+        assert!(!t.missing && t.favorite);
+        assert_eq!(t.play_count, 1);
+        let history: String = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT track_id FROM history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(history, t.id);
+        let entry = &db.collections().unwrap()[0]["entries"][0];
+        assert_eq!(entry["trackId"], t.id.as_str());
+        assert_eq!(entry["candidates"][0]["id"], t.id.as_str());
+    }
+    #[test]
+    fn unavailable_folders_and_ambiguous_copies_are_left_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let (music, other) = (d.path().join("music"), d.path().join("usb"));
+        let song = |root: &Path, sub: &str| root.join(sub).join("Album").join("song.wav");
+        wav(&song(&other, "a"), 4800);
+        wav(&song(&music, "b"), 4800);
+        let db = library(d.path(), &[&music, &other]);
+        scan(&db, |_| {});
+        std::fs::remove_dir_all(&other).unwrap(); // the drive is unplugged
+        let status = scan(&db, |_| {});
+        assert!(status.relinked.is_empty());
+        assert_eq!(db.tracks().unwrap().iter().filter(|t| t.missing).count(), 1);
+        // A moved song with two identical candidates is not guessed.
+        wav(&song(&music, "c"), 2400);
+        scan(&db, |_| {});
+        wav(&song(&music, "d"), 2400);
+        wav(&song(&music, "e"), 2400);
+        std::fs::remove_file(song(&music, "c")).unwrap();
+        let status = scan(&db, |_| {});
+        assert!(status.relinked.is_empty());
+        assert_eq!(db.remove_missing().unwrap().len(), 2);
+        assert!(db.tracks().unwrap().iter().all(|t| !t.missing));
+    }
+    #[test]
+    fn a_cover_added_later_is_picked_up_without_changing_the_song() {
+        let d = tempfile::tempdir().unwrap();
+        let music = d.path().join("music");
+        let file = music.join("Album").join("song.wav");
+        wav(&file, 4800);
+        let db = library(d.path(), &[&music]);
+        scan(&db, |_| {});
+        assert!(db.tracks().unwrap()[0].artwork.is_none());
+        image::RgbImage::new(8, 8)
+            .save(music.join("Album").join("cover.png"))
+            .unwrap();
+        assert_eq!(scan(&db, |_| {}).changed, 1);
+        assert!(db.tracks().unwrap()[0].artwork.is_some());
+        assert_eq!(scan(&db, |_| {}).changed, 0);
+    }
+    #[test]
+    fn finds_covers_named_after_the_album_and_above_disc_folders() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        let img = |p: PathBuf| image::RgbImage::new(4, 4).save(p).unwrap();
+        let named = root.join("Walking On A Dream");
+        wav(&named.join("01.wav"), 10);
+        img(named.join("Empire Of The Sun - Walking On A Dream [2008].jpg"));
+        assert!(folder_cover(&named.join("01.wav")).is_some());
+        let back_only = root.join("Back only");
+        wav(&back_only.join("01.wav"), 10);
+        img(back_only.join("Back.jpg"));
+        assert!(folder_cover(&back_only.join("01.wav")).is_none());
+        let album = root.join("Trilogy");
+        wav(&album.join("Disc 1 - House").join("01.wav"), 10);
+        img(album.join("front.png"));
+        img(album.join("back.png"));
+        assert_eq!(
+            folder_cover(&album.join("Disc 1 - House").join("01.wav")),
+            Some(album.join("front.png"))
+        );
+        let several = root.join("Several");
+        wav(&several.join("01.wav"), 10);
+        img(several.join("a.jpg"));
+        img(several.join("b.jpg"));
+        assert!(folder_cover(&several.join("01.wav")).is_none(), "no guessing between images");
     }
     #[test]
     fn incremental_scan_missing_and_returning_file() {

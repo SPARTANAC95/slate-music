@@ -7,6 +7,7 @@ import {
   Check,
   Link2,
   ListMusic,
+  Heart,
   Lock,
   RefreshCw,
   Search,
@@ -23,7 +24,9 @@ import type {
 } from './types';
 import { keepConfirmed, matchTracks } from './matching';
 import { normalize, time, reorder, entryStatus } from './library';
-import { Art, IconButton } from './components';
+import { Art, IconButton, Toggle } from './components';
+/** Slate's address for the Liked Songs collection (matches spotify.rs). */
+const LIKED_URL = 'https://open.spotify.com/collection/tracks';
 export default function ImportPanel({
   tracks,
   existing,
@@ -47,11 +50,13 @@ export default function ImportPanel({
     [collection, setCollection] = useState<Collection | null>(existing || null),
     [playlists, setPlaylists] = useState<SpotifyPlaylistSummary[] | null>(null),
     [filter, setFilter] = useState(''),
+    [heartLiked, setHeartLiked] = useState(true),
     [picking, setPicking] = useState<number | null>(null),
     [query, setQuery] = useState('');
   const trackMap = useMemo(() => new Map(tracks.map((t) => [t.id, t])), [tracks]);
   const ready = spotify.connected && spotify.playlistAccess;
-  const fromSpotify = !!collection?.sourceUrl?.includes('/playlist/');
+  const isLiked = collection?.sourceUrl === LIKED_URL;
+  const fromSpotify = !!collection?.sourceUrl?.includes('/playlist/') || isLiked;
   async function loadPlaylists() {
     setBusy('list');
     setError('');
@@ -73,7 +78,10 @@ export default function ImportPanel({
     setError('');
     setNotice('');
     try {
-      const playlist = await invoke<SpotifyPlaylist>('spotify_playlist', { url: source });
+      const playlist =
+        source === LIKED_URL
+          ? await invoke<SpotifyPlaylist>('spotify_liked')
+          : await invoke<SpotifyPlaylist>('spotify_playlist', { url: source });
       const skipped = playlist.skipped
         ? ` ${playlist.skipped} podcast episode${playlist.skipped === 1 ? '' : 's'} or unavailable item${playlist.skipped === 1 ? ' was' : 's were'} left out.`
         : '';
@@ -254,6 +262,14 @@ export default function ImportPanel({
             ))}
           </div>
           {notice && <p className="import-notice">{notice}</p>}
+          {isLiked && (
+            <Toggle
+              label="Also add matched songs to Favorites"
+              description="Hearts every song that has a confirmed match. Songs already in Favorites stay there."
+              checked={heartLiked}
+              onChange={setHeartLiked}
+            />
+          )}
           <p className="fine-print">
             Only confirmed, available files enter playback. Review uncertain versions before saving.
             Your files and tags stay unchanged.
@@ -329,6 +345,12 @@ export default function ImportPanel({
               onClick={async () => {
                 setBusy('save');
                 try {
+                  if (isLiked && heartLiked) {
+                    const ids = collection.entries.flatMap((e) =>
+                      e.trackId && entryStatus(e, trackMap) === 'available' ? [e.trackId] : [],
+                    );
+                    await invoke('favorite_many', { ids });
+                  }
                   await onSave(collection);
                 } catch (e) {
                   setError(String(e));
@@ -391,6 +413,27 @@ export default function ImportPanel({
                   </label>
                 )}
                 <div className="playlist-list">
+                  <button
+                    className="playlist-option liked"
+                    disabled={!!busy}
+                    onClick={() =>
+                      spotify.likedAccess ? importPlaylist(LIKED_URL, 'liked') : allowAccess()
+                    }
+                  >
+                    <Heart size={17} />
+                    <span>
+                      <strong>Liked Songs</strong>
+                      <small>
+                        {loading === 'liked'
+                          ? 'Reading every song…'
+                          : busy === 'connect'
+                            ? 'Waiting for approval in your browser…'
+                            : spotify.likedAccess
+                              ? 'Import as a playlist and add matches to Favorites'
+                              : 'Needs one more approval in your browser'}
+                      </small>
+                    </span>
+                  </button>
                   {playlists === null ? (
                     <p className="fine-print">Loading your playlists…</p>
                   ) : playlists.length === 0 ? (

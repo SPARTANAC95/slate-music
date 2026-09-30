@@ -17,7 +17,8 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 - Double-click a song or use its play button. Reorder upcoming songs in Queue. Play/pause, previous/next, seeking, volume, shuffle and repeat work with the native audio engine.
 - Use the mini-player or Windows media controls. The app restores its queue and position paused, including after an update.
 - Gapless playback is enabled with crossfade off. Choose an optional 2–12 second crossfade in Settings.
-- Settings controls watched folders, rescanning, Spotify setup and updates. Disconnected drives retain their entries as unavailable; reconnect and rescan to restore them.
+- Settings controls watched folders, rescanning, Spotify setup and updates. Disconnected drives retain their entries as unavailable; reconnect and rescan to restore them. Songs you move or rename inside a watched folder are recognized and keep their favorites, plays and playlist places. Settings can remove songs that stay unavailable.
+- Album art comes from the file itself, or from an image in the album folder: `cover.jpg`, `folder.jpg`, `front.jpg`, any image named like a front cover, or the folder's only image (e.g. `Artist - Album [2008].jpg`). Songs in `CD1`/`Disc 2` folders also use the album folder's image.
 
 | Shortcut | Action |
 |---|---|
@@ -46,6 +47,8 @@ This feature reads a Spotify playlist's song list and matches it to music you al
 4. Paste the **Client ID** in Slate Music Settings and choose **Connect Spotify**. No client secret is used. Sign-in opens your browser and asks permission to read your playlists.
 5. Choose **Import Spotify playlist** and pick one of your playlists, or paste an `open.spotify.com/playlist/...` link.
 6. Review available, uncertain and missing matches. Correct uncertain songs manually, then save the playlist.
+
+**Liked Songs** appears first in the list. Importing it saves a "Liked Songs" playlist and, unless you switch it off on the review screen, adds every matched song to Favorites. Connections made before this feature need one **Reconnect** for it.
 
 Spotify only lets apps read playlists you created or collaborate on. Other people's playlists and Spotify-made ones (Discover Weekly, Today's Top Hits and similar) appear locked; copy their songs into a playlist of your own in Spotify, then import that. Podcast episodes are left out. Connections made before playlist import need one **Reconnect** to grant playlist access.
 

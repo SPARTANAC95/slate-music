@@ -2,6 +2,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -216,6 +217,125 @@ impl Database {
             .execute("DELETE FROM collections WHERE id=?", [id])
             .map_err(err)?;
         Ok(())
+    }
+    /// A file moved inside the library shows up as a new song while its old path turns
+    /// unavailable. This pairs each such leftover with its identical new copy (same size, tags
+    /// and length), carries over its favorite, plays, history and playlist entries, and removes
+    /// the leftover. Songs in folders or drives that are not currently available are left
+    /// alone, and ambiguous duplicates are skipped. Returns (old ID, new ID) pairs.
+    pub fn relink_moved(&self) -> Result<Vec<(String, String)>> {
+        let tracks = self.tracks()?;
+        let key = |t: &Track| (t.size, t.title.clone(), t.artist.clone(), t.album.clone());
+        let mut present: HashMap<_, Vec<&Track>> = HashMap::new();
+        for t in tracks.iter().filter(|t| !t.missing) {
+            present.entry(key(t)).or_default().push(t);
+        }
+        let file_name = |p: &str| Path::new(p).file_name().map(|n| n.to_ascii_lowercase());
+        let mut pairs: Vec<(&Track, &Track)> = Vec::new();
+        for ghost in tracks.iter().filter(|t| t.missing && t.size > 0) {
+            if Path::new(&ghost.path).exists() || !Path::new(&ghost.folder).is_dir() {
+                continue;
+            }
+            let same: Vec<&Track> = present
+                .get(&key(ghost))
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|c| (c.duration - ghost.duration).abs() < 0.5)
+                .collect();
+            let named: Vec<&Track> = same
+                .iter()
+                .copied()
+                .filter(|c| file_name(&c.path) == file_name(&ghost.path))
+                .collect();
+            match (same.as_slice(), named.as_slice()) {
+                ([only], _) | (_, [only]) => pairs.push((ghost, only)),
+                _ => {}
+            }
+        }
+        if pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let moved: HashMap<&str, &str> = pairs
+            .iter()
+            .map(|(old, new)| (old.id.as_str(), new.id.as_str()))
+            .collect();
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction().map_err(err)?;
+        for (old, new) in &pairs {
+            tx.execute(
+                "UPDATE tracks SET favorite=MAX(favorite,?1),play_count=play_count+?2,last_played=MAX(last_played,?3) WHERE id=?4",
+                params![old.favorite, old.play_count, old.last_played, new.id],
+            )
+            .map_err(err)?;
+            if old.added > 0 && old.added < new.added {
+                let kept = Track {
+                    added: old.added,
+                    ..(*new).clone()
+                };
+                tx.execute(
+                    "UPDATE tracks SET data=? WHERE id=?",
+                    params![serde_json::to_string(&kept).map_err(err)?, new.id],
+                )
+                .map_err(err)?;
+            }
+            tx.execute(
+                "UPDATE history SET track_id=? WHERE track_id=?",
+                params![new.id, old.id],
+            )
+            .map_err(err)?;
+            tx.execute("DELETE FROM tracks WHERE id=?", [&old.id])
+                .map_err(err)?;
+        }
+        let saved: Vec<(String, String)> = {
+            let mut s = tx.prepare("SELECT id,data FROM collections").map_err(err)?;
+            let rows = s
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(err)?;
+            rows.collect::<std::result::Result<_, _>>().map_err(err)?
+        };
+        for (id, data) in saved {
+            let mut value: Value = serde_json::from_str(&data).map_err(err)?;
+            let mut changed = false;
+            let mut relink = |slot: &mut Value| {
+                if let Some(new) = slot.as_str().and_then(|old| moved.get(old)) {
+                    *slot = json!(new);
+                    changed = true;
+                }
+            };
+            for entry in value["entries"].as_array_mut().into_iter().flatten() {
+                relink(&mut entry["trackId"]);
+                for candidate in entry["candidates"].as_array_mut().into_iter().flatten() {
+                    relink(&mut candidate["id"]);
+                }
+            }
+            if changed {
+                tx.execute(
+                    "UPDATE collections SET data=? WHERE id=?",
+                    params![value.to_string(), id],
+                )
+                .map_err(err)?;
+            }
+        }
+        tx.commit().map_err(err)?;
+        Ok(pairs
+            .iter()
+            .map(|(old, new)| (old.id.clone(), new.id.clone()))
+            .collect())
+    }
+    /// Forgets every unavailable song. Playlists keep their entries, shown as missing.
+    pub fn remove_missing(&self) -> Result<Vec<String>> {
+        let c = self.conn.lock().unwrap();
+        let ids: Vec<String> = {
+            let mut s = c
+                .prepare("SELECT id FROM tracks WHERE missing=1")
+                .map_err(err)?;
+            let rows = s.query_map([], |r| r.get(0)).map_err(err)?;
+            rows.collect::<std::result::Result<_, _>>().map_err(err)?
+        };
+        c.execute("DELETE FROM tracks WHERE missing=1", [])
+            .map_err(err)?;
+        Ok(ids)
     }
     pub fn snapshot(&self) -> Result<Value> {
         Ok(

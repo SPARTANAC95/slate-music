@@ -1926,6 +1926,24 @@ input[type='range']:disabled {
 .candidate > svg {
   color: #93809e;
 }
+.missing-songs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.missing-songs p {
+  font-size: 11px;
+  line-height: 1.7;
+}
+.missing-songs button {
+  flex-shrink: 0;
+  font-size: 11px;
+}
 .import-callout {
   display: flex;
   align-items: center;

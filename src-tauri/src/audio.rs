@@ -3,7 +3,7 @@ use rand::seq::SliceRandom;
 use rodio::{source::UniformSourceIterator, Decoder, OutputStreamBuilder, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::File,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -99,6 +99,8 @@ pub struct RenderState {
     pub transition: u64,
     pub stopping: bool,
     pub next_attempt: Option<(u64, usize)>,
+    /// Old → new ID of the playing song after its file moved, so it is not counted again.
+    pub renamed: HashMap<String, String>,
 }
 impl RenderState {
     fn remove_queued(&mut self, index: usize) {
@@ -252,6 +254,7 @@ impl Engine {
                 transition: 0,
                 stopping: false,
                 next_attempt: None,
+                renamed: HashMap::new(),
             })),
             db,
             command_lock: Mutex::new(()),
@@ -264,6 +267,42 @@ impl Engine {
         let mut s = self.snapshot();
         s.playing = false;
         let _ = self.db.set("session", &serde_json::to_value(s).unwrap());
+    }
+    /// Points the listening session at the new IDs of songs whose files moved.
+    pub fn remap(&self, moved: &[(String, String)]) {
+        if moved.is_empty() {
+            return;
+        }
+        let map: HashMap<&str, &str> = moved.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        {
+            let mut r = self.render.lock().unwrap();
+            let r = &mut *r;
+            for id in r.state.queue.iter_mut().chain(r.state.current_id.as_mut()) {
+                if let Some(new) = map.get(id.as_str()) {
+                    *id = new.to_string();
+                }
+            }
+            for deck in r.current.iter_mut().chain(r.next.as_mut()) {
+                if let Some(new) = map.get(deck.id.as_str()) {
+                    r.renamed.insert(deck.id.clone(), new.to_string());
+                    deck.id = new.to_string();
+                }
+            }
+        }
+        self.save();
+    }
+    /// Drops forgotten songs from the queue, except the one that is loaded.
+    pub fn forget(&self, ids: &HashSet<String>) {
+        {
+            let mut r = self.render.lock().unwrap();
+            let loaded = r.current.as_ref().map(|d| d.index);
+            for i in (0..r.state.queue.len()).rev() {
+                if ids.contains(&r.state.queue[i]) && Some(i) != loaded {
+                    r.remove_queued(i);
+                }
+            }
+        }
+        self.save();
     }
     fn prepare(&self, id: &str, index: usize) -> Result<Deck> {
         let t = self.db.track(id)?;
@@ -737,7 +776,14 @@ impl Engine {
                     r.state.sleep_end_of_track = false;
                 }
                 let s = engine.snapshot();
-                let transition = engine.render.lock().unwrap().transition;
+                let transition = {
+                    let mut r = engine.render.lock().unwrap();
+                    if let Some(new) = r.renamed.remove(&last_play) {
+                        last_play = new;
+                    }
+                    r.renamed.clear();
+                    r.transition
+                };
                 if s.playing {
                     if let Some(id) = s.current_id.as_ref() {
                         if id != &last_play || transition != last_transition {
@@ -808,6 +854,7 @@ mod tests {
             transition: 0,
             stopping: false,
             next_attempt: None,
+            renamed: HashMap::new(),
         }
     }
     #[test]
@@ -1021,6 +1068,22 @@ mod tests {
         empty.render.lock().unwrap().state.current_id = None;
         let state = empty.command("clear_upcoming", serde_json::Value::Null).unwrap();
         assert!(state.queue.is_empty() && state.current_id.is_none() && !state.playing);
+    }
+    #[test]
+    fn moved_songs_keep_their_queue_places_and_removed_ones_leave_the_queue() {
+        let (_dir, engine) = test_engine();
+        engine
+            .command("queue", serde_json::json!({"ids":["a","b","c","b"],"index":0}))
+            .unwrap();
+        engine.remap(&[("a".into(), "a2".into()), ("b".into(), "b2".into())]);
+        let state = engine.snapshot();
+        assert_eq!(state.queue, vec!["a2", "b2", "c", "b2"]);
+        assert_eq!(state.current_id.as_deref(), Some("a2"));
+        assert_eq!(engine.render.lock().unwrap().renamed.get("a").map(String::as_str), Some("a2"));
+        engine.forget(&["b2".to_string(), "a2".to_string()].into_iter().collect());
+        let state = engine.snapshot();
+        assert_eq!(state.queue, vec!["a2", "c"], "the loaded song stays");
+        assert_eq!(state.cursor, 0);
     }
     #[test]
     fn sleep_timer_is_set_cancelled_and_never_restored() {
