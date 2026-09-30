@@ -137,7 +137,9 @@ fn folder_covers(path: &Path) -> Vec<PathBuf> {
                 Path::new(&e.file_name())
                     .extension()
                     .and_then(|x| x.to_str())
-                    .is_some_and(|x| matches!(x.to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp"))
+                    .is_some_and(|x| {
+                        matches!(x.to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp")
+                    })
                     && e.file_type().is_ok_and(|t| t.is_file())
             })
             .map(|e| e.path())
@@ -147,14 +149,20 @@ fn folder_covers(path: &Path) -> Vec<PathBuf> {
                 .map(|s| s.to_string_lossy().to_lowercase())
                 .unwrap_or_default()
         };
-        let named = |name: &str| images.iter().find(|p| p.file_name().is_some_and(|f| f.eq_ignore_ascii_case(name)));
+        let named = |name: &str| {
+            images
+                .iter()
+                .find(|p| p.file_name().is_some_and(|f| f.eq_ignore_ascii_case(name)))
+        };
         found.extend(COVER_NAMES.iter().filter_map(|n| named(n)).cloned());
         found.extend(
             images
                 .iter()
                 .filter(|p| {
                     let s = stem(p);
-                    ["cover", "front", "folder", "albumart"].iter().any(|k| s.contains(k))
+                    ["cover", "front", "folder", "albumart"]
+                        .iter()
+                        .any(|k| s.contains(k))
                         && !s.contains("back")
                 })
                 .cloned(),
@@ -215,7 +223,9 @@ pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
         .and_then(|p| cache_art(p.data(), db));
     if artwork.is_none() {
         for file in folder_covers(path) {
-            artwork = std::fs::read(&file).ok().and_then(|data| cache_art(&data, db));
+            artwork = std::fs::read(&file)
+                .ok()
+                .and_then(|data| cache_art(&data, db));
             if artwork.is_some() {
                 break;
             }
@@ -356,7 +366,9 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
     }
     match db.relink_moved() {
         Ok(moved) => status.relinked = moved,
-        Err(e) => status.errors.push(format!("Could not update moved songs: {e}")),
+        Err(e) => status
+            .errors
+            .push(format!("Could not update moved songs: {e}")),
     }
     status.scanning = false;
     status.last_scan = now();
@@ -458,7 +470,10 @@ mod tests {
         let music = d.path().join("music");
         // Untagged files take their album name from the folder, so the album folder is kept.
         let before = music.join("Downloads").join("Night Drive").join("song.wav");
-        let after = music.join("Aurora Lane").join("Night Drive").join("song.wav");
+        let after = music
+            .join("Aurora Lane")
+            .join("Night Drive")
+            .join("song.wav");
         wav(&before, 9600);
         let db = library(d.path(), &[&music]);
         scan(&db, |_| {});
@@ -510,7 +525,12 @@ mod tests {
         assert!(status.relinked.is_empty());
         // Cleanup removes the deleted file but keeps the song on the unplugged drive.
         assert_eq!(db.remove_missing().unwrap().len(), 1);
-        let left: Vec<_> = db.tracks().unwrap().into_iter().filter(|t| t.missing).collect();
+        let left: Vec<_> = db
+            .tracks()
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.missing)
+            .collect();
         assert_eq!(left.len(), 1);
         assert!(left[0].path.contains("usb"));
     }
@@ -536,15 +556,31 @@ mod tests {
         let music = d.path().join("music");
         wav(&music.join("A").join("song.wav"), 4800);
         std::fs::write(music.join("A").join("cover.jpg"), b"").unwrap(); // empty file
-        image::RgbImage::new(8, 8).save(music.join("A").join("front.png")).unwrap();
+        image::RgbImage::new(8, 8)
+            .save(music.join("A").join("front.png"))
+            .unwrap();
         wav(&music.join("B").join("song.wav"), 2400);
         std::fs::write(music.join("B").join("folder.jpg"), b"not an image").unwrap();
         let db = library(d.path(), &[&music]);
         assert_eq!(scan(&db, |_| {}).changed, 2);
         let tracks = db.tracks().unwrap();
-        let art = |dir: &str| tracks.iter().find(|t| t.path.contains(dir)).unwrap().artwork.clone();
-        assert!(art("\\A\\").is_some() || art("/A/").is_some(), "front.png is used instead");
-        assert_eq!(scan(&db, |_| {}).changed, 0, "the broken cover does not cause re-reads");
+        let art = |dir: &str| {
+            tracks
+                .iter()
+                .find(|t| t.path.contains(dir))
+                .unwrap()
+                .artwork
+                .clone()
+        };
+        assert!(
+            art("\\A\\").is_some() || art("/A/").is_some(),
+            "front.png is used instead"
+        );
+        assert_eq!(
+            scan(&db, |_| {}).changed,
+            0,
+            "the broken cover does not cause re-reads"
+        );
     }
     #[test]
     fn finds_covers_named_after_the_album_and_above_disc_folders() {
@@ -571,7 +607,10 @@ mod tests {
         wav(&several.join("01.wav"), 10);
         img(several.join("a.jpg"));
         img(several.join("b.jpg"));
-        assert!(folder_cover(&several.join("01.wav")).is_none(), "no guessing between images");
+        assert!(
+            folder_cover(&several.join("01.wav")).is_none(),
+            "no guessing between images"
+        );
     }
     #[test]
     fn incremental_scan_missing_and_returning_file() {

@@ -158,9 +158,16 @@ impl Database {
         // Songs that were not found are tried again after 60 days.
         let retry_before = now() - 60 * 24 * 3600 * 1000;
         let mut needed: HashMap<String, YearRequest> = HashMap::new();
-        for t in self.tracks()?.into_iter().filter(|t| !t.missing && t.original_year == 0) {
+        for t in self
+            .tracks()?
+            .into_iter()
+            .filter(|t| !t.missing && t.original_year == 0)
+        {
             let key = crate::years::key(&t.artist, &t.title);
-            if checked.get(&key).is_some_and(|(year, at)| *year > 0 || *at > retry_before) {
+            if checked
+                .get(&key)
+                .is_some_and(|(year, at)| *year > 0 || *at > retry_before)
+            {
                 continue;
             }
             let request = needed.entry(key.clone()).or_insert(YearRequest {
@@ -276,7 +283,9 @@ impl Database {
             return Err("Invalid collection".into());
         }
         if value.to_string().len() > 20_000_000 {
-            return Err("This playlist is too large to save. Remove some songs and try again.".into());
+            return Err(
+                "This playlist is too large to save. Remove some songs and try again.".into(),
+            );
         }
         self.conn.lock().unwrap().execute("INSERT INTO collections VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",params![id,value.to_string()]).map_err(err)?;
         Ok(())
@@ -399,13 +408,16 @@ impl Database {
     /// are kept. Playlists keep their entries, shown as missing. Returns the removed IDs.
     pub fn remove_missing(&self) -> Result<Vec<String>> {
         let folders = self.folders();
-        let offline = |folder: &str| folders.iter().any(|f| f == folder) && !Path::new(folder).is_dir();
+        let offline =
+            |folder: &str| folders.iter().any(|f| f == folder) && !Path::new(folder).is_dir();
         let c = self.conn.lock().unwrap();
         let candidates: Vec<(String, String)> = {
             let mut s = c
                 .prepare("SELECT id,folder FROM tracks WHERE missing=1")
                 .map_err(err)?;
-            let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(err)?;
+            let rows = s
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(err)?;
             rows.collect::<std::result::Result<_, _>>().map_err(err)?
         };
         let ids: Vec<String> = candidates
@@ -414,7 +426,8 @@ impl Database {
             .map(|(id, _)| id)
             .collect();
         for id in &ids {
-            c.execute("DELETE FROM tracks WHERE id=?", [id]).map_err(err)?;
+            c.execute("DELETE FROM tracks WHERE id=?", [id])
+                .map_err(err)?;
         }
         Ok(ids)
     }
@@ -441,18 +454,25 @@ mod tests {
             ..Default::default()
         };
         d.upsert(&song("a", "Wired For Sound", 1994), 1).unwrap();
-        d.upsert(&song("b", "Wired for Sound (2011 Remaster)", 2011), 1).unwrap();
+        d.upsert(&song("b", "Wired for Sound (2011 Remaster)", 2011), 1)
+            .unwrap();
         d.upsert(&song("c", "Living Doll", 1994), 1).unwrap();
         let mut needed = d.years_needed().unwrap();
         needed.sort_by(|a, b| a.key.cmp(&b.key));
         assert_eq!(needed.len(), 2, "both copies share one lookup");
-        assert_eq!((needed[1].title.as_str(), needed[1].album_year), ("Wired For Sound", 1994));
+        assert_eq!(
+            (needed[1].title.as_str(), needed[1].album_year),
+            ("Wired For Sound", 1994)
+        );
         d.set_original_year(&needed[1].key, 1981).unwrap();
         d.set_original_year(&needed[0].key, 0).unwrap(); // not found
         let tracks = d.tracks().unwrap();
         let year = |id: &str| tracks.iter().find(|t| t.id == id).unwrap().original_year;
         assert_eq!((year("a"), year("b"), year("c")), (1981, 1981, 0));
-        assert!(d.years_needed().unwrap().is_empty(), "a miss is not retried right away");
+        assert!(
+            d.years_needed().unwrap().is_empty(),
+            "a miss is not retried right away"
+        );
     }
     #[test]
     fn migration_persistence_and_scan_preserves_user_data() {

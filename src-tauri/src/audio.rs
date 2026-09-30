@@ -160,7 +160,11 @@ impl RenderState {
         };
         if let Some(mut sample) = current.source.next() {
             // "End of this song" plays the song to its real end, so no crossfade.
-            let crossfade = if self.state.sleep_end_of_track { 0. } else { self.state.crossfade };
+            let crossfade = if self.state.sleep_end_of_track {
+                0.
+            } else {
+                self.state.crossfade
+            };
             let fade = crossfade
                 .min(current.duration / 2.)
                 .min(self.next.as_ref().map(|d| d.duration / 2.).unwrap_or(0.))
@@ -279,7 +283,10 @@ impl Engine {
         if moved.is_empty() {
             return;
         }
-        let map: HashMap<&str, &str> = moved.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let map: HashMap<&str, &str> = moved
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
         {
             let mut r = self.render.lock().unwrap();
             let r = &mut *r;
@@ -1058,7 +1065,9 @@ mod tests {
         engine
             .command("queue", serde_json::json!({"ids":["a","b"],"index":0}))
             .unwrap();
-        let state = engine.command("insert_next", serde_json::json!(["c", "b"])).unwrap();
+        let state = engine
+            .command("insert_next", serde_json::json!(["c", "b"]))
+            .unwrap();
         assert_eq!(state.queue, vec!["a", "c", "b", "b"]);
         assert_eq!(state.cursor, 0);
         assert_eq!(state.current_id.as_deref(), Some("a"));
@@ -1069,12 +1078,17 @@ mod tests {
         assert_eq!(engine.snapshot().queue, state.queue);
         let state = engine.command("append", serde_json::json!(["a"])).unwrap();
         assert_eq!(state.queue.last().map(String::as_str), Some("a"));
-        assert!(state.error.is_none(), "a successful command clears an old error");
+        assert!(
+            state.error.is_none(),
+            "a successful command clears an old error"
+        );
     }
     #[test]
     fn play_next_on_an_empty_queue_selects_the_song_paused() {
         let (_dir, engine) = test_engine();
-        let state = engine.command("insert_next", serde_json::json!("b")).unwrap();
+        let state = engine
+            .command("insert_next", serde_json::json!("b"))
+            .unwrap();
         assert_eq!(state.queue, vec!["b"]);
         assert_eq!(state.current_id.as_deref(), Some("b"));
         assert!(!state.playing);
@@ -1085,29 +1099,55 @@ mod tests {
         engine
             .command("queue", serde_json::json!({"ids":["a","b","c"],"index":1}))
             .unwrap();
-        let state = engine.command("clear_upcoming", serde_json::Value::Null).unwrap();
+        let state = engine
+            .command("clear_upcoming", serde_json::Value::Null)
+            .unwrap();
         assert_eq!(state.queue, vec!["b"]);
         assert_eq!(state.cursor, 0);
         assert_eq!(state.current_id.as_deref(), Some("b"));
         assert!(state.playing);
-        assert_eq!(engine.render.lock().unwrap().current.as_ref().unwrap().index, 0);
+        assert_eq!(
+            engine
+                .render
+                .lock()
+                .unwrap()
+                .current
+                .as_ref()
+                .unwrap()
+                .index,
+            0
+        );
         let empty = Engine::new(engine.db.clone());
         empty.render.lock().unwrap().state.queue.clear();
         empty.render.lock().unwrap().state.current_id = None;
-        let state = empty.command("clear_upcoming", serde_json::Value::Null).unwrap();
+        let state = empty
+            .command("clear_upcoming", serde_json::Value::Null)
+            .unwrap();
         assert!(state.queue.is_empty() && state.current_id.is_none() && !state.playing);
     }
     #[test]
     fn moved_songs_keep_their_queue_places_and_removed_ones_leave_the_queue() {
         let (_dir, engine) = test_engine();
         engine
-            .command("queue", serde_json::json!({"ids":["a","b","c","b"],"index":0}))
+            .command(
+                "queue",
+                serde_json::json!({"ids":["a","b","c","b"],"index":0}),
+            )
             .unwrap();
         engine.remap(&[("a".into(), "a2".into()), ("b".into(), "b2".into())]);
         let state = engine.snapshot();
         assert_eq!(state.queue, vec!["a2", "b2", "c", "b2"]);
         assert_eq!(state.current_id.as_deref(), Some("a2"));
-        assert_eq!(engine.render.lock().unwrap().renamed.get("a").map(String::as_str), Some("a2"));
+        assert_eq!(
+            engine
+                .render
+                .lock()
+                .unwrap()
+                .renamed
+                .get("a")
+                .map(String::as_str),
+            Some("a2")
+        );
         engine.forget(&["b2".to_string(), "a2".to_string()].into_iter().collect());
         let state = engine.snapshot();
         assert_eq!(state.queue, vec!["a2", "c"], "the loaded song stays");
@@ -1152,11 +1192,19 @@ mod tests {
         r.state.crossfade = 0.005; // would normally blend the last 5 ms
         r.state.sleep_end_of_track = true;
         let first: Vec<_> = (0..960).map(|_| r.sample()).collect();
-        assert_eq!(first, vec![0.25; 960], "the whole song, with no fade into the next");
+        assert_eq!(
+            first,
+            vec![0.25; 960],
+            "the whole song, with no fade into the next"
+        );
         assert_eq!(r.sample(), 0.);
         assert!(!r.state.playing && !r.state.sleep_end_of_track);
         assert_eq!(r.snapshot().current_id.as_deref(), Some("b"));
-        assert_eq!(r.current.as_ref().unwrap().samples, 0, "the next song waits at its start");
+        assert_eq!(
+            r.current.as_ref().unwrap().samples,
+            0,
+            "the next song waits at its start"
+        );
     }
     #[test]
     fn repairs_stale_queue_positions_from_older_saved_sessions() {

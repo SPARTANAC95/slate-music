@@ -67,13 +67,17 @@ pub fn setup(app: &AppHandle, hwnd: usize) {
 }
 
 fn add_buttons(hwnd: HWND) {
-    let Ok(list) = (unsafe { CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER) }) else {
+    let Ok(list) =
+        (unsafe { CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER) })
+    else {
         return;
     };
     if unsafe { list.HrInit() }.is_err() {
         return;
     }
-    let icons = TASKBAR.with(|t| t.borrow().as_ref().map(|t| t.icons)).unwrap_or_else(icons);
+    let icons = TASKBAR
+        .with(|t| t.borrow().as_ref().map(|t| t.icons))
+        .unwrap_or_else(icons);
     let state = STATE.with(|s| *s.borrow());
     match unsafe { list.ThumbBarAddButtons(hwnd, &buttons(state, &icons)) } {
         Ok(()) => {
@@ -90,7 +94,10 @@ fn show(state: State) {
     STATE.with(|s| *s.borrow_mut() = state);
     TASKBAR.with(|t| {
         if let Some(t) = t.borrow().as_ref() {
-            let _ = unsafe { t.list.ThumbBarUpdateButtons(t.hwnd, &buttons(state, &t.icons)) };
+            let _ = unsafe {
+                t.list
+                    .ThumbBarUpdateButtons(t.hwnd, &buttons(state, &t.icons))
+            };
         }
     });
 }
@@ -218,7 +225,8 @@ fn glyphs() -> [Vec<u8>; 6] {
         let (d1, d2, d3) = (side(a, b), side(b, c), side(c, a));
         !((d1 < 0. || d2 < 0. || d3 < 0.) && (d1 > 0. || d2 > 0. || d3 > 0.))
     }
-    let bar = |x: f32, y: f32, left: f32, right: f32| x >= left && x <= right && (7. ..=25.).contains(&y);
+    let bar =
+        |x: f32, y: f32, left: f32, right: f32| x >= left && x <= right && (7. ..=25.).contains(&y);
     let heart = |x: f32, y: f32, scale: f32| {
         // The classic implicit heart curve, centred and flipped for screen coordinates.
         let (u, v) = ((x - 16.) / (10.5 * scale), -(y - 17.) / (10.5 * scale));
@@ -295,7 +303,10 @@ mod tests {
     #[ignore = "writes images for manual review"]
     fn save_glyphs_for_review() {
         let dir = std::path::PathBuf::from(std::env::var("SLATE_GLYPHS").unwrap());
-        for (name, bgra) in ["previous", "play", "pause", "next", "heart", "heart-filled"].iter().zip(glyphs()) {
+        for (name, bgra) in ["previous", "play", "pause", "next", "heart", "heart-filled"]
+            .iter()
+            .zip(glyphs())
+        {
             let rgba: Vec<u8> = bgra.chunks(4).flat_map(|p| [255, 255, 255, p[3]]).collect();
             image::RgbaImage::from_raw(SIZE as u32, SIZE as u32, rgba)
                 .unwrap()
@@ -308,12 +319,30 @@ mod tests {
         let icons = [HICON::default(); 6];
         let idle = buttons(State::default(), &icons);
         assert!(idle.iter().all(|b| b.dwFlags == THBF_DISABLED));
-        let playing = buttons(State { has_song: true, playing: true, favorite: true }, &icons);
+        let playing = buttons(
+            State {
+                has_song: true,
+                playing: true,
+                favorite: true,
+            },
+            &icons,
+        );
         assert!(playing.iter().all(|b| b.dwFlags == THBF_ENABLED));
-        let tip = |b: &THUMBBUTTON| String::from_utf16_lossy(&b.szTip).trim_end_matches('\0').to_string();
+        let tip = |b: &THUMBBUTTON| {
+            String::from_utf16_lossy(&b.szTip)
+                .trim_end_matches('\0')
+                .to_string()
+        };
         assert_eq!(tip(&playing[1]), "Pause");
         assert_eq!(tip(&playing[3]), "Remove from favorites");
-        let paused = buttons(State { has_song: true, playing: false, favorite: false }, &icons);
+        let paused = buttons(
+            State {
+                has_song: true,
+                playing: false,
+                favorite: false,
+            },
+            &icons,
+        );
         assert_eq!(tip(&paused[1]), "Play");
         assert_eq!(tip(&paused[3]), "Add to favorites");
         assert_eq!(paused.map(|b| b.iId), [PREVIOUS, TOGGLE, NEXT, FAVORITE]);

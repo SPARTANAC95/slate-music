@@ -408,7 +408,13 @@ fn pages(
 pub fn playlists(db: &Database) -> Result<Value> {
     let token = token(db)?;
     let client = client()?;
-    let me = get(&client, &token, "https://api.spotify.com/v1/me", &[], response)?;
+    let me = get(
+        &client,
+        &token,
+        "https://api.spotify.com/v1/me",
+        &[],
+        response,
+    )?;
     let me = me["id"].as_str().unwrap_or_default();
     let (items, _) = pages(
         &client,
@@ -480,8 +486,17 @@ pub fn revision(db: &Database, source: &str) -> Result<Value> {
     }
     let (client, token) = (client()?, token(db)?);
     if source == LIKED_URL {
-        let data = get(&client, &token, "https://api.spotify.com/v1/me/tracks", &[("limit", "1")], response)?;
-        return Ok(json!(liked_revision(data["total"].as_u64(), &data["items"])));
+        let data = get(
+            &client,
+            &token,
+            "https://api.spotify.com/v1/me/tracks",
+            &[("limit", "1")],
+            response,
+        )?;
+        return Ok(json!(liked_revision(
+            data["total"].as_u64(),
+            &data["items"]
+        )));
     }
     let id = playlist_id(source)?;
     let data = get(
@@ -547,7 +562,12 @@ fn playlist_tracks(items: &[Value]) -> (Vec<Value>, usize) {
             }
             let artists: Vec<Value> = item["artists"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|x| x["name"].as_str()).map(|n| json!({"name": n})).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x["name"].as_str())
+                        .map(|n| json!({"name": n}))
+                        .collect()
+                })
                 .unwrap_or_default();
             Some(json!({
                 "id": item["id"].as_str(),
@@ -566,13 +586,21 @@ mod tests {
     #[test]
     fn validates_playlist_links() {
         let id = "37i9dQZF1DXcBWIGoYBM5M";
-        assert_eq!(playlist_id(&format!("https://open.spotify.com/playlist/{id}?si=x")).unwrap(), id);
-        assert_eq!(playlist_id(&format!(" https://open.spotify.com/intl-de/playlist/{id} ")).unwrap(), id);
+        assert_eq!(
+            playlist_id(&format!("https://open.spotify.com/playlist/{id}?si=x")).unwrap(),
+            id
+        );
+        assert_eq!(
+            playlist_id(&format!(" https://open.spotify.com/intl-de/playlist/{id} ")).unwrap(),
+            id
+        );
         assert_eq!(playlist_id(&format!("spotify:playlist:{id}")).unwrap(), id);
         assert!(playlist_id(&format!("https://evil.test/playlist/{id}")).is_err());
         assert!(playlist_id(&format!("http://open.spotify.com/playlist/{id}")).is_err());
         assert!(playlist_id("https://open.spotify.com/playlist/short").is_err());
-        assert!(playlist_id("https://spotify.link/AbCdEf").unwrap_err().contains("spotify.link"));
+        assert!(playlist_id("https://spotify.link/AbCdEf")
+            .unwrap_err()
+            .contains("spotify.link"));
         assert!(playlist_id(&format!("https://open.spotify.com/album/{id}"))
             .unwrap_err()
             .contains("album link"));
@@ -606,15 +634,24 @@ mod tests {
                 let mut stream = stream.unwrap();
                 let mut buf = [0u8; 4096];
                 let len = stream.read(&mut buf).unwrap();
-                let line = String::from_utf8_lossy(&buf[..len]).lines().next().unwrap_or("").to_string();
+                let line = String::from_utf8_lossy(&buf[..len])
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
                 let target = line.split_whitespace().nth(1).unwrap_or("/").to_string();
                 log.lock().unwrap().push(target.clone());
                 let reply = if n == 0 {
                     "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
                 } else {
                     let u = url::Url::parse(&format!("http://x{target}")).unwrap();
-                    let offset: usize = u.query_pairs().find(|(k, _)| k == "offset").map_or(0, |(_, v)| v.parse().unwrap());
-                    let items: Vec<Value> = (offset..(offset + 50).min(120)).map(|i| json!({"n": i})).collect();
+                    let offset: usize = u
+                        .query_pairs()
+                        .find(|(k, _)| k == "offset")
+                        .map_or(0, |(_, v)| v.parse().unwrap());
+                    let items: Vec<Value> = (offset..(offset + 50).min(120))
+                        .map(|i| json!({"n": i}))
+                        .collect();
                     // `next` deliberately points elsewhere, as Spotify's sometimes does.
                     let body = json!({"items": items, "total": 120, "next": "https://api.spotify.com/v1/users/me/playlists"}).to_string();
                     format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
@@ -627,29 +664,50 @@ mod tests {
     #[test]
     fn reads_every_page_by_offset_and_waits_when_asked_to_slow_down() {
         let (base, seen) = fake_spotify();
-        let (items, total) = pages(&client().unwrap(), "t", &format!("{base}/v1/me/playlists"), &[("x", "1")], 10, response).unwrap();
+        let (items, total) = pages(
+            &client().unwrap(),
+            "t",
+            &format!("{base}/v1/me/playlists"),
+            &[("x", "1")],
+            10,
+            response,
+        )
+        .unwrap();
         assert_eq!(total, Some(120));
         assert_eq!(items.len(), 120);
         assert_eq!(items[119]["n"], 119);
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 4, "one retry after 429, then three pages");
-        assert!(seen.iter().all(|t| t.starts_with("/v1/me/playlists?x=1&limit=50&offset=")));
+        assert!(seen
+            .iter()
+            .all(|t| t.starts_with("/v1/me/playlists?x=1&limit=50&offset=")));
         assert!(seen[3].ends_with("offset=100"));
     }
     #[test]
     fn liked_songs_revision_changes_with_count_and_newest_like() {
         let items = json!([{"added_at": "2026-09-30T10:00:00Z"}]);
-        assert_eq!(liked_revision(Some(812), &items), "812:2026-09-30T10:00:00Z");
-        assert_ne!(liked_revision(Some(811), &items), liked_revision(Some(812), &items));
+        assert_eq!(
+            liked_revision(Some(812), &items),
+            "812:2026-09-30T10:00:00Z"
+        );
+        assert_ne!(
+            liked_revision(Some(811), &items),
+            liked_revision(Some(812), &items)
+        );
         assert_eq!(liked_revision(None, &json!([])), "?:");
     }
     #[test]
     fn top_songs_need_a_known_period_and_permission() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path()).unwrap();
-        assert!(top(&db, "spotify:top:forever").unwrap_err().contains("Unknown"));
-        assert!(top(&db, "spotify:top:short_term").unwrap_err().contains("Reconnect"));
-        db.set("spotify_scope", &json!("user-library-read user-top-read")).unwrap();
+        assert!(top(&db, "spotify:top:forever")
+            .unwrap_err()
+            .contains("Unknown"));
+        assert!(top(&db, "spotify:top:short_term")
+            .unwrap_err()
+            .contains("Reconnect"));
+        db.set("spotify_scope", &json!("user-library-read user-top-read"))
+            .unwrap();
         assert!(top_access(&db) && liked_access(&db) && !playlist_access(&db));
     }
     #[test]
