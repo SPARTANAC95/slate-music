@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.3 — unreleased
+## 1.0.3 — 2026-09-30
 
 - Import Spotify playlists instead of albums. Pick from your own playlists or paste a playlist link, then update an imported playlist from Spotify later without losing songs you already matched. Uses Spotify's 2026 playlist API; earlier connections need one Reconnect for playlist access.
 - Import Spotify Liked Songs as a playlist and, optionally, add the matched songs to Favorites (needs one Reconnect for the `user-library-read` permission). Large imports are matched much faster.

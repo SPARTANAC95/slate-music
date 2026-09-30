@@ -1,3 +1,19 @@
+# Validation — 1.0.3
+
+## September 30 feature and review pass
+
+Version 1.0.3 was built and run as a native Windows application with an isolated profile and a disposable library of silent, generated FLAC files. The owner's library was only read, for a start-up check. Two independent code reviews covered every 1.0.3 change; all confirmed findings were fixed and re-tested.
+
+| Check | Result |
+|---|---|
+| TypeScript and frontend | 29 tests passed; TypeScript and Vite production build passed |
+| Native engine, library and Spotify client | 37 Rust tests passed, including list paging by offset and a wait-and-retry after a 429 answer against a local test server |
+| Native application | All 22 scenarios in `tools/qa.mjs` passed (right-click menu, back navigation, shortcuts after sliders, mute, sleep timer, queue save/clear, duplicate prevention, dismissible messages and the 14 earlier scenarios) |
+| Spotify imports | Playlist picker, Liked Songs (with hearting), top songs, re-import updating the earlier import, "leave missing" surviving updates, unchanged playlists not re-downloaded, a playlist deleted during an update staying deleted, and start-up updates. All checked with simulated Spotify responses. A live check against a real account with the 2026 API awaits the owner's reconnect |
+| Library | Moved songs kept favorites, plays, history and playlist places; covers named after the album were found; a broken cover fell back to the next image; removal of unavailable songs asked first and kept songs on an unplugged drive |
+| Original years | A live MusicBrainz lookup returned 1981 for "Wired For Sound" on a 1994 compilation |
+| Taskbar buttons | Windows accepted the preview buttons; simulated presses of Previous, Play/Pause, Next and Favorite acted on playback and favorites |
+
 # Validation — 1.0.2
 
 ## September 26 reliability pass

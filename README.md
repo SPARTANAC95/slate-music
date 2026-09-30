@@ -12,10 +12,10 @@
 Slate Music gives your albums room to breathe. Browse the artwork, find the song you forgot you loved, and build a listening session that is still there when you return.
 
 - **Your collection, organized.** Albums, artists, songs, playlists, favorites, recently played and an editable queue. Fast search, sorting, filtering and multidisc ordering.
-- **Listening comes first.** Native gapless playback, optional 2–12 second crossfade, seeking, shuffle, repeat, keyboard shortcuts, a mini-player and Windows media controls.
+- **Listening comes first.** Native gapless playback, optional 2–12 second crossfade, seeking, shuffle, repeat, play next, a sleep timer, right-click menus, keyboard shortcuts, a mini-player, taskbar preview buttons and Windows media controls.
 - **A session that stays with you.** Queue, position, playlists, favorites, history and settings persist. The app always restores paused.
-- **Your files stay yours.** Read-only indexing, watched folders, incremental rescans and cached artwork. No retagging, renaming, moving or deleting your music.
-- **Offline by design.** Local playback and library management work offline. No Slate account, subscription or analytics.
+- **Your files stay yours.** Read-only indexing, watched folders, incremental rescans and cached artwork. Moved songs keep their favorites and playlist places. No retagging, renaming, moving or deleting your music.
+- **Offline by design.** Local playback and library management work offline. No Slate account, subscription or analytics. Optional extras, such as original release years from MusicBrainz, stay off until you turn them on.
 - **Spotify playlists, matched locally.** Pick one of your Spotify playlists and match its songs to recordings you already own. Review uncertain versions, save it, and update it from Spotify later.
 
 ## Get listening
@@ -57,7 +57,7 @@ Raw AAC has limited seeking support. Opus, WMA, APE, DSD and protected files are
 
 ## Built, run, and checked on Windows
 
-Version **1.0.2** passed 19 TypeScript tests, 18 native Rust tests, 14 main interface scenarios and 11 focused regression scenarios. Validation includes real playback and seeking, measured gapless continuity, queue/search behavior, restart recovery, folder changes, real Spotify matching and installer/reinstaller checks. Production **1.0.0 → 1.0.1 → 1.0.2** upgrades retained the library and paused session. GitHub Actions tested, built, signed and published the latest installer; its public download and installed upgrade were verified.
+Version **1.0.3** passed 29 TypeScript tests, 37 native Rust tests and 22 native interface scenarios, plus focused native checks of Spotify playlist, Liked Songs and top-song imports, automatic updates, moved-song recognition, cover detection, the original-year lookup and the taskbar buttons. Earlier releases verified real playback and seeking, measured gapless continuity, restart recovery and production upgrades **1.0.0 → 1.0.1 → 1.0.2**. GitHub Actions tests, builds, signs and publishes each installer.
 
 The [validation report](docs/VALIDATION.md) records the evidence and remaining limits. Test results describe what was checked, not a guarantee for every device or music file.
 
