@@ -26,6 +26,9 @@
 - **Lists keep their place:** each song list remembers where you scrolled, and long lists offer "Show playing song".
 - Artist pages list songs album by album, oldest first.
 - A right-click menu no longer disappears when a scroll was still settling as it opened.
+- **Last.fm scrobbling:** with your own free Last.fm API account, songs are scrobbled once you have heard half of them (or four minutes) and shown as "now playing" while they play. Scrobbles made offline wait and are sent later. The secret and sign-in are encrypted with Windows DPAPI.
+- **Discord status:** with your own Discord application ID, Discord shows "Listening to Slate Music" with the song, artist and a progress bar while music plays, and nothing while paused. Slate Music only talks to the Discord app on this PC.
+- A disabled main button no longer loses its label under the mouse.
 
 ## 1.0.3 — 2026-09-30
 

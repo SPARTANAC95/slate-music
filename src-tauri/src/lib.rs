@@ -2,10 +2,12 @@ mod artists;
 mod audio;
 mod db;
 mod desktop;
+mod discord;
 mod dsp;
 mod library;
 mod loudness;
 mod lyrics;
+mod scrobble;
 mod spotify;
 #[cfg(windows)]
 mod taskbar;
@@ -222,6 +224,8 @@ fn open_link(url: String) -> Result<()> {
                     | "github.com"
                     | "en.wikipedia.org"
                     | "commons.wikimedia.org"
+                    | "www.last.fm"
+                    | "discord.com"
             )
         )
     {
@@ -252,6 +256,46 @@ fn artist_photos(
     state: tauri::State<AppState>,
 ) -> Result<serde_json::Map<String, Value>> {
     artists::photos(&state.db, &names)
+}
+/// Last.fm scrobbling: status, the user's API account, and signing in or out.
+#[tauri::command]
+fn lastfm_status(state: tauri::State<AppState>) -> Value {
+    scrobble::status(&state.db)
+}
+#[tauri::command]
+async fn lastfm_setup(
+    key: String,
+    secret: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Value> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || scrobble::setup(&db, &key, &secret))
+        .await
+        .map_err(err)?
+}
+#[tauri::command]
+async fn lastfm_connect(state: tauri::State<'_, AppState>) -> Result<()> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || scrobble::connect(db))
+        .await
+        .map_err(err)?
+}
+#[tauri::command]
+fn lastfm_disconnect(state: tauri::State<AppState>) -> Result<()> {
+    scrobble::disconnect(&state.db)
+}
+#[tauri::command]
+fn lastfm_forget(state: tauri::State<AppState>) -> Result<()> {
+    scrobble::forget(&state.db)
+}
+/// Discord's "Listening to" status: whether it is connected, and the user's application ID.
+#[tauri::command]
+fn discord_status(state: tauri::State<AppState>) -> Value {
+    discord::status(&state.db)
+}
+#[tauri::command]
+fn discord_setup(id: String, state: tauri::State<AppState>) -> Result<Value> {
+    discord::setup(&state.db, &id)
 }
 /// Output devices Windows offers, for Settings.
 #[tauri::command]
@@ -416,6 +460,8 @@ pub fn run() {
             #[cfg(windows)]
             taskbar::setup(app.handle(), hwnd);
             engine.start(app.handle().clone(), hwnd);
+            scrobble::start(db.clone(), engine.clone());
+            discord::start(db.clone(), engine.clone());
             library::watch(db.clone(), library.clone(), app.handle().clone());
             library::start_scan(db, library, app.handle().clone());
             Ok(())
@@ -447,6 +493,13 @@ pub fn run() {
             listening_history,
             artist_info,
             artist_photos,
+            lastfm_status,
+            lastfm_setup,
+            lastfm_connect,
+            lastfm_disconnect,
+            lastfm_forget,
+            discord_status,
+            discord_setup,
             open_link,
             mini_player,
             show_main,

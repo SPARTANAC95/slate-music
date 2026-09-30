@@ -287,8 +287,8 @@ export function TrackTable({
       </span>
     );
   };
-  const reorderable = (): boolean => {
-    const d = dragged();
+  const reorderable = (e: DragEvent): boolean => {
+    const d = dragged(e);
     return !!onReorder && !!d && d.source === listId;
   };
   return (
@@ -339,15 +339,15 @@ export function TrackTable({
                   setDropAt(null);
                 }}
                 onDragOver={(e) => {
-                  if (!reorderable()) return;
+                  if (!reorderable(e)) return;
                   e.preventDefault();
                   e.dataTransfer.dropEffect = 'move';
                   const box = e.currentTarget.getBoundingClientRect();
                   setDropAt(row.index + (e.clientY > box.top + box.height / 2 ? 1 : 0));
                 }}
                 onDrop={(e) => {
-                  const d = dragged();
-                  if (!reorderable() || !d || dropAt === null) return;
+                  const d = dragged(e);
+                  if (!reorderable(e) || !d || dropAt === null) return;
                   e.preventDefault();
                   endDrag();
                   setDropAt(null);
@@ -592,14 +592,16 @@ export function Toggle({
   onChange,
   label,
   description,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
   label: string;
   description?: string;
+  disabled?: boolean;
 }) {
   return (
-    <label className="setting-row">
+    <label className={`setting-row ${disabled ? 'disabled' : ''}`}>
       <span>
         <strong>{label}</strong>
         {description && <small>{description}</small>}
@@ -610,6 +612,7 @@ export function Toggle({
         aria-checked={checked}
         aria-label={label}
         className={`switch ${checked ? 'on' : ''}`}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
       >
         <span>{checked && <Check size={10} />}</span>

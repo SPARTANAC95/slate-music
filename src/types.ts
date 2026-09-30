@@ -123,6 +123,10 @@ export interface Settings {
   lookupLyrics: boolean;
   /** Look up artist photos and bios (MusicBrainz, Wikidata, Wikipedia). */
   lookupArtists?: boolean;
+  /** Send songs you listen to to Last.fm. */
+  scrobble?: boolean;
+  /** Show the playing song as your Discord status. */
+  discordPresence?: boolean;
   /** Equalizer per output device name ("" = Windows default). */
   eqByDevice?: Record<string, EqSettings>;
 }

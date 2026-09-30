@@ -26,6 +26,8 @@ rodio = {version="0.21.1", default-features=false, features= ["playback", "symph
 notify = "8"
 walkdir = "2"
 sha2 = "0.10"
+# Last.fm request signatures are MD5 (their API's rule, not used for security here).
+md-5 = "0.10"
 hex = "0.4"
 rand = "0.9"
 base64 = "0.22"

@@ -10,12 +10,17 @@ export interface DragSongs {
 }
 // The browser only reveals dragged data on drop, so drop targets check this while hovering.
 let current: DragSongs | null = null;
-export const dragged = () => current;
+/** Marks Slate's own drags, so files dragged in from File Explorer are never mistaken for songs. */
+const TYPE = 'application/x-slate-songs';
+/** The songs being dragged, when this drag is one of Slate's own. */
+export const dragged = (e?: { dataTransfer: DataTransfer }) =>
+  e && !e.dataTransfer.types.includes(TYPE) ? null : current;
 
 export function startDrag(e: DragEvent, songs: DragSongs, label: string) {
   current = songs;
   e.dataTransfer.effectAllowed = 'copyMove';
   e.dataTransfer.setData('text/plain', label);
+  e.dataTransfer.setData(TYPE, songs.ids.join(','));
   const ghost = document.createElement('div');
   ghost.className = 'drag-ghost';
   ghost.textContent = label;
@@ -32,13 +37,13 @@ export function dropZone(
   onDrop: (songs: DragSongs) => void,
   accepts: (songs: DragSongs) => boolean = () => true,
 ) {
-  const ok = () => {
-    const songs = dragged();
+  const ok = (e: DragEvent) => {
+    const songs = dragged(e);
     return songs && accepts(songs) ? songs : null;
   };
   return {
     onDragOver: (e: DragEvent<HTMLElement>) => {
-      if (!ok()) return;
+      if (!ok(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
       e.currentTarget.classList.add('drop-target');
@@ -48,7 +53,7 @@ export function dropZone(
         e.currentTarget.classList.remove('drop-target');
     },
     onDrop: (e: DragEvent<HTMLElement>) => {
-      const songs = ok();
+      const songs = ok(e);
       e.currentTarget.classList.remove('drop-target');
       if (!songs) return;
       e.preventDefault();

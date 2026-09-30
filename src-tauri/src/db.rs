@@ -73,6 +73,7 @@ impl Database {
    CREATE TABLE IF NOT EXISTS lyrics(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS loudness(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS artist_info(key TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS scrobbles(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT NOT NULL);
    INSERT OR IGNORE INTO migrations VALUES(1,strftime('%s','now'));
    PRAGMA user_version=1;").map_err(err)?;
         Ok(Self {
@@ -249,6 +250,46 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(err(e)),
         }
+    }
+    /// Scrobbles waiting to be sent to Last.fm.
+    pub fn queue_scrobble(&self, data: &Value) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("INSERT INTO scrobbles(data) VALUES(?)", [data.to_string()])
+            .map_err(err)?;
+        Ok(())
+    }
+    /// The oldest waiting scrobbles, with their queue ids.
+    pub fn scrobbles(&self, limit: usize) -> Result<Vec<(i64, Value)>> {
+        let c = self.conn.lock().unwrap();
+        let mut q = c
+            .prepare("SELECT id, data FROM scrobbles ORDER BY id LIMIT ?")
+            .map_err(err)?;
+        let rows = q
+            .query_map([limit as i64], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(err)?;
+        Ok(rows
+            .filter_map(|r| r.ok())
+            .map(|(id, data)| (id, serde_json::from_str(&data).unwrap_or(Value::Null)))
+            .collect())
+    }
+    pub fn remove_scrobbles(&self, ids: &[i64]) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        for id in ids {
+            c.execute("DELETE FROM scrobbles WHERE id=?", [id])
+                .map_err(err)?;
+        }
+        Ok(())
+    }
+    pub fn scrobbles_pending(&self) -> Result<i64> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM scrobbles", [], |r| r.get(0))
+            .map_err(err)
     }
     /// Saved artist photos, by artist key.
     pub fn artist_photos(&self) -> Result<std::collections::HashMap<String, String>> {

@@ -14,6 +14,7 @@ import { Toggle, IconButton } from './components';
 import type { Snapshot, Settings, Playback } from './types';
 import type { useUpdater } from './updater';
 import SoundSettings from './SoundSettings';
+import SharingSettings from './SharingSettings';
 export default function SettingsPanel({
   data,
   pb,
@@ -282,6 +283,7 @@ export default function SettingsPanel({
           limited to five authorized users.
         </p>
       </section>
+      <SharingSettings settings={settings} onSettings={onSettings} />
       <section>
         <h3>
           <Download size={16} />

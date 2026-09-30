@@ -74,11 +74,31 @@ Only confirmed, available local matches enter the queue. Missing songs stay visi
 
 As verified September 25, 2026, Spotify Development Mode requires an active Premium subscription for the app owner and permits up to five authorized users. Spotify controls API availability and quota; some accounts/apps may require further approval. See [quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes), [PKCE authorization](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow) and the [2026 migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide). Rate limits and access errors are reported in the app. Live account sign-in requires your own Client ID; no credentials are bundled.
 
+## Last.fm and Discord
+
+Both are off until you set them up in Settings, and both use your own free accounts, so nothing is shared through anyone else's.
+
+**Last.fm scrobbling**
+
+1. In Settings → Last.fm scrobbling, choose **Create an API account**. Sign in to Last.fm, give the application a name such as "Slate Music" and a short description (callback URL and homepage can stay empty), and submit.
+2. Copy the **API key** and **shared secret** into Settings and choose **Save**. Slate Music checks them with Last.fm.
+3. Choose **Connect Last.fm**, then **Yes, allow access** in the browser. Settings shows "Scrobble to Last.fm as <your name>".
+
+A song is scrobbled once you have heard half of it or four minutes, whichever comes first; songs under 30 seconds are not. Skipping around or pausing doesn't count as listening. Scrobbles made offline are kept and sent later.
+
+**Discord status**
+
+1. In Settings → Discord status, choose **Developer Portal**, sign in and choose **New Application**. Name it "Slate Music"; friends will see "Listening to Slate Music". You can add the Slate Music icon as its App Icon.
+2. Copy the **Application ID** from General Information into Settings and choose **Save**.
+3. Keep Discord open. Under Discord's Activity Privacy, sharing your activity must be allowed.
+
+While a song plays, Discord shows its title, artist and album with a progress bar; paused music shows nothing.
+
 ## Privacy and persistence
 
 The SQLite database and artwork cache live in `%APPDATA%\com.spartanac95.slate-music`. The database stores library paths, metadata, favorites, playlists, play counts, history, settings and the paused listening session. SQLite migrations and WAL journaling protect normal restarts. Settings includes a JSON export of favorites and playlists; to back up the full profile, close the app and copy its data directory. Do not publish that directory.
 
-Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup, optional LRCLIB lyrics, optional artist photos and bios (MusicBrainz, Wikidata, Wikipedia and Wikimedia Commons) and update checks/downloads. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
+Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup, optional LRCLIB lyrics, optional artist photos and bios (MusicBrainz, Wikidata, Wikipedia and Wikimedia Commons), optional Last.fm scrobbling (artist, title, album, length and when you listened) and update checks/downloads. The optional Discord status is passed only to the Discord app on this PC. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
 
 Updates are checked and downloaded automatically by default. The updater verifies both the artifact signature and signed version. It only installs after you confirm while paused or choose the install option on exit. Installation keeps your database, artwork and settings.
 

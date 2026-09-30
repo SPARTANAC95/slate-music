@@ -150,6 +150,11 @@ a {
   background: #fff;
   border-color: #fff;
 }
+/* A disabled main button keeps its own colours under the mouse, so its label stays readable. */
+.primary:disabled:hover {
+  background: #e8e4ed;
+  border-color: #e8e4ed;
+}
 .danger {
   color: #f4b0b0;
   background: #342020;
@@ -3677,4 +3682,10 @@ input[type='range']:disabled {
   min-height: 0;
   padding: 6px 11px;
   font-size: 11px;
+}
+.setting-row.disabled {
+  opacity: 0.55;
+}
+.setting-row.disabled .switch {
+  cursor: not-allowed;
 }

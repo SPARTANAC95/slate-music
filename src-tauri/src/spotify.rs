@@ -82,8 +82,9 @@ fn get(
     }
     unreachable!("the last attempt always returns")
 }
+/// Encrypts or decrypts with Windows DPAPI, for this Windows account only.
 #[cfg(windows)]
-fn protect(data: &[u8], decrypt: bool) -> Result<Vec<u8>> {
+pub(crate) fn protect(data: &[u8], decrypt: bool) -> Result<Vec<u8>> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
         Security::Cryptography::{
@@ -122,7 +123,7 @@ fn protect(data: &[u8], decrypt: bool) -> Result<Vec<u8>> {
         }
     };
     if ok == 0 {
-        return Err("Windows could not secure Spotify credentials".into());
+        return Err("Windows could not secure the saved sign-in".into());
     }
     let bytes =
         unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
@@ -132,7 +133,7 @@ fn protect(data: &[u8], decrypt: bool) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 #[cfg(not(windows))]
-fn protect(_data: &[u8], _decrypt: bool) -> Result<Vec<u8>> {
+pub(crate) fn protect(_data: &[u8], _decrypt: bool) -> Result<Vec<u8>> {
     Err("Secure token storage is currently Windows-only".into())
 }
 fn store(db: &Database, mut value: Value, previous: Option<&Value>) -> Result<()> {
