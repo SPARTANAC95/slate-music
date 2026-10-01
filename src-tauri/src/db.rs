@@ -290,11 +290,21 @@ impl Database {
             .collect())
     }
     pub fn remove_scrobbles(&self, ids: &[i64]) -> Result<()> {
-        let c = self.conn.lock().unwrap();
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction().map_err(err)?;
         for id in ids {
-            c.execute("DELETE FROM scrobbles WHERE id=?", [id])
+            tx.execute("DELETE FROM scrobbles WHERE id=?", [id])
                 .map_err(err)?;
         }
+        tx.commit().map_err(err)
+    }
+    /// Forgets every waiting scrobble (Last.fm was removed from Slate Music).
+    pub fn clear_scrobbles(&self) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM scrobbles", [])
+            .map_err(err)?;
         Ok(())
     }
     pub fn scrobbles_pending(&self) -> Result<i64> {

@@ -6,7 +6,10 @@ use crate::db::{err, now, Database, Result, Track};
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc, Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 
 const API: &str = "https://ws.audioscrobbler.com/2.0/";
@@ -15,9 +18,14 @@ fn api() -> Option<String> {
     std::env::var("SLATE_LASTFM_API").ok()
 }
 const FILE: &str = "lastfm.dpapi";
-/// Error codes: not yet authorized by the user, invalid session, invalid key or signature.
+/// Error codes: not yet authorized by the user, invalid session.
 const NOT_AUTHORIZED: i64 = 14;
 const INVALID_SESSION: i64 = 9;
+/// Passing problems (operation failed, service offline, temporarily unavailable, rate limit):
+/// the same request can simply be tried again.
+const TEMPORARY: [i64; 4] = [8, 11, 16, 29];
+/// A scrobble ignored because the daily scrobble limit was reached; it is sent another day.
+const DAILY_LIMIT: &str = "5";
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct Secrets {
@@ -30,6 +38,11 @@ struct Secrets {
 /// The last problem sending to Last.fm, shown in Settings; and whether a sign-in is pending.
 static PROBLEM: Mutex<Option<String>> = Mutex::new(None);
 static WAITING: Mutex<bool> = Mutex::new(false);
+/// Rises with every sign-in, sign-out, removal or new key, so an older sign-in still waiting
+/// for approval knows to stop and never saves over newer settings.
+static SIGN_IN: AtomicU64 = AtomicU64::new(0);
+/// Held while the saved sign-in is read, changed and written.
+static FILE_LOCK: Mutex<()> = Mutex::new(());
 
 fn problem(message: Option<String>) {
     *PROBLEM.lock().unwrap() = message;
@@ -39,10 +52,14 @@ fn load(db: &Database) -> Option<Secrets> {
     let plain = crate::spotify::protect(&bytes, true).ok()?;
     serde_json::from_slice(&plain).ok()
 }
+/// Writes the sign-in to a temporary file first, so a crash never leaves half a file.
 fn save(db: &Database, s: &Secrets) -> Result<()> {
     let plain = serde_json::to_string(s).map_err(err)?;
     let data = crate::spotify::protect(plain.as_bytes(), false)?;
-    std::fs::write(db.directory.join(FILE), data).map_err(err)
+    let path = db.directory.join(FILE);
+    let temporary = path.with_extension("dpapi.tmp");
+    std::fs::write(&temporary, data).map_err(err)?;
+    std::fs::rename(&temporary, &path).map_err(err)
 }
 fn api_key(db: &Database) -> Option<String> {
     db.get("lastfm_api_key")
@@ -83,13 +100,16 @@ impl Failure {
                 "Last.fm says the shared secret doesn't match the API key.".into()
             }
             Failure::Api(26, _) => "Last.fm has suspended this API key.".into(),
-            Failure::Api(29, _) => "Last.fm asked Slate Music to slow down; it will retry.".into(),
-            Failure::Api(11 | 16, _) => "Last.fm is busy right now; Slate Music will retry.".into(),
+            Failure::Api(29, _) => "Last.fm asked Slate Music to slow down.".into(),
+            Failure::Api(8 | 11 | 16, _) => "Last.fm is busy right now.".into(),
             Failure::Api(code, m) => format!("Last.fm answered: {m} (error {code})"),
-            Failure::Network => {
-                "Last.fm can't be reached right now; Slate Music will retry.".into()
-            }
+            Failure::Network => "Last.fm can't be reached right now.".into(),
         }
+    }
+    /// The same request may work when tried again later.
+    fn temporary(&self) -> bool {
+        matches!(self, Failure::Network)
+            || matches!(self, Failure::Api(code, _) if TEMPORARY.contains(code))
     }
 }
 fn call(
@@ -152,6 +172,9 @@ pub fn setup(db: &Database, key: &str, secret: &str) -> Result<Value> {
         // Offline: keep them, they are checked again when you connect.
         Err(Failure::Network) | Ok(_) => {}
     }
+    let _file = FILE_LOCK.lock().unwrap();
+    SIGN_IN.fetch_add(1, Ordering::SeqCst);
+    *WAITING.lock().unwrap() = false;
     db.set("lastfm_api_key", &json!(key))?;
     save(
         db,
@@ -161,10 +184,11 @@ pub fn setup(db: &Database, key: &str, secret: &str) -> Result<Value> {
         },
     )?;
     problem(None);
+    drop(_file);
     Ok(status(db))
 }
 /// Opens Last.fm in the browser to allow Slate Music, then waits (up to five minutes) for the
-/// user to approve it there.
+/// user to approve it there. A newer sign-in, Sign out or Remove stops the wait.
 pub fn connect(db: Arc<Database>) -> Result<()> {
     let (Some(key), Some(secrets)) = (api_key(&db), load(&db)) else {
         return Err("Add your Last.fm API key and shared secret first.".into());
@@ -180,36 +204,62 @@ pub fn connect(db: Arc<Database>) -> Result<()> {
         ))
         .map_err(err)?;
     }
+    let generation = SIGN_IN.fetch_add(1, Ordering::SeqCst) + 1;
+    let current = move || SIGN_IN.load(Ordering::SeqCst) == generation;
     *WAITING.lock().unwrap() = true;
     problem(None);
     std::thread::spawn(move || {
         let started = Instant::now();
-        while started.elapsed() < Duration::from_secs(300) {
+        let mut ended = false;
+        while started.elapsed() < Duration::from_secs(300) && current() {
             std::thread::sleep(Duration::from_secs(3));
+            if !current() {
+                break;
+            }
             let params = vec![("token".to_string(), token.clone())];
             match call(&key, &secrets.secret, "auth.getSession", params, false) {
                 Ok(v) => {
-                    let mut s = secrets.clone();
-                    s.session = v["session"]["key"].as_str().map(str::to_owned);
-                    s.user = v["session"]["name"].as_str().map(str::to_owned);
-                    if let Err(e) = save(&db, &s) {
-                        problem(Some(e));
+                    // Saved onto what is saved now, and only if nothing replaced this sign-in
+                    // meanwhile (a new key, Sign out or Remove).
+                    let _file = FILE_LOCK.lock().unwrap();
+                    if current() {
+                        if let Some(mut s) = load(&db).filter(|s| s.secret == secrets.secret) {
+                            s.session = v["session"]["key"].as_str().map(str::to_owned);
+                            s.user = v["session"]["name"].as_str().map(str::to_owned);
+                            if let Err(e) = save(&db, &s) {
+                                problem(Some(e));
+                            }
+                        }
                     }
+                    ended = true;
                     break;
                 }
-                Err(Failure::Api(NOT_AUTHORIZED, _)) | Err(Failure::Network) => continue,
+                Err(Failure::Api(NOT_AUTHORIZED, _)) => continue,
+                Err(f) if f.temporary() => continue,
                 Err(f) => {
                     problem(Some(f.message()));
+                    ended = true;
                     break;
                 }
             }
         }
-        *WAITING.lock().unwrap() = false;
+        if current() {
+            if !ended {
+                problem(Some(
+                    "Last.fm wasn't allowed within five minutes. Choose Connect to try again."
+                        .into(),
+                ));
+            }
+            *WAITING.lock().unwrap() = false;
+        }
     });
     Ok(())
 }
 /// Signs out of Last.fm but keeps the API key, so connecting again is one click.
 pub fn disconnect(db: &Database) -> Result<()> {
+    let _file = FILE_LOCK.lock().unwrap();
+    SIGN_IN.fetch_add(1, Ordering::SeqCst);
+    *WAITING.lock().unwrap() = false;
     if let Some(mut s) = load(db) {
         s.session = None;
         s.user = None;
@@ -218,13 +268,17 @@ pub fn disconnect(db: &Database) -> Result<()> {
     problem(None);
     Ok(())
 }
-/// Removes the API key, secret and sign-in.
+/// Removes the API key, secret and sign-in, and forgets scrobbles still waiting to be sent.
 pub fn forget(db: &Database) -> Result<()> {
+    let _file = FILE_LOCK.lock().unwrap();
+    SIGN_IN.fetch_add(1, Ordering::SeqCst);
+    *WAITING.lock().unwrap() = false;
     let path = db.directory.join(FILE);
     if path.exists() {
         std::fs::remove_file(path).map_err(err)?;
     }
     db.set("lastfm_api_key", &Value::Null)?;
+    db.clear_scrobbles()?;
     problem(None);
     Ok(())
 }
@@ -256,8 +310,12 @@ const FIELDS: [&str; 7] = [
     "timestamp",
     "trackNumber",
 ];
-fn signed_out(db: &Database, secrets: &Secrets) {
-    let mut s = secrets.clone();
+/// Last.fm no longer accepts `session`. Only that sign-in is removed: one made since stays.
+fn signed_out(db: &Database, session: &str) {
+    let _file = FILE_LOCK.lock().unwrap();
+    let Some(mut s) = load(db).filter(|s| s.session.as_deref() == Some(session)) else {
+        return;
+    };
     s.session = None;
     s.user = None;
     let _ = save(db, &s);
@@ -266,7 +324,25 @@ fn signed_out(db: &Database, secrets: &Secrets) {
             .into(),
     ));
 }
-/// Sends waiting scrobbles, 50 at a time; they stay queued if Last.fm can't take them now.
+/// Which scrobbles of a batch Last.fm ignored for its daily limit (they stay queued). Last.fm
+/// answers with one entry per scrobble, as a list, or a single object for one scrobble.
+fn over_daily_limit(answer: &Value, count: usize) -> Vec<bool> {
+    let entries: Vec<&Value> = match &answer["scrobbles"]["scrobble"] {
+        Value::Array(list) => list.iter().collect(),
+        Value::Object(_) => vec![&answer["scrobbles"]["scrobble"]],
+        _ => vec![],
+    };
+    (0..count)
+        .map(|i| {
+            entries.get(i).is_some_and(|e| {
+                let code = &e["ignoredMessage"]["code"];
+                code.as_str() == Some(DAILY_LIMIT) || code.as_i64() == Some(5)
+            })
+        })
+        .collect()
+}
+/// Sends waiting scrobbles, 50 at a time; they stay queued if Last.fm can't take them now
+/// (and are tried again within five minutes), or another day when its daily limit is reached.
 fn flush(db: &Database) {
     let (Some(key), Some(secrets)) = (api_key(db), load(db)) else {
         return;
@@ -289,17 +365,39 @@ fn flush(db: &Database) {
             }
         }
         match call(&key, &secrets.secret, "track.scrobble", params, true) {
-            Ok(_) => {
-                let ids: Vec<i64> = batch.iter().map(|(id, _)| *id).collect();
-                let _ = db.remove_scrobbles(&ids);
+            Ok(answer) => {
+                let limited = over_daily_limit(&answer, batch.len());
+                let sent: Vec<i64> = batch
+                    .iter()
+                    .zip(&limited)
+                    .filter(|(_, limited)| !**limited)
+                    .map(|((id, _), _)| *id)
+                    .collect();
+                if let Err(e) = db.remove_scrobbles(&sent) {
+                    // Sending them again would only repeat them on Last.fm.
+                    problem(Some(format!("Sent scrobbles couldn't be cleared: {e}")));
+                    break;
+                }
+                if limited.iter().any(|l| *l) {
+                    problem(Some(
+                        "Last.fm's daily scrobble limit is reached; the rest are sent later."
+                            .into(),
+                    ));
+                    break;
+                }
                 problem(None);
             }
             Err(Failure::Api(INVALID_SESSION, _)) => {
-                signed_out(db, &secrets);
+                signed_out(db, &session);
                 break;
             }
             Err(f) => {
-                problem(Some(f.message()));
+                let later = if f.temporary() {
+                    " Waiting scrobbles are sent later."
+                } else {
+                    " Waiting scrobbles are kept."
+                };
+                problem(Some(format!("{}{later}", f.message())));
                 break;
             }
         }
@@ -320,6 +418,7 @@ fn now_playing(db: &Database, t: &Track) {
             params.push((field.to_string(), v));
         }
     }
+    let session = params[0].1.clone();
     if let Err(Failure::Api(INVALID_SESSION, _)) = call(
         &key,
         &secrets.secret,
@@ -327,7 +426,7 @@ fn now_playing(db: &Database, t: &Track) {
         params,
         true,
     ) {
-        signed_out(db, &secrets);
+        signed_out(db, &session);
     }
 }
 
@@ -337,6 +436,8 @@ pub enum Event {
 }
 struct Play {
     track: Track,
+    /// The engine's count of song starts when this listen began.
+    transition: u64,
     /// When it first played (Unix seconds); 0 until then.
     started: i64,
     listened: f64,
@@ -350,28 +451,30 @@ pub struct Tracker {
     play: Option<Play>,
 }
 impl Tracker {
-    /// One look at playback, `elapsed` seconds after the last. Only time spent playing counts,
-    /// so pausing or skipping around doesn't scrobble a song early.
+    /// One look at playback, `elapsed` seconds after the last. `transition` rises each time a
+    /// song starts. Only music actually heard counts (how far the song moved on, at most the
+    /// time that passed), so pausing or skipping ahead doesn't scrobble a song early.
     pub fn tick(
         &mut self,
-        current: Option<&str>,
-        position: f64,
-        playing: bool,
+        now: &crate::audio::Listening,
         elapsed: f64,
         now_secs: i64,
         load: impl FnOnce(&str) -> Option<Track>,
     ) -> Vec<Event> {
-        let Some(id) = current else {
+        let Some(id) = now.id.as_deref() else {
             self.play = None;
             return vec![];
         };
-        // The same song starting over (repeat one) is a new listen.
-        let restarted = self.play.as_ref().is_some_and(|p| {
-            p.track.id == id && position < 3.0 && position + 5.0 < p.last_position
-        });
-        if restarted || self.play.as_ref().is_none_or(|p| p.track.id != id) {
+        let position = now.position;
+        // The same song starting over (repeat one, even with a crossfade) is a new listen.
+        if self
+            .play
+            .as_ref()
+            .is_none_or(|p| p.track.id != id || p.transition != now.transition)
+        {
             self.play = load(id).map(|track| Play {
                 track,
+                transition: now.transition,
                 started: 0,
                 listened: 0.,
                 last_position: position,
@@ -383,14 +486,15 @@ impl Tracker {
             return vec![];
         };
         let mut events = vec![];
+        let moved = (position - p.last_position).clamp(0., elapsed + 0.25);
         p.last_position = position;
-        if !playing {
+        if !now.playing {
             return events;
         }
         if p.started == 0 {
             p.started = now_secs;
         } else {
-            p.listened += elapsed;
+            p.listened += moved;
         }
         if !p.announced {
             p.announced = true;
@@ -446,15 +550,9 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
                 tracker = Tracker::default();
                 continue;
             }
-            let s = engine.snapshot();
-            let events = tracker.tick(
-                s.current_id.as_deref(),
-                s.position,
-                s.playing,
-                elapsed,
-                now() / 1000,
-                |id| db.track(id).ok(),
-            );
+            let events = tracker.tick(&engine.listening(), elapsed, now() / 1000, |id| {
+                db.track(id).ok()
+            });
             for event in events {
                 match event {
                     Event::NowPlaying(t) => {
@@ -516,6 +614,14 @@ mod tests {
         ];
         assert_eq!(sign(&params, "secret"), "f81f920d21fa903b7fa44ae2857c6bbd");
     }
+    fn at(id: &str, position: f64, playing: bool, transition: u64) -> crate::audio::Listening {
+        crate::audio::Listening {
+            id: Some(id.into()),
+            position,
+            playing,
+            transition,
+        }
+    }
     fn run(
         tracker: &mut Tracker,
         id: &str,
@@ -525,12 +631,24 @@ mod tests {
         start: i64,
         from: f64,
     ) -> Vec<Event> {
+        run_listen(tracker, id, duration, seconds, playing, start, from, 1)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn run_listen(
+        tracker: &mut Tracker,
+        id: &str,
+        duration: f64,
+        seconds: usize,
+        playing: bool,
+        start: i64,
+        from: f64,
+        transition: u64,
+    ) -> Vec<Event> {
         (0..seconds)
             .flat_map(|i| {
+                let position = if playing { from + i as f64 } else { from };
                 tracker.tick(
-                    Some(id),
-                    if playing { from + i as f64 } else { from },
-                    playing,
+                    &at(id, position, playing, transition),
                     1.0,
                     start + i as i64,
                     |id| Some(song(id, duration)),
@@ -574,10 +692,33 @@ mod tests {
         );
         let events = run(&mut t, "a", 100., 2, true, 550, 50.);
         assert!(matches!(events[0], Event::Scrobble(_)));
-        // Repeat one: the song starts over and is heard again.
-        t.tick(Some("a"), 95., true, 1., 200, |id| Some(song(id, 100.)));
-        let events = run(&mut t, "a", 100., 52, true, 300, 0.);
+        // Repeat one with a crossfade: the song starts over 8 s in and is heard again.
+        let events = run_listen(&mut t, "a", 100., 52, true, 600, 8., 2);
         assert!(events.iter().any(|e| matches!(e, Event::Scrobble(_))));
+        // Skipping ahead doesn't count as listening.
+        let mut skip = Tracker::default();
+        run(&mut skip, "s", 200., 5, true, 0, 0.);
+        let jumped = run(&mut skip, "s", 200., 5, true, 5, 150.);
+        assert!(!jumped.iter().any(|e| matches!(e, Event::Scrobble(_))));
+    }
+    #[test]
+    fn songs_over_the_daily_limit_stay_queued() {
+        let list = json!({"scrobbles": {"scrobble": [
+            {"ignoredMessage": {"code": "0"}},
+            {"ignoredMessage": {"code": "5"}},
+        ]}});
+        assert_eq!(over_daily_limit(&list, 2), [false, true]);
+        let one = json!({"scrobbles": {"scrobble": {"ignoredMessage": {"code": "5"}}}});
+        assert_eq!(over_daily_limit(&one, 1), [true]);
+        assert_eq!(
+            over_daily_limit(&json!({}), 2),
+            [false, false],
+            "unknown shape: sent"
+        );
+        assert!(Failure::Api(29, String::new()).temporary());
+        assert!(Failure::Network.temporary());
+        assert!(!Failure::Api(10, String::new()).temporary());
+        assert!(!Failure::Network.message().contains("retry"));
     }
     #[test]
     fn waiting_scrobbles_are_kept_in_order() {

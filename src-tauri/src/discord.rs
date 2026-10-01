@@ -267,11 +267,10 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
                     }
                 }
             }
-            let s = engine.snapshot();
-            let wanted = s
-                .current_id
-                .filter(|_| s.playing)
-                .map(|id| (id, now() - (s.position * 1000.) as i64));
+            let s = engine.listening();
+            let wanted =
+                s.id.filter(|_| s.playing)
+                    .map(|id| (id, now() - (s.position * 1000.) as i64));
             // Seeking moves the start time; small drifts are left alone.
             let changed = match (&shown, &wanted) {
                 (None, None) => false,

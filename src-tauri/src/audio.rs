@@ -524,6 +524,15 @@ impl Source for Mixer {
         None
     }
 }
+/// The song playing, where it is, and a count that rises each time a song starts (also when
+/// the same song starts again).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Listening {
+    pub id: Option<String>,
+    pub position: f64,
+    pub playing: bool,
+    pub transition: u64,
+}
 pub struct Engine {
     pub render: Arc<Mutex<RenderState>>,
     pub db: Arc<Database>,
@@ -589,6 +598,20 @@ impl Engine {
     }
     pub fn snapshot(&self) -> Playback {
         self.render.lock().unwrap().snapshot()
+    }
+    /// What is playing, without copying the queue: for watchers that look every second.
+    pub fn listening(&self) -> Listening {
+        let r = self.render.lock().unwrap();
+        let (id, position) = match &r.current {
+            Some(d) => (Some(d.id.clone()), d.position()),
+            None => (r.state.current_id.clone(), r.state.position),
+        };
+        Listening {
+            id,
+            position,
+            playing: r.state.playing,
+            transition: r.transition,
+        }
     }
     pub fn save(&self) {
         let mut s = self.snapshot();
