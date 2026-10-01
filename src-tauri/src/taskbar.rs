@@ -163,7 +163,7 @@ fn click(app: &AppHandle, id: u32) {
         TOGGLE => "toggle",
         NEXT => "next",
         FAVORITE => {
-            if let Some(current) = state.engine.snapshot().current_id {
+            if let Some(current) = state.engine.listening().id {
                 if let Ok(track) = state.db.track(&current) {
                     if state.db.favorite(&current, !track.favorite).is_ok() {
                         let _ = app.emit("library-changed", ());
@@ -189,19 +189,18 @@ fn watch(app: AppHandle) {
             let Some(state) = app.try_state::<AppState>() else {
                 continue;
             };
-            let s = state.engine.snapshot();
+            let s = state.engine.listening();
             // Favorites can change anywhere in the app; re-read about once a second.
-            if s.current_id != last_id || checked.elapsed() > Duration::from_secs(1) {
-                favorite = s
-                    .current_id
-                    .as_deref()
-                    .and_then(|id| state.db.track(id).ok())
-                    .is_some_and(|t| t.favorite);
-                last_id = s.current_id.clone();
+            if s.id != last_id || checked.elapsed() > Duration::from_secs(1) {
+                favorite =
+                    s.id.as_deref()
+                        .and_then(|id| state.db.track(id).ok())
+                        .is_some_and(|t| t.favorite);
+                last_id = s.id.clone();
                 checked = Instant::now();
             }
             let next = State {
-                has_song: s.current_id.is_some(),
+                has_song: s.id.is_some(),
                 playing: s.playing,
                 favorite,
             };

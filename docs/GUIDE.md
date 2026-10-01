@@ -11,9 +11,18 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 ## Listen and organize
 
 - Home, Songs, Albums, Artists, Favorites, Recently Played, Playlists, saved virtual albums and Queue.
+- Settings → Playback holds the sound controls: output device, loudness levelling (Smart uses album gain while an album plays in order), smart crossfade and a 10-band equalizer that each output device remembers. Loudness is measured once per song in the background. Now Playing's **Signal path** shows exactly what happens between the file and your speakers or headphones.
+- Now Playing (click the song in the player bar or press Ctrl+L) shows a large cover and synced lyrics. Lyrics come from an .lrc file with the same name beside the song, lyrics stored in the file, or LRCLIB when **Find lyrics online** is on in Settings. Click a line to jump there.
 - Hover over Slate Music's taskbar button for Previous, Play/Pause, Next and Favorite buttons in the preview.
 - Right-click a song or album for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer. The Queue page can save the queue as a playlist or clear everything after the current song. The moon button beside the volume sets a sleep timer.
-- Search titles, artists and albums; sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
+- Search titles, artists and albums; small typos are forgiven, and matching artists and albums appear above the songs. Sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
+- Click a song row to pick it; Ctrl+click adds or removes songs and Shift+click picks a range (Ctrl+A picks the whole list). With several picked, a bar appears with Play, Play next, Add to queue, Add to playlist and Favorite; in the queue and your own playlists, Delete removes them. Esc clears the pick.
+- Drag songs or albums onto a playlist in the sidebar to add them, onto Favorites to heart them, onto Playlists to start a new playlist, or onto Up next to queue them. Drag rows in the queue or one of your playlists to reorder them.
+- Click a column heading (Title, Album, Year, Time) to sort by it and click again to reverse. On albums, playlists and search results, # returns to their own order. Songs, Favorites, Recently played and each playlist remember how you sorted them, and every list remembers where you scrolled.
+- Press Ctrl+K anywhere for the command bar: type a song, album, artist, playlist or action (for example "shuffle" or "sleep") and press Enter.
+- Home suggests albums to jump back into, recent additions, songs you played on this day in earlier years and favourites you have not heard in a while. **Your year** is a private year in review built from your listening history on this PC.
+- Smart playlists (Playlists → **New smart playlist**) fill themselves from rules such as "Favorite is yes" and "Last played not in the last 90 days". Start from a preset or build your own; open one and choose **Edit rules** to change it.
+- Artist pages show a photo and a short bio from Wikipedia when **Show artist photos and bios** is on in Settings. Each artist is looked up once when you open their page; only the name is sent.
 - Add songs to a playlist using its folder button. Open a playlist and choose **Edit playlist** to rename, reorder or remove entries. This only changes Slate Music's database.
 - Double-click a song or use its play button. Reorder upcoming songs in Queue. Play/pause, previous/next, seeking, volume, shuffle and repeat work with the native audio engine.
 - Use the mini-player or Windows media controls. The app restores its queue and position paused, including after an update.
@@ -27,9 +36,12 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 | Space | Play / pause |
 | Left / Right | Seek 5 seconds |
 | Ctrl + Left / Right | Previous / next |
-| Ctrl + K | Search |
+| Ctrl + K | Command bar: search and actions |
+| Ctrl + L | Now Playing |
 | Ctrl + M | Mini-player |
-| Escape | Close dialog |
+| Ctrl + A | Pick every song in the list |
+| Delete | Remove picked songs from the queue or playlist |
+| Escape | Close dialog, or clear picked songs |
 
 Shortcuts do not intercept typing in form fields. Standard media keys are routed through Windows system media controls.
 
@@ -37,7 +49,13 @@ Shortcuts do not intercept typing in form fields. Standard media keys are routed
 
 Tested decoding: FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Seeking was tested for the container formats above; raw ADTS AAC seeking depends on its available seek index. Opus, WMA, APE, DSD and protected files are not supported in this version.
 
-The engine streams decoded audio through one 48 kHz stereo mixer and the Windows default output device. This provides gapless transitions and crossfade; it is not a bit-perfect or exclusive-mode player. A disconnected audio device pauses playback; the engine attempts to reconnect without starting audio unexpectedly.
+Normally the engine mixes decoded audio at 48 kHz in stereo and plays it through Windows' shared output, which allows gapless playback, crossfades and other apps' sounds at the same time.
+
+**Exclusive mode (bit-perfect)** in Settings → Playback gives Slate Music the chosen output device to itself. Each song is sent at its own sample rate (44.1, 48, 88.2, 96, 176.4 or 192 kHz and up, as the device allows) in whole-number samples with as many bits as the file has. Songs at the same rate play gaplessly; a song at another rate reopens the device between songs, with a short silence. Crossfades aren't used. With the volume at 100% and the equalizer and loudness levelling off, the device receives exactly the numbers in the file: Now Playing → Signal path confirms "Bit-perfect", or lists what changes the sound. When a device doesn't take a song's rate, the nearest rate it does take is used and the signal path says so.
+
+While exclusive mode plays, other apps can't make sound through that device. Slate Music lets it go a few seconds after you pause and takes it back when you press play. If Windows doesn't allow exclusive use (Sound settings → the device → Properties → Advanced → "Allow applications to take exclusive control of this device"), or another app holds it, Slate Music says so and plays through Windows instead.
+
+Slate Music follows Windows' default output: plug headphones in or reconnect them and the music moves to them. A device you chose in Settings → Playback is used whenever it is connected, and Slate Music returns to it when it comes back. A device that disconnects pauses playback, so music never suddenly plays out loud through another speaker.
 
 ## Spotify playlist import
 
@@ -62,11 +80,32 @@ Only confirmed, available local matches enter the queue. Missing songs stay visi
 
 As verified September 25, 2026, Spotify Development Mode requires an active Premium subscription for the app owner and permits up to five authorized users. Spotify controls API availability and quota; some accounts/apps may require further approval. See [quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes), [PKCE authorization](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow) and the [2026 migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide). Rate limits and access errors are reported in the app. Live account sign-in requires your own Client ID; no credentials are bundled.
 
+## Last.fm and Discord
+
+Both are off until you switch them on in Settings. Last.fm uses your own free API account; the Discord status works straight away.
+
+**Last.fm scrobbling**
+
+1. In Settings → Last.fm scrobbling, choose **Create an API account**. Sign in to Last.fm, give the application a name such as "Slate Music" and a short description (callback URL and homepage can stay empty), and submit.
+2. Copy the **API key** and **shared secret** into Settings and choose **Save**. Slate Music checks them with Last.fm.
+3. Choose **Connect Last.fm**, then **Yes, allow access** in the browser. Settings shows "Scrobble to Last.fm as <your name>".
+
+A song is scrobbled once you have heard half of it or four minutes, whichever comes first; songs under 30 seconds are not. Skipping around or pausing doesn't count as listening. Scrobbles made offline are kept and sent later.
+
+**Discord status**
+
+1. In Settings → Discord status, switch on **Show what I'm listening to on Discord**. Friends see "Listening to Slate Music".
+2. Keep Discord open. Under Discord's Activity Privacy, sharing your activity must be allowed.
+
+To show a different name, create an application in the Discord Developer Portal and save its **Application ID** under **Use your own Discord application**; **Use Slate Music's** switches back.
+
+While a song plays, Discord shows its title, artist and album with a progress bar; paused music shows nothing.
+
 ## Privacy and persistence
 
 The SQLite database and artwork cache live in `%APPDATA%\com.spartanac95.slate-music`. The database stores library paths, metadata, favorites, playlists, play counts, history, settings and the paused listening session. SQLite migrations and WAL journaling protect normal restarts. Settings includes a JSON export of favorites and playlists; to back up the full profile, close the app and copy its data directory. Do not publish that directory.
 
-Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup and update checks/downloads. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
+Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup, optional LRCLIB lyrics, optional artist photos and bios (MusicBrainz, Wikidata, Wikipedia and Wikimedia Commons), optional Last.fm scrobbling (artist, title, album, length and when you listened) and update checks/downloads. The optional Discord status is passed only to the Discord app on this PC. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
 
 Updates are checked and downloaded automatically by default. The updater verifies both the artifact signature and signed version. It only installs after you confirm while paused or choose the install option on exit. Installation keeps your database, artwork and settings.
 

@@ -1,6 +1,6 @@
 [package]
 name = "slate-music"
-version = "1.0.3"
+version = "1.1.0"
 description = "Offline local music player"
 authors = ["SPARTANAC95"]
 edition = "2021"
@@ -26,6 +26,8 @@ rodio = {version="0.21.1", default-features=false, features= ["playback", "symph
 notify = "8"
 walkdir = "2"
 sha2 = "0.10"
+# Last.fm request signatures are MD5 (their API's rule, not used for security here).
+md-5 = "0.10"
 hex = "0.4"
 rand = "0.9"
 base64 = "0.22"
@@ -36,11 +38,13 @@ url = "2"
 open = "5"
 chrono = "0.4"
 image = {version="0.25",default-features=false,features= ["jpeg", "png", "webp"] }
+ebur128 = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = {version="0.61",features= ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_UI_Shell"] }
 # Taskbar preview buttons (COM ITaskbarList3); same version Tauri already uses.
-windows = {version="0.61",features= ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Exclusive-mode output (WASAPI) uses the audio, device-name and threading parts.
+windows = {version="0.61",features= ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Media_Audio", "Win32_Media_KernelStreaming", "Win32_Devices_FunctionDiscovery", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_System_Threading", "Win32_Security", "Win32_UI_Shell_PropertiesSystem"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -70,6 +70,10 @@ impl Database {
    CREATE TABLE IF NOT EXISTS collections(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT,track_id TEXT NOT NULL,played INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS original_years(key TEXT PRIMARY KEY,year INTEGER NOT NULL,checked INTEGER NOT NULL);
+   CREATE TABLE IF NOT EXISTS lyrics(key TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS loudness(key TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS artist_info(key TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS scrobbles(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT NOT NULL);
    INSERT OR IGNORE INTO migrations VALUES(1,strftime('%s','now'));
    PRAGMA user_version=1;").map_err(err)?;
         Ok(Self {
@@ -143,6 +147,19 @@ impl Database {
         }
         Ok(out)
     }
+    /// The available songs of one album (same album name and album artist). Filtered inside
+    /// SQLite, so preparing a song no longer decodes every song in the library.
+    pub fn album_tracks(&self, album: &str, album_artist: &str) -> Result<Vec<Track>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c
+            .prepare("SELECT data FROM tracks WHERE missing=0 AND json_extract(data,'$.album')=?1 AND json_extract(data,'$.albumArtist')=?2")
+            .map_err(err)?;
+        let rows = s
+            .query_map(params![album, album_artist], |r| r.get::<_, String>(0))
+            .map_err(err)?;
+        rows.map(|data| serde_json::from_str(&data.map_err(err)?).map_err(err))
+            .collect()
+    }
     /// Songs whose original year is unknown and has not been looked up recently.
     pub fn years_needed(&self) -> Result<Vec<YearRequest>> {
         let checked: HashMap<String, (u32, i64)> = {
@@ -182,6 +199,164 @@ impl Database {
             }
         }
         Ok(needed.into_values().collect())
+    }
+    /// Songs whose loudness has been measured (or found unreadable), by loudness::key.
+    pub fn loudness_keys(&self) -> Result<std::collections::HashSet<String>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c.prepare("SELECT key FROM loudness").map_err(err)?;
+        let rows = s.query_map([], |r| r.get(0)).map_err(err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(err)
+    }
+    /// Plays between two times (Unix ms), oldest first, as (track ID, time played).
+    pub fn history(&self, from: i64, to: i64) -> Result<Vec<(String, i64)>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c
+            .prepare(
+                "SELECT track_id,played FROM history WHERE played>=? AND played<? ORDER BY played",
+            )
+            .map_err(err)?;
+        let rows = s
+            .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(err)
+    }
+    pub fn loudness_count(&self) -> Result<u64> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM loudness", [], |r| r.get(0))
+            .map_err(err)
+    }
+    pub fn set_loudness(&self, key: &str, l: &crate::loudness::Loudness) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO loudness VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                params![key, serde_json::to_string(l).map_err(err)?],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+    /// Measurements for the given keys; unreadable or unmeasured songs are left out.
+    pub fn loudness(&self, keys: &[String]) -> Result<HashMap<String, crate::loudness::Loudness>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c
+            .prepare("SELECT data FROM loudness WHERE key=?")
+            .map_err(err)?;
+        let mut out = HashMap::new();
+        for k in keys {
+            if let Ok(data) = s.query_row([k], |r| r.get::<_, String>(0)) {
+                if let Ok(l) = serde_json::from_str(&data) {
+                    out.insert(k.clone(), l);
+                }
+            }
+        }
+        Ok(out)
+    }
+    pub fn artist_info(&self, key: &str) -> Result<Option<Value>> {
+        let c = self.conn.lock().unwrap();
+        match c.query_row("SELECT data FROM artist_info WHERE key=?", [key], |r| {
+            r.get::<_, String>(0)
+        }) {
+            Ok(data) => Ok(serde_json::from_str(&data).ok()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(err(e)),
+        }
+    }
+    /// Scrobbles waiting to be sent to Last.fm.
+    pub fn queue_scrobble(&self, data: &Value) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("INSERT INTO scrobbles(data) VALUES(?)", [data.to_string()])
+            .map_err(err)?;
+        Ok(())
+    }
+    /// The oldest waiting scrobbles, with their queue ids.
+    pub fn scrobbles(&self, limit: usize) -> Result<Vec<(i64, Value)>> {
+        let c = self.conn.lock().unwrap();
+        let mut q = c
+            .prepare("SELECT id, data FROM scrobbles ORDER BY id LIMIT ?")
+            .map_err(err)?;
+        let rows = q
+            .query_map([limit as i64], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(err)?;
+        Ok(rows
+            .filter_map(|r| r.ok())
+            .map(|(id, data)| (id, serde_json::from_str(&data).unwrap_or(Value::Null)))
+            .collect())
+    }
+    pub fn remove_scrobbles(&self, ids: &[i64]) -> Result<()> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction().map_err(err)?;
+        for id in ids {
+            tx.execute("DELETE FROM scrobbles WHERE id=?", [id])
+                .map_err(err)?;
+        }
+        tx.commit().map_err(err)
+    }
+    /// Forgets every waiting scrobble (Last.fm was removed from Slate Music).
+    pub fn clear_scrobbles(&self) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM scrobbles", [])
+            .map_err(err)?;
+        Ok(())
+    }
+    pub fn scrobbles_pending(&self) -> Result<i64> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM scrobbles", [], |r| r.get(0))
+            .map_err(err)
+    }
+    /// Saved artist photos, by artist key.
+    pub fn artist_photos(&self) -> Result<std::collections::HashMap<String, String>> {
+        let c = self.conn.lock().unwrap();
+        let mut q = c
+            .prepare("SELECT key, json_extract(data,'$.photo') FROM artist_info WHERE json_extract(data,'$.photo') IS NOT NULL")
+            .map_err(err)?;
+        let rows = q
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(err)
+    }
+    pub fn set_artist_info(&self, key: &str, data: &Value) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO artist_info VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                params![key, data.to_string()],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+    /// Lyrics remembered from LRCLIB (see lyrics.rs), by song.
+    pub fn lyrics(&self, key: &str) -> Result<Option<Value>> {
+        let c = self.conn.lock().unwrap();
+        match c.query_row("SELECT data FROM lyrics WHERE key=?", [key], |r| {
+            r.get::<_, String>(0)
+        }) {
+            Ok(data) => Ok(serde_json::from_str(&data).ok()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(err(e)),
+        }
+    }
+    pub fn set_lyrics(&self, key: &str, data: &Value) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO lyrics VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                params![key, data.to_string()],
+            )
+            .map_err(err)?;
+        Ok(())
     }
     pub fn set_original_year(&self, key: &str, year: u32) -> Result<()> {
         self.conn
@@ -265,7 +440,13 @@ impl Database {
             params![id, now()],
         )
         .map_err(err)?;
-        tx.execute("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 20000)",[]).map_err(err)?;
+        // The newest 100,000 plays are kept: years of listening for "Your year" and "On this
+        // day". Only rows older than that are deleted, found through the id index.
+        tx.execute(
+            "DELETE FROM history WHERE id <= (SELECT id FROM history ORDER BY id DESC LIMIT 1 OFFSET 100000)",
+            [],
+        )
+        .map_err(err)?;
         tx.commit().map_err(err)
     }
     pub fn collections(&self) -> Result<Vec<Value>> {

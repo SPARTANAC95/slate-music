@@ -1,18 +1,23 @@
 const views = {
   home: {
     file: 'player-home.png',
-    alt: 'Slate Music Home, showing album artwork, a local music library and the listening queue',
+    alt: 'Slate Music Home, with Jump back in and Recently added shelves of demo albums and the listening panel',
     caption: 'Actual app. Original demo collection.',
+  },
+  playing: {
+    file: 'player-now-playing.png',
+    alt: 'Now Playing with a demo song: a large cover and synced lyrics following the music',
+    caption: 'Now Playing, with lyrics that follow along.',
   },
   albums: {
     file: 'player-albums.png',
     alt: 'Slate Music Albums, showing six original demo album covers organized in a library',
     caption: 'Your albums, with room for the artwork.',
   },
-  queue: {
-    file: 'player-queue.png',
-    alt: 'Slate Music Queue, with an ordered list of demo tracks and playback controls',
-    caption: 'An editable queue. A session that stays with you.',
+  year: {
+    file: 'player-year.png',
+    alt: 'Your year with a demo listening history: hours listened, streak, top songs and artists',
+    caption: 'Your year in music, worked out on your PC.',
   },
 };
 const image = document.querySelector('#player-screenshot');

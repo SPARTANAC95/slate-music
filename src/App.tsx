@@ -55,6 +55,10 @@ import {
   Moon,
   FolderSearch,
   Save,
+  Expand,
+  ChartColumnBig,
+  CalendarHeart,
+  WandSparkles,
 } from 'lucide-react';
 import type { Album, Collection, Playback, Scan, Settings, Snapshot, Track } from './types';
 import {
@@ -65,6 +69,7 @@ import {
   normalize,
   playable,
   playableIndices,
+  plural,
   queueEntries,
   time,
 } from './library';
@@ -81,6 +86,28 @@ import SettingsPanel from './SettingsPanel';
 import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
 import { followsSpotify, updateAll } from './spotifySources';
+import NowPlaying from './NowPlaying';
+import CommandPalette, { type PaletteCommand } from './CommandPalette';
+import YourYear from './YourYear';
+import ArtistHero from './ArtistHero';
+import SmartPlaylistEditor from './SmartPlaylistEditor';
+import { evaluateSmart } from './smart';
+import {
+  columnSort,
+  moveRows,
+  nextSelection,
+  noSelection,
+  pickedRows,
+  sortOrder,
+  SORT_LABELS,
+  type ListSort,
+  type Selection as Picks,
+  type SortMode,
+} from './listTools';
+import { dropZone, endDrag, startDrag, type DragSongs } from './dnd';
+import { forgottenFavorites, jumpBackIn, onThisDay, recentlyAdded, type Play as PlayRow } from './insights';
+import { index as searchIndex, search } from './search';
+import { useArtColor } from './artColor';
 
 type Page =
   | 'Home'
@@ -90,6 +117,7 @@ type Page =
   | 'Favorites'
   | 'Recently played'
   | 'Playlists'
+  | 'Your year'
   | 'Queue'
   | 'Album'
   | 'Artist'
@@ -101,6 +129,8 @@ type Dialog =
   | 'addToPlaylist'
   | 'editCollection'
   | 'deleteCollection'
+  | 'smartPlaylist'
+  | 'editSmart'
   | 'install'
   | null;
 const defaults: Settings = {
@@ -108,6 +138,8 @@ const defaults: Settings = {
   autoDownload: true,
   showListening: true,
   lookupYears: false,
+  lookupLyrics: false,
+  lookupArtists: false,
 };
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 const noQueueEntries: ReturnType<typeof queueEntries> = [];
@@ -129,7 +161,34 @@ const nav = [
   { name: 'Favorites', icon: Heart },
   { name: 'Recently played', icon: History },
   { name: 'Playlists', icon: ListMusic },
+  { name: 'Your year', icon: ChartColumnBig },
 ] as const;
+const SORTS_KEY = 'slate-music.sorts';
+/** Remembered list orders, per list (kept in this PC's WebView storage). */
+function loadSorts(): Record<string, ListSort> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SORTS_KEY) || '{}') || {};
+    // Anything unknown (an older or newer version, a damaged value) is ignored.
+    return Object.fromEntries(
+      Object.entries(saved).filter(
+        ([, s]) =>
+          !!s &&
+          typeof s === 'object' &&
+          Object.hasOwn(SORT_LABELS, (s as ListSort).mode) &&
+          typeof (s as ListSort).reverse === 'boolean',
+      ),
+    ) as Record<string, ListSort>;
+  } catch {
+    return {};
+  }
+}
+/** Lists without an order of their own, and how they are sorted until you choose. */
+const LIBRARY_SORTS: Record<string, SortMode> = {
+  Songs: 'title',
+  Favorites: 'title',
+  'Recently played': 'recent',
+};
+const LIST_PAGES = ['Songs', 'Favorites', 'Recently played', 'Album', 'Artist', 'Collection', 'Queue'];
 export default function App() {
   const [data, setData] = useState<Snapshot | null>(null),
     [pb, setPb] = useState<Playback | null>(null),
@@ -137,11 +196,12 @@ export default function App() {
     [fatal, setFatal] = useState(''),
     [page, setPage] = useState<Page>('Home'),
     [query, setQuery] = useState(''),
-    [sort, setSort] = useState('title'),
-    [recentSort, setRecentSort] = useState('recent'),
+    [sorts, setSorts] = useState<Record<string, ListSort>>(loadSorts),
+    [picked, setPicked] = useState<Picks>(noSelection),
     [filter, setFilter] = useState('all'),
     [selectedAlbum, setSelectedAlbum] = useState(''),
     [selectedArtist, setSelectedArtist] = useState(''),
+    [artistPhotos, setArtistPhotos] = useState<Record<string, string>>({}),
     [selectedCollection, setSelectedCollection] = useState(''),
     [dialog, setDialog] = useState<Dialog>(null),
     [adding, setAdding] = useState<Track[]>([]),
@@ -149,7 +209,10 @@ export default function App() {
     [toast, setToast] = useState(''),
     [settings, setSettings] = useState<Settings>(defaults),
     [seek, setSeek] = useState<number | null>(null),
-    [menu, setMenu] = useState<Menu | null>(null);
+    [menu, setMenu] = useState<Menu | null>(null),
+    [nowPlaying, setNowPlaying] = useState(false),
+    [palette, setPalette] = useState(false),
+    [plays, setPlays] = useState<PlayRow[] | null>(null);
   const searchRef = useRef<HTMLInputElement>(null),
     mainRef = useRef<HTMLElement>(null),
     history = useRef<View[]>([]),
@@ -210,6 +273,20 @@ export default function App() {
       listen<Scan>('scan', (e) => setData((d) => (d ? { ...d, scan: e.payload } : d))),
       listen('library-changed', refresh),
       listen('history-changed', refresh),
+      // Hearts set in the other window (main or mini-player) or by an import.
+      listen<{ ids: string[]; value: boolean }>('favorites-changed', ({ payload }) => {
+        const ids = new Set(payload.ids);
+        setData((d) =>
+          d && d.tracks.some((t) => ids.has(t.id) && t.favorite !== payload.value)
+            ? {
+                ...d,
+                tracks: d.tracks.map((t) =>
+                  ids.has(t.id) ? { ...t, favorite: payload.value } : t,
+                ),
+              }
+            : d,
+        );
+      }),
     ];
     return () => {
       for (const p of promises) p.then((fn) => fn());
@@ -232,11 +309,14 @@ export default function App() {
       return;
     spotifyChecked.current = true;
     // A playlist open in the editor is left alone, so the update never undoes an edit.
-    updateAll((id) => editingRef.current === id).then(async (updated) => {
-      if (!updated) return;
-      await refresh();
-      notify(`Updated ${updated} Spotify playlist${updated === 1 ? '' : 's'}`);
-    });
+    updateAll((id) => editingRef.current === id)
+      .then(async (updated) => {
+        if (!updated) return;
+        await refresh();
+        notify(`Updated ${updated} Spotify playlist${updated === 1 ? '' : 's'}`);
+      })
+      // Offline at start-up: the playlists stay as they are until the next launch.
+      .catch(() => undefined);
   }, [data, mini, refresh, notify]);
   useEffect(() => {
     if (!data || mini || !settings.autoCheck) return;
@@ -266,6 +346,11 @@ export default function App() {
       pending.then((fn) => fn());
     };
   }, [updater.ready, mini, task]);
+  const listKeys = useRef<Record<'selectAll' | 'clear' | 'remove', () => boolean>>({
+    selectAll: () => false,
+    clear: () => false,
+    remove: () => false,
+  });
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -273,18 +358,33 @@ export default function App() {
       const type = tag === 'INPUT' ? (el as HTMLInputElement).type : '';
       const typing =
         tag === 'TEXTAREA' || el?.isContentEditable || (tag === 'INPUT' && type !== 'range');
-      if (typing || dialog || el?.closest('[role="menu"]')) return;
+      // The command palette handles its own keys; lyric lines and palette results take
+      // Space like any button.
+      if (typing || dialog || palette || el?.closest('[role="menu"]')) return;
+      if (e.code === 'Space' && el?.closest('.np-line, [role="option"]')) return;
       // Sliders and the sort menu keep their own arrow keys (and Space for the menu); every
       // other shortcut still works after using them.
       const ownsKeys = type === 'range' || tag === 'SELECT';
       if (ownsKeys && !e.ctrlKey && !e.altKey && e.key.startsWith('Arrow')) return;
       if (tag === 'SELECT' && e.code === 'Space') return;
-      if (e.altKey && e.key === 'ArrowLeft') {
+      if (e.key === 'Escape' && nowPlaying) {
+        e.preventDefault();
+        setNowPlaying(false);
+      } else if (e.key === 'Escape' && listKeys.current.clear()) {
+        e.preventDefault();
+      } else if (e.ctrlKey && e.key.toLowerCase() === 'a' && listKeys.current.selectAll()) {
+        e.preventDefault();
+      } else if (e.key === 'Delete' && listKeys.current.remove()) {
+        e.preventDefault();
+      } else if (e.ctrlKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setNowPlaying((open) => !open);
+      } else if (e.altKey && e.key === 'ArrowLeft') {
         e.preventDefault();
         goBackRef.current();
       } else if (e.ctrlKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        searchRef.current?.focus();
+        setPalette(true);
       } else if (e.code === 'Space') {
         e.preventDefault();
         command('toggle');
@@ -294,10 +394,10 @@ export default function App() {
       } else if (e.ctrlKey && e.key === 'ArrowLeft') {
         e.preventDefault();
         command('previous');
-      } else if (e.key === 'ArrowRight' && pb) {
+      } else if (e.key === 'ArrowRight' && pb?.currentId) {
         e.preventDefault();
         command('seek', pb.position + 5);
-      } else if (e.key === 'ArrowLeft' && pb) {
+      } else if (e.key === 'ArrowLeft' && pb?.currentId) {
         e.preventDefault();
         command('seek', Math.max(0, pb.position - 5));
       } else if (e.ctrlKey && e.key.toLowerCase() === 'm') {
@@ -307,7 +407,8 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [pb, dialog, command, task]);
+  }, [pb, dialog, command, task, nowPlaying, palette]);
+
   useEffect(() => {
     // The mouse's back button goes back, and the browser's own right-click menu (Back,
     // Refresh, Print…) never appears outside text fields.
@@ -339,12 +440,40 @@ export default function App() {
   const albums = useMemo(() => albumsFrom(tracks), [tracks]);
   const duplicateIds = useMemo(() => duplicates(tracks), [tracks]);
   const current = pb?.currentId ? trackMap.get(pb.currentId) : null;
+  const accent = useArtColor(current?.artwork);
   const album = albums.find((a) => a.key === selectedAlbum),
     collection = data?.collections.find((c) => c.id === selectedCollection);
   const artistNames = useMemo(
     () => [...new Set(tracks.map((t) => t.albumArtist))].sort(collator.compare),
     [tracks],
   );
+  useEffect(() => {
+    if (page !== 'Home' && page !== 'Your year') return;
+    invoke<PlayRow[]>('listening_history', { from: 0, to: Date.now() + 60000 })
+      .then(setPlays)
+      .catch(() => setPlays([]));
+  }, [page, data?.tracks]);
+  const shelves = useMemo(() => {
+    const now = Date.now();
+    return {
+      back: jumpBackIn(tracks, albums),
+      added: recentlyAdded(albums),
+      forgotten: forgottenFavorites(tracks, now),
+      today: onThisDay(plays || [], now).flatMap(({ id, year }) => {
+        const t = trackMap.get(id);
+        return t && !t.missing ? [{ track: t, year }] : [];
+      }),
+    };
+  }, [tracks, albums, plays, trackMap]);
+  const songIndex = useMemo(
+    () => searchIndex(tracks, (t) => `${t.title} ${t.artist} ${t.album}`),
+    [tracks],
+  );
+  const albumIndex = useMemo(
+    () => searchIndex(albums, (a) => `${a.name} ${a.artist} ${a.year || ''}`),
+    [albums],
+  );
+  const artistIndex = useMemo(() => searchIndex(artistNames, (name) => name), [artistNames]);
   const artistStats = useMemo(() => {
     const stats = new Map<string, { albums: number; songs: number; artwork: string | null }>();
     for (const a of albums) {
@@ -356,6 +485,12 @@ export default function App() {
     }
     return stats;
   }, [albums]);
+  useEffect(() => {
+    if ((page !== 'Artists' && page !== 'Songs') || !artistNames.length) return;
+    invoke<Record<string, string>>('artist_photos', { names: artistNames })
+      .then(setArtistPhotos)
+      .catch(() => undefined);
+  }, [page, artistNames]);
   const favoriteCount = tracks.filter((t) => t.favorite).length;
   const recent = useMemo(
     () => tracks.filter((t) => t.lastPlayed > 0).sort((a, b) => b.lastPlayed - a.lastPlayed),
@@ -366,9 +501,54 @@ export default function App() {
       page === 'Queue' ? queueEntries(pb?.queue || [], trackMap, deferredQuery) : noQueueEntries,
     [page, pb?.queue, trackMap, deferredQuery],
   );
-  const sortMode = page === 'Recently played' ? recentSort : sort;
-  const shownTracks = useMemo(() => {
-    if (page === 'Queue') return visibleQueue.map((entry) => entry.track);
+  // Library lists and playlists remember their order; an album, an artist or a search is
+  // sorted only while you look at it.
+  const sortKey =
+    page === 'Collection'
+      ? `collection:${selectedCollection}`
+      : deferredQuery && page !== 'Queue'
+        ? 'Search'
+        : page === 'Album'
+          ? `album:${selectedAlbum}`
+          : page === 'Artist'
+            ? `artist:${selectedArtist}`
+            : page;
+  const remembersSort = sortKey in LIBRARY_SORTS || sortKey.startsWith('collection:');
+  const hasCustomOrder = !(sortKey in LIBRARY_SORTS);
+  const storedSort = sorts[sortKey];
+  const listSort = useMemo<ListSort>(
+    () =>
+      page === 'Queue'
+        ? { mode: 'custom', reverse: false }
+        : storedSort && (hasCustomOrder || storedSort.mode !== 'custom')
+          ? storedSort
+          : { mode: LIBRARY_SORTS[sortKey] ?? 'custom', reverse: false },
+    [page, storedSort, hasCustomOrder, sortKey],
+  );
+  function changeSort(next: ListSort) {
+    setSorts((prev) => {
+      const all = { ...prev, [sortKey]: next };
+      try {
+        if (remembersSort)
+          localStorage.setItem(
+            SORTS_KEY,
+            JSON.stringify(
+              Object.fromEntries(
+                Object.entries(all).filter(
+                  ([key]) => key in LIBRARY_SORTS || key.startsWith('collection:'),
+                ),
+              ),
+            ),
+          );
+      } catch {
+        // Not remembered next time; the list is still sorted now.
+      }
+      return all;
+    });
+  }
+  const shown = useMemo(() => {
+    if (page === 'Queue')
+      return { tracks: visibleQueue.map((entry) => entry.track), entries: null as number[] | null };
     let result =
       page === 'Favorites'
         ? tracks.filter((t) => t.favorite)
@@ -377,45 +557,45 @@ export default function App() {
           : page === 'Album'
             ? album?.tracks || []
             : page === 'Artist'
-              ? tracks.filter((t) => t.albumArtist === selectedArtist)
+              ? tracks
+                  .filter((t) => t.albumArtist === selectedArtist)
+                  .sort(
+                    (a, b) =>
+                      (a.year || 9999) - (b.year || 9999) ||
+                      collator.compare(a.album, b.album) ||
+                      a.disc - b.disc ||
+                      a.track - b.track,
+                  )
               : page === 'Collection' && collection
-                ? playable(collection, tracks)
+                ? collection.kind === 'smart' && collection.rules
+                  ? evaluateSmart(collection.rules, tracks, Date.now(), collection.id)
+                  : playable(collection, tracks)
                 : tracks;
     if (deferredQuery) {
-      const needle = normalize(deferredQuery);
-      result = result.filter((t) => normalize(`${t.title} ${t.artist} ${t.album}`).includes(needle));
+      // Forgiving search: word prefixes, parts of words and small typos all match. The best
+      // matches come first until you sort the list.
+      const rank = new Map(search(deferredQuery, songIndex, 1e6).map((t, i) => [t.id, i]));
+      result = result.filter((t) => rank.has(t.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
     }
     if (filter === 'available') result = result.filter((t) => !t.missing);
     if (filter === 'missing') result = result.filter((t) => t.missing);
     if (filter === 'lossless')
       result = result.filter((t) => ['FLAC', 'WAV', 'AIF', 'AIFF'].includes(t.format));
     if (filter === 'duplicates') result = result.filter((t) => duplicateIds.has(t.id));
-    if (['Songs', 'Favorites', 'Recently played'].includes(page) || deferredQuery) {
-      result = [...result].sort((a, b) =>
-        sortMode === 'recent'
-          ? b.lastPlayed - a.lastPlayed
-          : sortMode === 'artist'
-            ? collator.compare(a.artist, b.artist) ||
-              collator.compare(a.album, b.album) ||
-              a.disc - b.disc ||
-              a.track - b.track
-            : sortMode === 'album'
-              ? collator.compare(a.album, b.album) || a.disc - b.disc || a.track - b.track
-              : sortMode === 'year'
-                ? (a.originalYear || a.year || 9999) - (b.originalYear || b.year || 9999) ||
-                  collator.compare(a.artist, b.artist) ||
-                  a.disc - b.disc ||
-                  a.track - b.track
-                : sortMode === 'added'
-                ? b.added - a.added
-                : sortMode === 'duration'
-                  ? b.duration - a.duration
-                  : sortMode === 'plays'
-                    ? b.playCount - a.playCount
-                    : collator.compare(a.title, b.title),
-      );
-    }
-    return result;
+    // Each playlist row's entry in the playlist, so sorted rows still edit the right entry.
+    const entries =
+      page === 'Collection' &&
+      collection &&
+      collection.kind !== 'smart' &&
+      !deferredQuery &&
+      filter === 'all'
+        ? playableIndices(collection, tracks)
+        : null;
+    const order = sortOrder(result, listSort);
+    return {
+      tracks: order.map((i) => result[i]),
+      entries: entries && order.map((i) => entries[i]),
+    };
   }, [
     tracks,
     page,
@@ -424,11 +604,52 @@ export default function App() {
     selectedArtist,
     collection,
     deferredQuery,
+    songIndex,
     filter,
-    sortMode,
+    listSort,
     duplicateIds,
     visibleQueue,
   ]);
+  const shownTracks = shown.tracks;
+  /** Names the list shown: its scroll position is remembered, and drags stay within it. */
+  const listId = deferredQuery
+    ? `search:${page}:${deferredQuery}`
+    : page === 'Collection'
+      ? `collection:${selectedCollection}`
+      : page === 'Album'
+        ? `album:${selectedAlbum}`
+        : page === 'Artist'
+          ? `artist:${selectedArtist}`
+          : page;
+  // Rows are picked by queue position in the queue and by playlist entry in a playlist, so
+  // a song that appears twice is picked (and removed) one copy at a time.
+  const rowKeys = useMemo(
+    () =>
+      page === 'Queue'
+        ? visibleQueue.map((entry) => String(entry.index))
+        : shown.entries
+          ? shown.entries.map((e) => `entry:${e}`)
+          : shownTracks.map((t) => t.id),
+    [page, visibleQueue, shown.entries, shownTracks],
+  );
+  useEffect(() => setPicked(noSelection), [listId]);
+  // Queue positions shift when the queue changes (play next, shuffle, removals), so picks
+  // there are cleared, except right after our own drag, which re-picks the moved songs.
+  const ownQueueMove = useRef(false);
+  useEffect(() => {
+    if (page !== 'Queue') return;
+    if (ownQueueMove.current) ownQueueMove.current = false;
+    else setPicked(noSelection);
+  }, [pb?.queue]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pickedIdx = useMemo(() => pickedRows(picked, rowKeys), [picked, rowKeys]);
+  const pickedTracks = pickedIdx.map((i) => shownTracks[i]);
+  const editablePlaylist =
+    page === 'Collection' && collection?.kind === 'playlist' && !followsSpotify(collection)
+      ? collection
+      : null;
+  const canReorder =
+    (page === 'Queue' && !deferredQuery) ||
+    (!!editablePlaylist && listSort.mode === 'custom' && !listSort.reverse);
   /** Records where the user is, so Back returns here with the same scroll position. */
   function remember() {
     history.current = [
@@ -442,8 +663,11 @@ export default function App() {
       },
     ];
   }
-  function navigate(p: Page) {
-    if (p !== page || ['Album', 'Artist', 'Collection'].includes(p)) remember();
+  /** `samePage`: the album, artist or playlist being opened is the one already shown (for
+   * example after saving it), so Back has no new step to return to. */
+  function navigate(p: Page, samePage = false) {
+    if (p !== page || (['Album', 'Artist', 'Collection'].includes(p) && !samePage)) remember();
+    setNowPlaying(false);
     setPage(p);
     setQuery('');
     setFilter('all');
@@ -479,7 +703,7 @@ export default function App() {
   editingRef.current = dialog === 'editCollection' ? selectedCollection : null;
   function openArtist(name: string) {
     setSelectedArtist(name);
-    navigate('Artist');
+    navigate('Artist', page === 'Artist' && selectedArtist === name);
   }
   function albumOf(t: Track) {
     return albums.find((a) => a.tracks.some((x) => x.id === t.id));
@@ -582,6 +806,52 @@ export default function App() {
       ],
     });
   }
+  function playSong(t: Track) {
+    // A song found by search plays with the rest of its album after it.
+    const a = albumOf(t);
+    const list = a ? a.tracks.filter((x) => !x.missing) : [t];
+    playList(list, Math.max(0, list.findIndex((x) => x.id === t.id)));
+  }
+  const paletteCommands = (): PaletteCommand[] => [
+    { label: pb?.playing ? 'Pause' : 'Play', hint: 'Space', icon: pb?.playing ? <Pause size={16} /> : <Play size={16} />, run: () => command('toggle') },
+    { label: 'Next song', hint: 'Ctrl+→', icon: <SkipForward size={16} />, keywords: 'skip', run: () => command('next') },
+    { label: 'Previous song', hint: 'Ctrl+←', icon: <SkipBack size={16} />, keywords: 'back', run: () => command('previous') },
+    {
+      label: 'Shuffle your library',
+      icon: <Shuffle size={16} />,
+      keywords: 'random play all',
+      run: async () => {
+        await command('shuffle', true);
+        playList(tracks.filter((t) => !t.missing));
+      },
+    },
+    { label: 'Open Now Playing', hint: 'Ctrl+L', icon: <Expand size={16} />, keywords: 'lyrics full screen', run: () => setNowPlaying(true) },
+    ...nav.map(({ name, icon: Icon }) => ({
+      label: `Go to ${name}`,
+      icon: <Icon size={16} />,
+      run: () => navigate(name),
+    })),
+    { label: 'Go to Queue', icon: <ListMusic size={16} />, keywords: 'up next', run: () => navigate('Queue') },
+    { label: 'Import from Spotify', icon: <Link2 size={16} />, keywords: 'playlist liked songs top songs', run: () => setDialog('import') },
+    {
+      label: 'New playlist',
+      icon: <Plus size={16} />,
+      run: () => {
+        setAdding([]);
+        setDialog('newPlaylist');
+      },
+    },
+    { label: 'New smart playlist', icon: <WandSparkles size={16} />, keywords: 'rules automatic', run: () => setDialog('smartPlaylist') },
+    { label: 'Sleep timer: 30 minutes', icon: <Moon size={16} />, keywords: 'sleep stop', run: () => command('sleep', { minutes: 30 }).then((d) => d && notify('Music will pause in 30 minutes.')) },
+    { label: 'Sleep timer: end of this song', icon: <Moon size={16} />, keywords: 'sleep stop', run: () => command('sleep', { endOfTrack: true }).then((d) => d && notify('Music will pause when this song ends.')) },
+    ...(pb?.sleepAt || pb?.sleepEndOfTrack
+      ? [{ label: 'Turn off sleep timer', icon: <Moon size={16} />, keywords: 'sleep', run: () => command('sleep', null) }]
+      : []),
+    { label: pb?.shuffle ? 'Turn shuffle off' : 'Turn shuffle on', icon: <Shuffle size={16} />, run: () => command('shuffle', !pb?.shuffle) },
+    { label: 'Mini-player', hint: 'Ctrl+M', icon: <Minimize2 size={16} />, run: () => task(() => invoke('mini_player')) },
+    { label: 'Settings', icon: <SettingsIcon size={16} />, keywords: 'preferences equalizer output device loudness', run: () => setDialog('settings') },
+    { label: 'Rescan library', icon: <RefreshCw size={16} />, keywords: 'refresh folders', run: () => task(() => invoke('rescan')) },
+  ];
   const sleepLabel = (() => {
     if (pb?.sleepEndOfTrack) return 'Sleep timer: pauses after this song';
     if (!pb?.sleepAt) return 'Sleep timer';
@@ -618,11 +888,11 @@ export default function App() {
   }
   function openAlbum(a: Album) {
     setSelectedAlbum(a.key);
-    navigate('Album');
+    navigate('Album', page === 'Album' && selectedAlbum === a.key);
   }
   function openCollection(c: Collection) {
     setSelectedCollection(c.id);
-    navigate('Collection');
+    navigate('Collection', page === 'Collection' && selectedCollection === c.id);
   }
   async function playList(list: Track[], index = 0) {
     if (!list.length) {
@@ -648,8 +918,8 @@ export default function App() {
     setAdding(list);
     setDialog('addToPlaylist');
   }
-  async function addToPlaylist(c: Collection) {
-    const unique = adding.filter((t, i) => adding.indexOf(t) === i);
+  async function addToPlaylist(c: Collection, list: Track[] = adding) {
+    const unique = list.filter((t, i) => list.indexOf(t) === i);
     const has = (t: Track) => c.entries.some((e) => e.trackId === t.id);
     // An old entry saved as missing (added while its file was unavailable) is repaired
     // instead of counting as "already there".
@@ -660,7 +930,7 @@ export default function App() {
     if (!fresh.length && !repaired.length) {
       setDialog(null);
       return notify(
-        adding.length === 1 ? `Already in ${c.name}` : `These songs are already in ${c.name}`,
+        list.length === 1 ? `Already in ${c.name}` : `These songs are already in ${c.name}`,
       );
     }
     const repairedIds = new Set(repaired.map((t) => t.id));
@@ -673,22 +943,156 @@ export default function App() {
     await refresh();
     setDialog(null);
     const added = [...repaired, ...fresh];
-    const skipped = adding.length - added.length;
+    const skipped = list.length - added.length;
     notify(
       `Added ${added.length === 1 ? added[0].title : `${added.length} songs`} to ${c.name}${skipped ? ` (${skipped} already there)` : ''}`,
     );
   }
-  /** `row` is the song's position among the playlist's playable songs. */
-  function removeFromCollection(c: Collection, row: number) {
-    const entry = playableIndices(c, tracks)[row];
-    if (entry === undefined) return;
+  /** Removes rows of the playlist shown (their positions in the list as shown). */
+  function removeFromCollection(c: Collection, rows: number[]) {
+    const drop = new Set(
+      rows.map((r) => shown.entries?.[r]).filter((e): e is number => e !== undefined),
+    );
+    if (!drop.size) return;
+    task(
+      async () => {
+        await invoke('save_collection', {
+          collection: { ...c, entries: c.entries.filter((_, i) => !drop.has(i)) },
+        });
+        await refresh();
+        setPicked(noSelection);
+      },
+      drop.size === 1 ? `Removed from ${c.name}` : `Removed ${drop.size} songs from ${c.name}`,
+    );
+  }
+  async function favoriteMany(list: Track[], value: boolean) {
+    const ids = list.filter((t) => t.favorite !== value).map((t) => t.id);
+    if (!ids.length) return;
+    await task(
+      async () => {
+        if (value) await invoke('favorite_many', { ids });
+        else for (const id of ids) await invoke('favorite', { id, value: false });
+        const changed = new Set(ids);
+        setData((d) =>
+          d
+            ? {
+                ...d,
+                tracks: d.tracks.map((x) => (changed.has(x.id) ? { ...x, favorite: value } : x)),
+              }
+            : d,
+        );
+      },
+      `${plural(ids.length, 'song')} ${value ? 'added to' : 'removed from'} Favorites`,
+    );
+  }
+  /** Removes the picked songs from the queue or the playlist shown. */
+  function removePicked() {
+    if (page === 'Queue') {
+      const rows = pickedIdx.map((i) => visibleQueue[i].index).filter((i) => i !== pb?.cursor);
+      if (rows.length) command('remove_many', rows).then((done) => done && setPicked(noSelection));
+      else notify('Skip the playing song before removing it.');
+      return true;
+    }
+    if (!editablePlaylist) return false;
+    removeFromCollection(editablePlaylist, pickedIdx);
+    return true;
+  }
+  /** Rows dragged to a new place in the queue or a playlist (before row `to`). */
+  function reorderRows(rows: number[], to: number) {
+    if (page === 'Queue') {
+      // The moved songs stay picked at their new places.
+      const order = moveRows(
+        rowKeys.map((_, i) => i),
+        rows,
+        to,
+      );
+      const positions = rows.map((r) => visibleQueue[r].index);
+      const target = to < visibleQueue.length ? visibleQueue[to].index : (pb?.queue.length ?? 0);
+      ownQueueMove.current = true;
+      command('move_many', { rows: positions, to: target }).then(
+        (done) =>
+          done &&
+          setPicked({
+            keys: new Set(order.flatMap((old, at) => (rows.includes(old) ? [String(at)] : []))),
+            anchor: null,
+          }),
+      );
+      return;
+    }
+    const c = editablePlaylist;
+    const entries = shown.entries;
+    if (!c || !entries) return;
+    const from = rows.map((r) => entries[r]);
+    const before = to < entries.length ? entries[to] : c.entries.length;
     task(async () => {
       await invoke('save_collection', {
-        collection: { ...c, entries: c.entries.filter((_, i) => i !== entry) },
+        collection: { ...c, entries: moveRows(c.entries, from, before) },
       });
       await refresh();
-    }, `Removed from ${c.name}`);
+    });
   }
+  function dragRows(list: Track[], row: number, e: Parameters<typeof startDrag>[0], compact: boolean) {
+    const key = rowKeys[row];
+    const rows = !compact && picked.keys.has(key) ? pickedIdx : [row];
+    if (!compact && !picked.keys.has(key)) setPicked({ keys: new Set([key]), anchor: key });
+    const songs = rows.map((i) => list[i]).filter(Boolean);
+    startDrag(
+      e,
+      { ids: songs.map((t) => t.id), rows, source: compact ? 'shelf' : listId },
+      songs.length === 1 ? songs[0].title : plural(songs.length, 'song'),
+    );
+  }
+  const songsOf = (d: DragSongs) =>
+    d.ids.map((id) => trackMap.get(id)).filter((t): t is Track => !!t);
+  function selectionMenu(x: number, y: number) {
+    const list = pickedTracks;
+    const ready = list.filter((t) => !t.missing);
+    const allFavorite = list.every((t) => t.favorite);
+    setMenu({
+      x,
+      y,
+      items: [
+        {
+          label: `Play ${plural(list.length, 'song')}`,
+          icon: <Play size={15} />,
+          disabled: !ready.length,
+          onSelect: () => playList(ready),
+        },
+        { label: 'Play next', icon: <ListPlus size={15} />, onSelect: () => enqueue(list, true) },
+        { label: 'Add to queue', icon: <ListEnd size={15} />, onSelect: () => enqueue(list, false) },
+        { label: 'Add to playlist…', icon: <ListMusic size={15} />, onSelect: () => addTo(list) },
+        'divider',
+        {
+          label: allFavorite ? 'Remove from favorites' : 'Add to favorites',
+          icon: <Heart size={15} />,
+          onSelect: () => favoriteMany(list, !allFavorite),
+        },
+        ...(page === 'Queue' || editablePlaylist
+          ? [
+              'divider' as const,
+              {
+                label: page === 'Queue' ? 'Remove from queue' : 'Remove from this playlist',
+                icon: <ListX size={15} />,
+                onSelect: () => void removePicked(),
+              },
+            ]
+          : []),
+      ],
+    });
+  }
+  listKeys.current = {
+    selectAll: () => {
+      if (!LIST_PAGES.includes(page) || nowPlaying || !rowKeys.length) return false;
+      setPicked({ keys: new Set(rowKeys), anchor: rowKeys[0] });
+      return true;
+    },
+    clear: () => {
+      if (!pickedIdx.length) return false;
+      setPicked(noSelection);
+      return true;
+    },
+    remove: () => !nowPlaying && pickedIdx.length > 0 && removePicked(),
+  };
   /** Saves first and hearts afterwards, so nothing is hearted if saving fails. */
   async function saveCollection(c: Collection, hearts: string[] = []) {
     await invoke('save_collection', { collection: c });
@@ -696,7 +1100,7 @@ export default function App() {
     await refresh();
     setDialog(null);
     openCollection(c);
-    notify(`${c.kind === 'virtual' ? 'Virtual album' : 'Playlist'} saved`);
+    notify(`${c.kind === 'virtual' ? 'Virtual album' : c.kind === 'smart' ? 'Smart playlist' : 'Playlist'} saved`);
   }
   function changeSettings(next: Settings) {
     setSettings(next);
@@ -721,6 +1125,15 @@ export default function App() {
       className="album-card"
       key={a.key}
       onClick={() => openAlbum(a)}
+      draggable
+      onDragStart={(e) =>
+        startDrag(
+          e,
+          { ids: a.tracks.filter((t) => !t.missing).map((t) => t.id), rows: [], source: 'album' },
+          a.name,
+        )
+      }
+      onDragEnd={endDrag}
       onContextMenu={(e) => {
         e.preventDefault();
         albumMenu(a, e.clientX, e.clientY);
@@ -740,45 +1153,108 @@ export default function App() {
       </small>
     </button>
   );
+  const allPickedFavorite = pickedTracks.every((t) => t.favorite);
+  const smartCounts = useMemo(() => {
+    const now = Date.now();
+    return new Map(
+      (data?.collections ?? [])
+        .filter((c) => c.kind === 'smart' && c.rules)
+        .map((c) => [c.id, evaluateSmart(c.rules!, tracks, now, c.id).length]),
+    );
+  }, [data?.collections, tracks]);
+  const selectionBar = (
+    <div className="selection-bar" role="toolbar" aria-label="Selected songs">
+      <strong>{plural(pickedIdx.length, 'song')} selected</strong>
+      <button className="primary" onClick={() => playList(pickedTracks.filter((t) => !t.missing))}>
+        <Play size={14} /> Play
+      </button>
+      <button onClick={() => enqueue(pickedTracks, true)}>
+        <ListPlus size={14} /> Play next
+      </button>
+      <button onClick={() => enqueue(pickedTracks, false)}>
+        <ListEnd size={14} /> Add to queue
+      </button>
+      <button onClick={() => addTo(pickedTracks)}>
+        <ListMusic size={14} /> Add to playlist
+      </button>
+      <button onClick={() => favoriteMany(pickedTracks, !allPickedFavorite)}>
+        <Heart size={14} /> {allPickedFavorite ? 'Unfavorite' : 'Favorite'}
+      </button>
+      {(page === 'Queue' || editablePlaylist) && (
+        <button onClick={() => removePicked()}>
+          <ListX size={14} /> Remove
+        </button>
+      )}
+      <IconButton label="Clear selection (Esc)" onClick={() => setPicked(noSelection)}>
+        <X size={15} />
+      </IconButton>
+    </div>
+  );
   const table = (list: Track[], compact = false, isQueue = false) => (
-    <TrackTable
-      tracks={list}
-      currentId={pb?.currentId}
-      playing={pb?.playing || false}
-      onPlay={(i) => (isQueue ? void command('jump', i) : void playList(list, i))}
-      onFavorite={favorite}
-      onAdd={(t) => addTo([t])}
-      onQueue={(t) => enqueue([t], false)}
-      onContext={(t, index, x, y) =>
-        trackMenu(
-          t,
-          x,
-          y,
-          isQueue
-            ? {
-                label: 'Remove from queue',
-                disabled: index === pb?.cursor,
-                run: () => command('remove', index),
-              }
-            : page === 'Collection' &&
-                collection?.kind === 'playlist' &&
-                !followsSpotify(collection) &&
-                !compact
+    <>
+      <TrackTable
+        tracks={list}
+        currentId={pb?.currentId}
+        playing={pb?.playing || false}
+        onPlay={(i) => (isQueue ? void command('jump', i) : void playList(list, i))}
+        onFavorite={favorite}
+        onAdd={(t) => addTo([t])}
+        onQueue={(t) => enqueue([t], false)}
+        onContext={(t, index, x, y, row) => {
+          if (!compact && pickedIdx.length > 1 && picked.keys.has(rowKeys[row]))
+            return selectionMenu(x, y);
+          if (!compact) setPicked({ keys: new Set([rowKeys[row]]), anchor: rowKeys[row] });
+          trackMenu(
+            t,
+            x,
+            y,
+            isQueue
               ? {
-                  label: 'Remove from this playlist',
-                  run: () => removeFromCollection(collection, index),
+                  label: 'Remove from queue',
+                  disabled: index === pb?.cursor,
+                  run: () => command('remove', index),
                 }
-              : undefined,
-        )
-      }
-      compact={compact}
-      queue={isQueue}
-      rowIndices={isQueue ? visibleQueue.map((entry) => entry.index) : undefined}
-      currentIndex={isQueue ? pb?.cursor : undefined}
-      queueLength={isQueue ? pb?.queue.length : undefined}
-      onMove={(from, to) => command('move', { from, to })}
-      onRemove={(i) => command('remove', i)}
-    />
+              : page === 'Collection' &&
+                  collection?.kind === 'playlist' &&
+                  !followsSpotify(collection) &&
+                  !compact
+                ? {
+                    label: 'Remove from this playlist',
+                    run: () => removeFromCollection(collection, [index]),
+                  }
+                : undefined,
+          );
+        }}
+        compact={compact}
+        queue={isQueue}
+        rowIndices={isQueue ? visibleQueue.map((entry) => entry.index) : undefined}
+        currentIndex={isQueue ? pb?.cursor : undefined}
+        queueLength={isQueue ? pb?.queue.length : undefined}
+        onMove={(from, to) => command('move', { from, to })}
+        onRemove={(i) => command('remove', i)}
+        listId={compact ? undefined : listId}
+        sort={compact || isQueue ? undefined : listSort}
+        onSort={
+          compact || isQueue
+            ? undefined
+            : (mode) => changeSort(columnSort(listSort, mode, hasCustomOrder))
+        }
+        hasCustomOrder={hasCustomOrder}
+        picked={compact ? undefined : picked.keys}
+      rowKeys={compact ? undefined : rowKeys}
+        onPick={
+          compact
+            ? undefined
+            : (row, e) =>
+                setPicked((prev) =>
+                  nextSelection(prev, rowKeys, row, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey }),
+                )
+        }
+        onDragRows={(row, e) => dragRows(list, row, e, compact)}
+        onReorder={!compact && canReorder ? reorderRows : undefined}
+      />
+      {!compact && pickedIdx.length > 1 && selectionBar}
+    </>
   );
   const transport = (small = false) => (
     <div className={`transport ${small ? 'small' : ''}`}>
@@ -844,7 +1320,8 @@ export default function App() {
           command('seek', v).then(() => setSeek(null));
         }}
         onKeyUp={(e) => {
-          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+          // Any key that moved the slider (arrows, Page Up/Down, Home/End) plays from there.
+          if (seek !== null) {
             command('seek', Number(e.currentTarget.value)).then(() => setSeek(null));
           }
         }}
@@ -905,7 +1382,10 @@ export default function App() {
       </div>
     );
   return (
-    <div className={`app ${settings.showListening ? '' : 'without-listening'}`}>
+    <div
+      className={`app ${settings.showListening ? '' : 'without-listening'}`}
+      style={accent ? ({ '--art': accent } as React.CSSProperties) : undefined}
+    >
       <header className="titlebar" data-tauri-drag-region>
         <span className="titlebar-word" data-tauri-drag-region>
           SLATE MUSIC
@@ -943,6 +1423,14 @@ export default function App() {
               aria-label={name}
               className={`nav-item ${page === name ? 'active' : ''}`}
               onClick={() => navigate(name)}
+              {...(name === 'Favorites'
+                ? dropZone((d) => favoriteMany(songsOf(d), true))
+                : name === 'Playlists'
+                  ? dropZone((d) => {
+                      setAdding(songsOf(d));
+                      setDialog('newPlaylist');
+                    })
+                  : {})}
             >
               <Icon size={18} strokeWidth={1.65} />
               <span>{name}</span>
@@ -964,14 +1452,22 @@ export default function App() {
         </div>
         <div className="sidebar-playlists">
           {data.collections
-            .filter((c) => c.kind === 'playlist')
+            .filter((c) => c.kind === 'playlist' || c.kind === 'smart')
             .map((c) => (
               <button
                 className={`playlist-link ${page === 'Collection' && c.id === selectedCollection ? 'active' : ''}`}
                 key={c.id}
                 onClick={() => openCollection(c)}
+                {...dropZone(
+                  (d) => task(() => addToPlaylist(c, songsOf(d))),
+                  () => c.kind === 'playlist' && !followsSpotify(c),
+                )}
               >
-                <span className="playlist-dot" />
+                {c.kind === 'smart' ? (
+                  <WandSparkles size={12} className="playlist-spark" />
+                ) : (
+                  <span className="playlist-dot" />
+                )}
                 <span>{c.name}</span>
               </button>
             ))}
@@ -998,7 +1494,7 @@ export default function App() {
             <span>
               {data.scan.scanning
                 ? `Indexing · ${data.scan.processed} songs`
-                : `${tracks.filter((t) => !t.missing).length} songs on this computer`}
+                : `${plural(tracks.filter((t) => !t.missing).length, 'song')} on this computer`}
             </span>
             <IconButton
               label="Rescan library"
@@ -1053,7 +1549,16 @@ export default function App() {
                 <X size={14} />
               </IconButton>
             ) : (
-              <kbd>Ctrl K</kbd>
+              <kbd
+                role="button"
+                title="Search everything (Ctrl+K)"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setPalette(true);
+                }}
+              >
+                Ctrl K
+              </kbd>
             )}
           </label>
           <IconButton
@@ -1108,8 +1613,11 @@ export default function App() {
                   <button
                     className="primary hero-button"
                     onClick={async () => {
+                      const songs = tracks.filter((t) => !t.missing);
                       await command('shuffle', true);
-                      playList(tracks.filter((t) => !t.missing));
+                      // The chosen song plays first, so choose that at random too; otherwise
+                      // every shuffle would open with the library's first song.
+                      playList(songs, Math.floor(Math.random() * songs.length));
                     }}
                   >
                     <Shuffle size={16} />
@@ -1132,18 +1640,72 @@ export default function App() {
                   </div>
                 </div>
               </section>
+              {shelves.back.length > 0 && (
+                <section className="home-section">
+                  <div className="section-heading">
+                    <div>
+                      <h2>Jump back in</h2>
+                      <p>The albums you were playing.</p>
+                    </div>
+                    <button className="text-button" onClick={() => navigate('Recently played')}>
+                      History <ArrowRight size={15} />
+                    </button>
+                  </div>
+                  <div className="album-grid home-albums">{shelves.back.slice(0, 5).map(albumCard)}</div>
+                </section>
+              )}
               <section className="home-section">
                 <div className="section-heading">
                   <div>
-                    <h2>On your shelves</h2>
-                    <p>A good album deserves another listen.</p>
+                    <h2>{shelves.back.length ? 'Recently added' : 'On your shelves'}</h2>
+                    <p>
+                      {shelves.back.length
+                        ? 'New arrivals in your collection.'
+                        : 'A good album deserves another listen.'}
+                    </p>
                   </div>
                   <button className="text-button" onClick={() => navigate('Albums')}>
                     All albums <ArrowRight size={15} />
                   </button>
                 </div>
-                <div className="album-grid home-albums">{albums.slice(0, 5).map(albumCard)}</div>
+                <div className="album-grid home-albums">
+                  {(shelves.back.length ? shelves.added : albums).slice(0, 5).map(albumCard)}
+                </div>
               </section>
+              {shelves.today.length > 0 && (
+                <section className="home-section">
+                  <div className="section-heading">
+                    <div>
+                      <h2>
+                        <CalendarHeart size={18} /> On this day
+                      </h2>
+                      <p>
+                        What you played on{' '}
+                        {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })} in
+                        earlier years.
+                      </p>
+                    </div>
+                    <button className="text-button" onClick={() => playList(shelves.today.map((x) => x.track))}>
+                      <Play size={13} /> Play them
+                    </button>
+                  </div>
+                  {table(shelves.today.slice(0, 6).map((x) => x.track), true)}
+                </section>
+              )}
+              {shelves.forgotten.length > 0 && (
+                <section className="home-section">
+                  <div className="section-heading">
+                    <div>
+                      <h2>Forgotten favourites</h2>
+                      <p>Hearted songs you haven’t played in a while.</p>
+                    </div>
+                    <button className="text-button" onClick={() => playList(shelves.forgotten)}>
+                      <Play size={13} /> Play them
+                    </button>
+                  </div>
+                  {table(shelves.forgotten.slice(0, 6), true)}
+                </section>
+              )}
               <section className="home-section">
                 <div className="section-heading">
                   <h2>{recent.length ? 'Recently played' : 'Start somewhere good'}</h2>
@@ -1215,11 +1777,11 @@ export default function App() {
                   const stats = artistStats.get(name);
                   return (
                     <button className="artist-card" key={name} onClick={() => openArtist(name)}>
-                      <Art hash={stats?.artwork} />
+                      <Art hash={artistPhotos[name] || stats?.artwork} className={artistPhotos[name] ? 'photo' : ''} />
                       <div>
                         <h2>{name}</h2>
                         <p>
-                          {stats?.albums || 0} albums · {stats?.songs || 0} songs
+                          {plural(stats?.albums || 0, 'album')} · {plural(stats?.songs || 0, 'song')}
                         </p>
                       </div>
                       <ChevronRight size={18} />
@@ -1228,6 +1790,15 @@ export default function App() {
                 })}
               </div>
             </>
+          ) : page === 'Your year' ? (
+            <YourYear
+              plays={plays}
+              trackMap={trackMap}
+              albums={albums}
+              onPlay={(list) => playList(list)}
+              onArtist={openArtist}
+              onAlbum={openAlbum}
+            />
           ) : page === 'Playlists' ? (
             <>
               <div className="page-heading">
@@ -1239,6 +1810,10 @@ export default function App() {
                   <button onClick={() => setDialog('import')}>
                     <Link2 size={16} />
                     Import from Spotify
+                  </button>
+                  <button onClick={() => setDialog('smartPlaylist')}>
+                    <WandSparkles size={16} />
+                    New smart playlist
                   </button>
                   <button
                     className="primary"
@@ -1252,10 +1827,10 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {data.collections.filter((c) => c.kind === 'playlist').length ? (
+              {data.collections.filter((c) => c.kind === 'playlist' || c.kind === 'smart').length ? (
                 <div className="collection-grid">
                   {data.collections
-                    .filter((c) => c.kind === 'playlist')
+                    .filter((c) => c.kind === 'playlist' || c.kind === 'smart')
                     .map((c) => (
                       <button
                         className="collection-card"
@@ -1268,7 +1843,11 @@ export default function App() {
                             .find(Boolean)}
                         />
                         <strong>{c.name}</strong>
-                        <span>{c.entries.length} songs</span>
+                        <span>
+                          {c.kind === 'smart' && c.rules
+                            ? `Smart · ${plural(smartCounts.get(c.id) ?? 0, 'song')}`
+                            : plural(c.entries.length, 'song')}
+                        </span>
                       </button>
                     ))}
                 </div>
@@ -1290,7 +1869,7 @@ export default function App() {
                     {album.artist}
                   </button>
                   <p>
-                    {album.year || 'Unknown year'} · {album.tracks.length} songs ·{' '}
+                    {album.year || 'Unknown year'} · {plural(album.tracks.length, 'song')} ·{' '}
                     {durationLabel(album.tracks.reduce((s, t) => s + t.duration, 0))}
                   </p>
                   <div className="button-row">
@@ -1313,17 +1892,18 @@ export default function App() {
             </>
           ) : page === 'Artist' ? (
             <>
-              <div className="page-heading">
-                <div>
-                  <p>Artist</p>
-                  <h1>{selectedArtist}</h1>
-                  <p>{shownTracks.length} songs in your library</p>
-                </div>
-                <button className="primary" onClick={() => playList(shownTracks)}>
-                  <Play size={16} />
-                  Play artist
-                </button>
-              </div>
+              <ArtistHero
+                name={selectedArtist}
+                songs={shownTracks.length}
+                albums={artistStats.get(selectedArtist)?.albums || 0}
+                lookup={!!settings.lookupArtists}
+                fallbackArt={artistStats.get(selectedArtist)?.artwork}
+                onPlay={() => playList(shownTracks.filter((t) => !t.missing))}
+                onShuffle={async () => {
+                  await command('shuffle', true);
+                  playList(shownTracks.filter((t) => !t.missing));
+                }}
+              />
               <div className="album-grid artist-albums">
                 {albums.filter((a) => a.artist === selectedArtist).map(albumCard)}
               </div>
@@ -1340,12 +1920,17 @@ export default function App() {
                 />
                 <div>
                   <span className="detail-type">
-                    {collection.kind === 'virtual' ? 'Virtual album' : 'Playlist'}
+                    {collection.kind === 'virtual'
+                      ? 'Virtual album'
+                      : collection.kind === 'smart'
+                        ? 'Smart playlist'
+                        : 'Playlist'}
                   </span>
                   <h1>{collection.name}</h1>
                   <p>
-                    {collection.artist || 'Made by you'} · {shownTracks.length} available of{' '}
-                    {collection.entries.length} tracks
+                    {collection.kind === 'smart'
+                      ? `${plural(shownTracks.length, 'song')} right now · updates itself`
+                      : `${collection.artist || 'Made by you'} · ${shownTracks.length} available of ${collection.entries.length} tracks`}
                   </p>
                   <div className="button-row">
                     <button
@@ -1356,9 +1941,12 @@ export default function App() {
                       <Play size={16} />
                       Play
                     </button>
-                    <button onClick={() => setDialog('editCollection')}>
+                    <button
+                      onClick={() => setDialog(collection.kind === 'smart' ? 'editSmart' : 'editCollection')}
+                    >
                       <Pencil size={15} />
-                      Edit {collection.kind === 'virtual' ? 'matches' : 'playlist'}
+                      Edit{' '}
+                      {collection.kind === 'virtual' ? 'matches' : collection.kind === 'smart' ? 'rules' : 'playlist'}
                     </button>
                     <IconButton
                       label="Delete collection"
@@ -1402,9 +1990,9 @@ export default function App() {
                   <h1>{query ? 'Search results' : page}</h1>
                   <p>
                     {page === 'Queue'
-                      ? `${pb.queue.length} songs in this listening session`
+                      ? `${plural(pb.queue.length, 'song')} in this listening session`
                       : query
-                        ? `${shownTracks.length} matches for “${query}”`
+                        ? `${plural(shownTracks.length, 'match', 'matches')} for “${query}”`
                         : page === 'Favorites'
                           ? 'The songs you keep coming back to.'
                           : page === 'Recently played'
@@ -1441,6 +2029,16 @@ export default function App() {
                   </button>
                 )}
               </div>
+              {page === 'Songs' && deferredQuery && (
+                <SearchGroups
+                  artists={search(deferredQuery, artistIndex, 6)}
+                  albums={search(deferredQuery, albumIndex, 6)}
+                  artistStats={artistStats}
+                  photos={artistPhotos}
+                  albumCard={albumCard}
+                  onArtist={openArtist}
+                />
+              )}
               {page !== 'Queue' && (
                 <div className="list-tools">
                   <div className="filter-tabs">
@@ -1462,14 +2060,14 @@ export default function App() {
                   </div>
                   <select
                     aria-label="Sort songs"
-                    value={sortMode}
+                    value={listSort.mode}
                     onChange={(e) => {
-                      if (page === 'Recently played') setRecentSort(e.target.value);
-                      else setSort(e.target.value);
+                      changeSort({ mode: e.target.value as SortMode, reverse: false });
                       // Hand the keyboard back so Space plays and pauses again.
                       e.currentTarget.blur();
                     }}
                   >
+                    {sortKey === 'Search' && <option value="custom">Best match</option>}
                     {page === 'Recently played' && <option value="recent">Last played</option>}
                     <option value="title">Title</option>
                     <option value="artist">Artist</option>
@@ -1526,7 +2124,14 @@ export default function App() {
               <ListMusic size={18} />
             </IconButton>
           </div>
-          <div className="listening-cover">
+          <div
+            className="listening-cover"
+            role={current ? 'button' : undefined}
+            tabIndex={current ? 0 : undefined}
+            title={current ? 'Open Now Playing (Ctrl+L)' : undefined}
+            onClick={() => current && setNowPlaying(true)}
+            onKeyDown={(e) => current && e.key === 'Enter' && setNowPlaying(true)}
+          >
             <Art hash={current?.artwork} name={current?.album} />
             {current && (
               <span className="format-badge">
@@ -1574,7 +2179,7 @@ export default function App() {
               View queue
             </button>
           </div>
-          <div className="next-tracks">
+          <div className="next-tracks" {...dropZone((d) => enqueue(songsOf(d), false))}>
             {pb.queue.slice(pb.cursor + 1, pb.cursor + 5).map((id, i) => {
               const t = trackMap.get(id);
               return t ? (
@@ -1612,11 +2217,19 @@ export default function App() {
       )}
       <footer className="player-bar">
         <div className="player-current">
-          <Art hash={current?.artwork} />
-          <div>
-            <strong>{current?.title || 'Choose something you love'}</strong>
-            <span>{current?.artist || 'Your library is ready'}</span>
-          </div>
+          <button
+            className="player-open"
+            aria-label="Open Now Playing"
+            title="Now Playing (Ctrl+L)"
+            disabled={!current}
+            onClick={() => setNowPlaying(true)}
+          >
+            <Art hash={current?.artwork} />
+            <div>
+              <strong>{current?.title || 'Choose something you love'}</strong>
+              <span>{current?.artist || 'Your library is ready'}</span>
+            </div>
+          </button>
           <IconButton
             label="Favorite playing song"
             active={current?.favorite}
@@ -1666,6 +2279,14 @@ export default function App() {
             value={pb.volume}
             onChange={(e) => command('volume', Number(e.target.value))}
           />
+          <IconButton
+            label="Now Playing (Ctrl+L)"
+            active={nowPlaying}
+            disabled={!current}
+            onClick={() => setNowPlaying((open) => !open)}
+          >
+            <Expand size={17} />
+          </IconButton>
           <IconButton label="Mini-player" onClick={() => task(() => invoke('mini_player'))}>
             <Minimize2 size={18} />
           </IconButton>
@@ -1693,6 +2314,47 @@ export default function App() {
           </IconButton>
         </div>
       )}
+      {palette && (
+        <CommandPalette
+          tracks={tracks}
+          albums={albums}
+          collections={data.collections}
+          commands={paletteCommands()}
+          onClose={() => setPalette(false)}
+          onArtist={openArtist}
+          onAlbum={(a) => {
+            setNowPlaying(false);
+            openAlbum(a);
+          }}
+          onSong={playSong}
+          onPlaylist={(c) => {
+            setNowPlaying(false);
+            openCollection(c);
+          }}
+        />
+      )}
+      {nowPlaying && (
+        <NowPlaying
+          track={current ?? null}
+          pb={pb}
+          trackMap={trackMap}
+          accent={accent}
+          transport={transport()}
+          progress={progress}
+          lookupLyrics={settings.lookupLyrics}
+          onClose={() => setNowPlaying(false)}
+          onFavorite={favorite}
+          onSeek={(seconds) => command('seek', seconds)}
+          onJump={(index) => command('jump', index)}
+          onAlbum={(t) => {
+            const a = albumOf(t);
+            if (a) {
+              setNowPlaying(false);
+              openAlbum(a);
+            }
+          }}
+        />
+      )}
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -1715,13 +2377,25 @@ export default function App() {
                     ? 'Add to a playlist'
                     : dialog === 'editCollection'
                       ? 'Edit your collection'
+                      : dialog === 'smartPlaylist'
+                        ? 'A new smart playlist'
+                        : dialog === 'editSmart'
+                          ? 'Edit smart playlist'
                       : dialog === 'deleteCollection'
                         ? 'Delete this collection?'
                         : 'An update is ready.'
           }
           onClose={() => setDialog(null)}
-          wide={['settings', 'import', 'editCollection'].includes(dialog)}
+          wide={['settings', 'import', 'editCollection', 'smartPlaylist', 'editSmart'].includes(dialog)}
         >
+          {(dialog === 'smartPlaylist' || (dialog === 'editSmart' && collection?.kind === 'smart')) && (
+            <SmartPlaylistEditor
+              key={dialog}
+              existing={dialog === 'editSmart' ? collection : undefined}
+              tracks={tracks}
+              onSave={saveCollection}
+            />
+          )}
           {dialog === 'settings' && (
             <SettingsPanel
               data={data}
@@ -1799,7 +2473,8 @@ export default function App() {
                     await invoke('delete_collection', { id: selectedCollection });
                     await refresh();
                     setDialog(null);
-                    navigate('Playlists');
+                    // Virtual albums are listed with the albums.
+                    navigate(collection?.kind === 'virtual' ? 'Albums' : 'Playlists');
                   })
                 }
               >
@@ -1843,6 +2518,52 @@ export default function App() {
           )}
         </Modal>
       )}
+    </div>
+  );
+}
+
+/** On the search page: matching artists and albums above the matching songs. */
+function SearchGroups({
+  artists,
+  albums,
+  artistStats,
+  photos,
+  albumCard,
+  onArtist,
+}: {
+  artists: string[];
+  albums: Album[];
+  artistStats: Map<string, { albums: number; songs: number; artwork: string | null }>;
+  photos: Record<string, string>;
+  albumCard: (a: Album) => React.ReactNode;
+  onArtist: (name: string) => void;
+}) {
+  if (!artists.length && !albums.length) return null;
+  return (
+    <div className="search-groups">
+      {artists.length > 0 && (
+        <section>
+          <h2 className="subheading">Artists</h2>
+          <div className="artist-chips">
+            {artists.map((name) => (
+              <button key={name} className="artist-chip" onClick={() => onArtist(name)}>
+                <Art hash={photos[name] || artistStats.get(name)?.artwork} className={photos[name] ? 'photo' : ''} />
+                <span>
+                  <strong>{name}</strong>
+                  <small>{plural(artistStats.get(name)?.songs ?? 0, 'song')}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+      {albums.length > 0 && (
+        <section>
+          <h2 className="subheading">Albums</h2>
+          <div className="album-grid search-albums">{albums.map(albumCard)}</div>
+        </section>
+      )}
+      <h2 className="subheading">Songs</h2>
     </div>
   );
 }

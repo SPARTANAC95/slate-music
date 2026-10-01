@@ -13,6 +13,8 @@ import {
 import { Toggle, IconButton } from './components';
 import type { Snapshot, Settings, Playback } from './types';
 import type { useUpdater } from './updater';
+import SoundSettings from './SoundSettings';
+import SharingSettings from './SharingSettings';
 export default function SettingsPanel({
   data,
   pb,
@@ -139,6 +141,18 @@ export default function SettingsPanel({
           checked={!!settings.lookupYears}
           onChange={(v) => onSettings({ ...settings, lookupYears: v })}
         />
+        <Toggle
+          label="Find lyrics online"
+          description="Songs without lyrics of their own (in the file or an .lrc file beside it) are looked up on LRCLIB, a free lyrics database, when you open Now Playing. Only the artist, title, album and length are sent; results are remembered."
+          checked={!!settings.lookupLyrics}
+          onChange={(v) => onSettings({ ...settings, lookupLyrics: v })}
+        />
+        <Toggle
+          label="Show artist photos and bios"
+          description="When you open an artist, Slate Music looks them up once on MusicBrainz and Wikipedia and saves a photo and a short bio. Only the artist’s name is sent."
+          checked={!!settings.lookupArtists}
+          onChange={(v) => onSettings({ ...settings, lookupArtists: v })}
+        />
         {data.scan.errors.length > 0 && (
           <details className="scan-errors">
             <summary>
@@ -155,7 +169,12 @@ export default function SettingsPanel({
         <div className="setting-row">
           <span>
             <strong>Gapless playback</strong>
-            <small>One continuous native audio stream. On when crossfade is off.</small>
+            <small>
+              One continuous native audio stream. On when crossfade is off.
+              {pb.output?.exclusive
+                ? ' In exclusive mode there is a short pause when the sample rate changes between songs.'
+                : ''}
+            </small>
           </span>
           <span className="badge">
             <CheckCircle2 size={12} />
@@ -165,7 +184,11 @@ export default function SettingsPanel({
         <label className="setting-row">
           <span>
             <strong>Crossfade</strong>
-            <small>Blend the end of one track into the next.</small>
+            <small>
+              {pb.output?.exclusive
+                ? 'Not used in exclusive mode, which sends every song untouched.'
+                : 'Blend the end of one track into the next.'}
+            </small>
           </span>
           <select
             aria-label="Crossfade"
@@ -179,6 +202,13 @@ export default function SettingsPanel({
             ))}
           </select>
         </label>
+        <SoundSettings
+          data={data}
+          pb={pb}
+          settings={settings}
+          onSettings={onSettings}
+          onPlayback={onPlayback}
+        />
         <Toggle
           label="Listening panel"
           description="Keep artwork and the next songs in view."
@@ -186,8 +216,9 @@ export default function SettingsPanel({
           onChange={(v) => onSettings({ ...settings, showListening: v })}
         />
         <p className="fine-print">
-          FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Output follows your Windows default
-          device. If an output device disconnects, playback pauses and reconnects automatically.
+          FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Songs are mixed at 48 kHz in Windows’
+          shared mode, or sent at their own rate in exclusive mode. If an output device disconnects,
+          playback pauses and reconnects automatically.
         </p>
       </section>
       <section>
@@ -262,6 +293,7 @@ export default function SettingsPanel({
           limited to five authorized users.
         </p>
       </section>
+      <SharingSettings settings={settings} onSettings={onSettings} />
       <section>
         <h3>
           <Download size={16} />

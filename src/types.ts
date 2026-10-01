@@ -39,6 +39,35 @@ export interface Playback {
   /** Sleep timer deadline in Unix milliseconds. */
   sleepAt: number | null;
   sleepEndOfTrack: boolean;
+  levelling: 'off' | 'track' | 'album' | 'smart';
+  smartCrossfade: boolean;
+  eq: EqSettings;
+  /** The chosen output device; null follows the Windows default. */
+  outputDevice: string | null;
+  /** Play through the device exclusively, at each song's own rate. */
+  exclusive?: boolean;
+  /** What is actually playing, for the signal path. */
+  output: {
+    device: string;
+    sampleRate: number;
+    channels: number;
+    fallback: boolean;
+    /** Slate Music has the device to itself (exclusive mode). */
+    exclusive?: boolean;
+    /** Bits per sample sent in exclusive mode. */
+    bits?: number;
+  } | null;
+  /** Levelling applied to the current song, in dB. */
+  gainDb: number | null;
+  gainKind: 'off' | 'track' | 'album' | 'unmeasured';
+}
+export interface EqSettings {
+  enabled: boolean;
+  /** dB, 0 or below. */
+  preamp: number;
+  /** dB for 31 Hz … 16 kHz. */
+  bands: number[];
+  preset: string;
 }
 export interface Entry {
   trackId: string | null;
@@ -51,10 +80,38 @@ export interface Entry {
   /** The user chose "Leave this song missing"; updates keep it unmatched. */
   rejected?: boolean;
 }
+export type SmartField =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'year'
+  | 'format'
+  | 'lossless'
+  | 'favorite'
+  | 'plays'
+  | 'lastPlayed'
+  | 'added'
+  | 'duration';
+export type SmartOp = 'contains' | 'is' | 'isNot' | 'gt' | 'lt' | 'withinDays' | 'olderThanDays';
+export interface SmartRule {
+  field: SmartField;
+  op: SmartOp;
+  value: string | number | boolean;
+}
+/** A smart playlist's rules: its songs are worked out from the library each time. */
+export interface SmartRules {
+  match: 'all' | 'any';
+  rules: SmartRule[];
+  sort: 'random' | 'plays' | 'recent' | 'added' | 'year' | 'title';
+  /** 0 = no limit. */
+  limit: number;
+}
 export interface Collection {
   id: string;
   name: string;
-  kind: 'playlist' | 'virtual';
+  kind: 'playlist' | 'virtual' | 'smart';
+  /** Only for smart playlists. */
+  rules?: SmartRules;
   entries: Entry[];
   created: number;
   sourceUrl?: string;
@@ -73,6 +130,16 @@ export interface Settings {
   showListening: boolean;
   /** Look up original release years on MusicBrainz. */
   lookupYears: boolean;
+  /** Look up lyrics on LRCLIB when a song has none of its own. */
+  lookupLyrics: boolean;
+  /** Look up artist photos and bios (MusicBrainz, Wikidata, Wikipedia). */
+  lookupArtists?: boolean;
+  /** Send songs you listen to to Last.fm. */
+  scrobble?: boolean;
+  /** Show the playing song as your Discord status. */
+  discordPresence?: boolean;
+  /** Equalizer per output device name ("" = Windows default). */
+  eqByDevice?: Record<string, EqSettings>;
 }
 export interface Scan {
   scanning: boolean;
@@ -88,6 +155,8 @@ export interface Snapshot {
   settings: Settings | null;
   scan: Scan;
   playback: Playback;
+  /** Songs whose loudness has been measured. */
+  loudnessMeasured: number;
   spotify: {
     connected: boolean;
     playlistAccess: boolean;

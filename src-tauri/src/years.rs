@@ -6,13 +6,27 @@ use serde_json::Value;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::Emitter;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// When the last MusicBrainz request was sent, by anyone in Slate Music.
+static LAST_REQUEST: Mutex<Option<Instant>> = Mutex::new(None);
+/// Waits for Slate Music's turn to ask MusicBrainz. Year and artist lookups share it, so
+/// together they never send more than one request every 1.1 seconds, as MusicBrainz asks.
+pub fn musicbrainz_turn() {
+    let mut last = LAST_REQUEST.lock().unwrap();
+    if let Some(at) = *last {
+        let gap = Duration::from_millis(1100);
+        if at.elapsed() < gap {
+            std::thread::sleep(gap - at.elapsed());
+        }
+    }
+    *last = Some(Instant::now());
+}
 const AGENT: &str = concat!(
     "SlateMusic/",
     env!("CARGO_PKG_VERSION"),
@@ -118,6 +132,7 @@ fn search(client: &reqwest::blocking::Client, artist: &str, title: &str) -> Resu
         quoted(artist)
     );
     for attempt in 0..3 {
+        musicbrainz_turn();
         let r = client
             .get("https://musicbrainz.org/ws/2/recording")
             .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "25")])
@@ -137,7 +152,8 @@ fn search(client: &reqwest::blocking::Client, artist: &str, title: &str) -> Resu
 }
 
 /// Looks up every song that still needs a year, unless a lookup is already running or the
-/// setting is off. Stops quietly when offline and tries again after the next scan.
+/// setting is off. A song that can't be looked up is skipped; after three failures in a row
+/// (offline) it stops quietly and tries again after the next scan.
 pub fn start(db: Arc<Database>, app: tauri::AppHandle) {
     if !enabled(&db) || RUNNING.swap(true, Ordering::SeqCst) {
         return;
@@ -148,14 +164,18 @@ pub fn start(db: Arc<Database>, app: tauri::AppHandle) {
             .timeout(Duration::from_secs(20))
             .build();
         let mut found = 0;
+        // A failed song is skipped; several in a row mean MusicBrainz can't be reached.
+        let mut failures = 0;
         if let (Ok(client), Ok(needed)) = (client, db.years_needed()) {
             for song in needed {
-                if !enabled(&db) {
+                if !enabled(&db) || failures >= 3 {
                     break;
                 }
                 let Ok(response) = search(&client, &song.artist, &song.title) else {
-                    break;
+                    failures += 1;
+                    continue;
                 };
+                failures = 0;
                 // A year after the album's own release would contradict the file; skip it.
                 let year = earliest_year(&response, &song.artist, &song.title)
                     .filter(|y| song.album_year == 0 || *y <= song.album_year)
@@ -169,7 +189,6 @@ pub fn start(db: Arc<Database>, app: tauri::AppHandle) {
                         let _ = app.emit("library-changed", ());
                     }
                 }
-                std::thread::sleep(Duration::from_millis(1100));
             }
         }
         if found > 0 {
