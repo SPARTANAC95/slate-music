@@ -440,7 +440,13 @@ impl Database {
             params![id, now()],
         )
         .map_err(err)?;
-        tx.execute("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 20000)",[]).map_err(err)?;
+        // The newest 100,000 plays are kept: years of listening for "Your year" and "On this
+        // day". Only rows older than that are deleted, found through the id index.
+        tx.execute(
+            "DELETE FROM history WHERE id <= (SELECT id FROM history ORDER BY id DESC LIMIT 1 OFFSET 100000)",
+            [],
+        )
+        .map_err(err)?;
         tx.commit().map_err(err)
     }
     pub fn collections(&self) -> Result<Vec<Value>> {

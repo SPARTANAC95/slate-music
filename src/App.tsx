@@ -174,7 +174,7 @@ function loadSorts(): Record<string, ListSort> {
         ([, s]) =>
           !!s &&
           typeof s === 'object' &&
-          (s as ListSort).mode in SORT_LABELS &&
+          Object.hasOwn(SORT_LABELS, (s as ListSort).mode) &&
           typeof (s as ListSort).reverse === 'boolean',
       ),
     ) as Record<string, ListSort>;
@@ -309,11 +309,14 @@ export default function App() {
       return;
     spotifyChecked.current = true;
     // A playlist open in the editor is left alone, so the update never undoes an edit.
-    updateAll((id) => editingRef.current === id).then(async (updated) => {
-      if (!updated) return;
-      await refresh();
-      notify(`Updated ${updated} Spotify playlist${updated === 1 ? '' : 's'}`);
-    });
+    updateAll((id) => editingRef.current === id)
+      .then(async (updated) => {
+        if (!updated) return;
+        await refresh();
+        notify(`Updated ${updated} Spotify playlist${updated === 1 ? '' : 's'}`);
+      })
+      // Offline at start-up: the playlists stay as they are until the next launch.
+      .catch(() => undefined);
   }, [data, mini, refresh, notify]);
   useEffect(() => {
     if (!data || mini || !settings.autoCheck) return;
