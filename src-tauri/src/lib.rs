@@ -81,13 +81,37 @@ async fn playback(
     .await
     .map_err(err)?
 }
-#[tauri::command]
-async fn favorite(id: String, value: bool, state: tauri::State<'_, AppState>) -> Result<()> {
-    state.db.favorite(&id, value)
+/// Tells every window (main and mini-player) which songs' favorite state changed.
+fn favorites_changed(app: &tauri::AppHandle, ids: &[String], value: bool) {
+    let _ = app.emit("favorites-changed", json!({"ids": ids, "value": value}));
 }
 #[tauri::command]
-async fn favorite_many(ids: Vec<String>, state: tauri::State<'_, AppState>) -> Result<()> {
-    ids.iter().try_for_each(|id| state.db.favorite(id, true))
+async fn favorite(
+    id: String,
+    value: bool,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<()> {
+    state.db.favorite(&id, value)?;
+    favorites_changed(&app, &[id], value);
+    Ok(())
+}
+#[tauri::command]
+async fn favorite_many(
+    ids: Vec<String>,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<()> {
+    let mut done = Vec::with_capacity(ids.len());
+    let result = ids.into_iter().try_for_each(|id| {
+        state.db.favorite(&id, true)?;
+        done.push(id);
+        Ok(())
+    });
+    if !done.is_empty() {
+        favorites_changed(&app, &done, true);
+    }
+    result
 }
 #[tauri::command]
 async fn save_collection(collection: Value, state: tauri::State<'_, AppState>) -> Result<()> {
@@ -452,8 +476,12 @@ pub fn run() {
             }
             let library = Arc::new(library::Library::new());
             let engine = audio::Engine::new(db.clone());
-            let window = app.get_webview_window("main").unwrap();
-            let hwnd = window.hwnd()?.0 as usize;
+            // The window handle is only used by Windows (media controls, taskbar buttons); other
+            // platforms build too, so the native tests can run anywhere.
+            #[cfg(windows)]
+            let hwnd = app.get_webview_window("main").unwrap().hwnd()?.0 as usize;
+            #[cfg(not(windows))]
+            let hwnd = 0usize;
             app.manage(AppState {
                 db: db.clone(),
                 library: library.clone(),

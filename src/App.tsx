@@ -273,6 +273,20 @@ export default function App() {
       listen<Scan>('scan', (e) => setData((d) => (d ? { ...d, scan: e.payload } : d))),
       listen('library-changed', refresh),
       listen('history-changed', refresh),
+      // Hearts set in the other window (main or mini-player) or by an import.
+      listen<{ ids: string[]; value: boolean }>('favorites-changed', ({ payload }) => {
+        const ids = new Set(payload.ids);
+        setData((d) =>
+          d && d.tracks.some((t) => ids.has(t.id) && t.favorite !== payload.value)
+            ? {
+                ...d,
+                tracks: d.tracks.map((t) =>
+                  ids.has(t.id) ? { ...t, favorite: payload.value } : t,
+                ),
+              }
+            : d,
+        );
+      }),
     ];
     return () => {
       for (const p of promises) p.then((fn) => fn());
@@ -377,10 +391,10 @@ export default function App() {
       } else if (e.ctrlKey && e.key === 'ArrowLeft') {
         e.preventDefault();
         command('previous');
-      } else if (e.key === 'ArrowRight' && pb) {
+      } else if (e.key === 'ArrowRight' && pb?.currentId) {
         e.preventDefault();
         command('seek', pb.position + 5);
-      } else if (e.key === 'ArrowLeft' && pb) {
+      } else if (e.key === 'ArrowLeft' && pb?.currentId) {
         e.preventDefault();
         command('seek', Math.max(0, pb.position - 5));
       } else if (e.ctrlKey && e.key.toLowerCase() === 'm') {
@@ -646,8 +660,10 @@ export default function App() {
       },
     ];
   }
-  function navigate(p: Page) {
-    if (p !== page || ['Album', 'Artist', 'Collection'].includes(p)) remember();
+  /** `samePage`: the album, artist or playlist being opened is the one already shown (for
+   * example after saving it), so Back has no new step to return to. */
+  function navigate(p: Page, samePage = false) {
+    if (p !== page || (['Album', 'Artist', 'Collection'].includes(p) && !samePage)) remember();
     setNowPlaying(false);
     setPage(p);
     setQuery('');
@@ -684,7 +700,7 @@ export default function App() {
   editingRef.current = dialog === 'editCollection' ? selectedCollection : null;
   function openArtist(name: string) {
     setSelectedArtist(name);
-    navigate('Artist');
+    navigate('Artist', page === 'Artist' && selectedArtist === name);
   }
   function albumOf(t: Track) {
     return albums.find((a) => a.tracks.some((x) => x.id === t.id));
@@ -869,11 +885,11 @@ export default function App() {
   }
   function openAlbum(a: Album) {
     setSelectedAlbum(a.key);
-    navigate('Album');
+    navigate('Album', page === 'Album' && selectedAlbum === a.key);
   }
   function openCollection(c: Collection) {
     setSelectedCollection(c.id);
-    navigate('Collection');
+    navigate('Collection', page === 'Collection' && selectedCollection === c.id);
   }
   async function playList(list: Track[], index = 0) {
     if (!list.length) {
@@ -1301,7 +1317,8 @@ export default function App() {
           command('seek', v).then(() => setSeek(null));
         }}
         onKeyUp={(e) => {
-          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+          // Any key that moved the slider (arrows, Page Up/Down, Home/End) plays from there.
+          if (seek !== null) {
             command('seek', Number(e.currentTarget.value)).then(() => setSeek(null));
           }
         }}
@@ -1593,8 +1610,11 @@ export default function App() {
                   <button
                     className="primary hero-button"
                     onClick={async () => {
+                      const songs = tracks.filter((t) => !t.missing);
                       await command('shuffle', true);
-                      playList(tracks.filter((t) => !t.missing));
+                      // The chosen song plays first, so choose that at random too; otherwise
+                      // every shuffle would open with the library's first song.
+                      playList(songs, Math.floor(Math.random() * songs.length));
                     }}
                   >
                     <Shuffle size={16} />
@@ -2450,7 +2470,8 @@ export default function App() {
                     await invoke('delete_collection', { id: selectedCollection });
                     await refresh();
                     setDialog(null);
-                    navigate('Playlists');
+                    // Virtual albums are listed with the albums.
+                    navigate(collection?.kind === 'virtual' ? 'Albums' : 'Playlists');
                   })
                 }
               >
