@@ -99,6 +99,7 @@ import {
   noSelection,
   pickedRows,
   sortOrder,
+  SORT_LABELS,
   type ListSort,
   type Selection as Picks,
   type SortMode,
@@ -129,6 +130,7 @@ type Dialog =
   | 'editCollection'
   | 'deleteCollection'
   | 'smartPlaylist'
+  | 'editSmart'
   | 'install'
   | null;
 const defaults: Settings = {
@@ -165,7 +167,17 @@ const SORTS_KEY = 'slate-music.sorts';
 /** Remembered list orders, per list (kept in this PC's WebView storage). */
 function loadSorts(): Record<string, ListSort> {
   try {
-    return JSON.parse(localStorage.getItem(SORTS_KEY) || '{}') || {};
+    const saved = JSON.parse(localStorage.getItem(SORTS_KEY) || '{}') || {};
+    // Anything unknown (an older or newer version, a damaged value) is ignored.
+    return Object.fromEntries(
+      Object.entries(saved).filter(
+        ([, s]) =>
+          !!s &&
+          typeof s === 'object' &&
+          (s as ListSort).mode in SORT_LABELS &&
+          typeof (s as ListSort).reverse === 'boolean',
+      ),
+    ) as Record<string, ListSort>;
   } catch {
     return {};
   }
@@ -329,7 +341,10 @@ export default function App() {
       const type = tag === 'INPUT' ? (el as HTMLInputElement).type : '';
       const typing =
         tag === 'TEXTAREA' || el?.isContentEditable || (tag === 'INPUT' && type !== 'range');
-      if (typing || dialog || el?.closest('[role="menu"]')) return;
+      // The command palette handles its own keys; lyric lines and palette results take
+      // Space like any button.
+      if (typing || dialog || palette || el?.closest('[role="menu"]')) return;
+      if (e.code === 'Space' && el?.closest('.np-line, [role="option"]')) return;
       // Sliders and the sort menu keep their own arrow keys (and Space for the menu); every
       // other shortcut still works after using them.
       const ownsKeys = type === 'range' || tag === 'SELECT';
@@ -375,7 +390,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [pb, dialog, command, task, nowPlaying]);
+  }, [pb, dialog, command, task, nowPlaying, palette]);
 
   useEffect(() => {
     // The mouse's back button goes back, and the browser's own right-click menu (Back,
@@ -552,7 +567,11 @@ export default function App() {
     if (filter === 'duplicates') result = result.filter((t) => duplicateIds.has(t.id));
     // Each playlist row's entry in the playlist, so sorted rows still edit the right entry.
     const entries =
-      page === 'Collection' && collection && collection.kind !== 'smart'
+      page === 'Collection' &&
+      collection &&
+      collection.kind !== 'smart' &&
+      !deferredQuery &&
+      filter === 'all'
         ? playableIndices(collection, tracks)
         : null;
     const order = sortOrder(result, listSort);
@@ -585,14 +604,26 @@ export default function App() {
         : page === 'Artist'
           ? `artist:${selectedArtist}`
           : page;
+  // Rows are picked by queue position in the queue and by playlist entry in a playlist, so
+  // a song that appears twice is picked (and removed) one copy at a time.
   const rowKeys = useMemo(
     () =>
       page === 'Queue'
         ? visibleQueue.map((entry) => String(entry.index))
-        : shownTracks.map((t) => t.id),
-    [page, visibleQueue, shownTracks],
+        : shown.entries
+          ? shown.entries.map((e) => `entry:${e}`)
+          : shownTracks.map((t) => t.id),
+    [page, visibleQueue, shown.entries, shownTracks],
   );
   useEffect(() => setPicked(noSelection), [listId]);
+  // Queue positions shift when the queue changes (play next, shuffle, removals), so picks
+  // there are cleared, except right after our own drag, which re-picks the moved songs.
+  const ownQueueMove = useRef(false);
+  useEffect(() => {
+    if (page !== 'Queue') return;
+    if (ownQueueMove.current) ownQueueMove.current = false;
+    else setPicked(noSelection);
+  }, [pb?.queue]); // eslint-disable-line react-hooks/exhaustive-deps
   const pickedIdx = useMemo(() => pickedRows(picked, rowKeys), [picked, rowKeys]);
   const pickedTracks = pickedIdx.map((i) => shownTracks[i]);
   const editablePlaylist =
@@ -617,6 +648,7 @@ export default function App() {
   }
   function navigate(p: Page) {
     if (p !== page || ['Album', 'Artist', 'Collection'].includes(p)) remember();
+    setNowPlaying(false);
     setPage(p);
     setQuery('');
     setFilter('all');
@@ -955,7 +987,10 @@ export default function App() {
         rows,
         to,
       );
-      command('move_many', { rows, to }).then(
+      const positions = rows.map((r) => visibleQueue[r].index);
+      const target = to < visibleQueue.length ? visibleQueue[to].index : (pb?.queue.length ?? 0);
+      ownQueueMove.current = true;
+      command('move_many', { rows: positions, to: target }).then(
         (done) =>
           done &&
           setPicked({
@@ -980,7 +1015,7 @@ export default function App() {
   function dragRows(list: Track[], row: number, e: Parameters<typeof startDrag>[0], compact: boolean) {
     const key = rowKeys[row];
     const rows = !compact && picked.keys.has(key) ? pickedIdx : [row];
-    if (!compact && !picked.keys.has(key)) setPicked({ keys: new Set([key]), anchor: row });
+    if (!compact && !picked.keys.has(key)) setPicked({ keys: new Set([key]), anchor: key });
     const songs = rows.map((i) => list[i]).filter(Boolean);
     startDrag(
       e,
@@ -1029,7 +1064,7 @@ export default function App() {
   listKeys.current = {
     selectAll: () => {
       if (!LIST_PAGES.includes(page) || nowPlaying || !rowKeys.length) return false;
-      setPicked({ keys: new Set(rowKeys), anchor: 0 });
+      setPicked({ keys: new Set(rowKeys), anchor: rowKeys[0] });
       return true;
     },
     clear: () => {
@@ -1037,7 +1072,7 @@ export default function App() {
       setPicked(noSelection);
       return true;
     },
-    remove: () => pickedIdx.length > 0 && removePicked(),
+    remove: () => !nowPlaying && pickedIdx.length > 0 && removePicked(),
   };
   /** Saves first and hearts afterwards, so nothing is hearted if saving fails. */
   async function saveCollection(c: Collection, hearts: string[] = []) {
@@ -1141,7 +1176,7 @@ export default function App() {
         onContext={(t, index, x, y, row) => {
           if (!compact && pickedIdx.length > 1 && picked.keys.has(rowKeys[row]))
             return selectionMenu(x, y);
-          if (!compact) setPicked({ keys: new Set([rowKeys[row]]), anchor: row });
+          if (!compact) setPicked({ keys: new Set([rowKeys[row]]), anchor: rowKeys[row] });
           trackMenu(
             t,
             x,
@@ -1179,6 +1214,7 @@ export default function App() {
         }
         hasCustomOrder={hasCustomOrder}
         picked={compact ? undefined : picked.keys}
+      rowKeys={compact ? undefined : rowKeys}
         onPick={
           compact
             ? undefined
@@ -1875,7 +1911,7 @@ export default function App() {
                       Play
                     </button>
                     <button
-                      onClick={() => setDialog(collection.kind === 'smart' ? 'smartPlaylist' : 'editCollection')}
+                      onClick={() => setDialog(collection.kind === 'smart' ? 'editSmart' : 'editCollection')}
                     >
                       <Pencil size={15} />
                       Edit{' '}
@@ -2311,19 +2347,20 @@ export default function App() {
                     : dialog === 'editCollection'
                       ? 'Edit your collection'
                       : dialog === 'smartPlaylist'
-                        ? page === 'Collection' && collection?.kind === 'smart'
+                        ? 'A new smart playlist'
+                        : dialog === 'editSmart'
                           ? 'Edit smart playlist'
-                          : 'A new smart playlist'
                       : dialog === 'deleteCollection'
                         ? 'Delete this collection?'
                         : 'An update is ready.'
           }
           onClose={() => setDialog(null)}
-          wide={['settings', 'import', 'editCollection', 'smartPlaylist'].includes(dialog)}
+          wide={['settings', 'import', 'editCollection', 'smartPlaylist', 'editSmart'].includes(dialog)}
         >
-          {dialog === 'smartPlaylist' && (
+          {(dialog === 'smartPlaylist' || (dialog === 'editSmart' && collection?.kind === 'smart')) && (
             <SmartPlaylistEditor
-              existing={page === 'Collection' && collection?.kind === 'smart' ? collection : undefined}
+              key={dialog}
+              existing={dialog === 'editSmart' ? collection : undefined}
               tracks={tracks}
               onSave={saveCollection}
             />

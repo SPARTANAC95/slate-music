@@ -67,6 +67,7 @@ export default function NowPlaying({
   useEffect(() => {
     if (!track) return setLyrics(null);
     let live = true;
+    setLyrics(null);
     setLoading(true);
     invoke<Lyrics>('song_lyrics', { id: track.id })
       .then((l) => live && setLyrics(l))

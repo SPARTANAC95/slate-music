@@ -58,8 +58,8 @@ export function columnSort(current: ListSort, column: SortMode, hasCustom: boole
 
 export interface Selection {
   keys: Set<string>;
-  /** The row a Shift+click range starts from. */
-  anchor: number | null;
+  /** The row (by key) a Shift+click range starts from. */
+  anchor: string | null;
 }
 export const noSelection: Selection = { keys: new Set(), anchor: null };
 /** Click to pick one row, Ctrl+click to add or drop a row, Shift+click to pick a range. */
@@ -71,8 +71,9 @@ export function nextSelection(
 ): Selection {
   const key = rowKeys[index];
   if (key === undefined) return prev;
-  if (mods.shift && prev.anchor !== null && prev.anchor < rowKeys.length) {
-    const [from, to] = prev.anchor < index ? [prev.anchor, index] : [index, prev.anchor];
+  const anchor = prev.anchor === null ? -1 : rowKeys.indexOf(prev.anchor);
+  if (mods.shift && anchor >= 0) {
+    const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
     const keys = new Set(mods.ctrl ? prev.keys : []);
     for (let i = from; i <= to; i++) keys.add(rowKeys[i]);
     return { keys, anchor: prev.anchor };
@@ -81,9 +82,9 @@ export function nextSelection(
     const keys = new Set(prev.keys);
     if (keys.has(key)) keys.delete(key);
     else keys.add(key);
-    return { keys, anchor: index };
+    return { keys, anchor: key };
   }
-  return { keys: new Set([key]), anchor: index };
+  return { keys: new Set([key]), anchor: key };
 }
 /** The positions of the picked rows, in list order. */
 export const pickedRows = (sel: Selection, rowKeys: string[]) =>

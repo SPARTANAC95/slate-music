@@ -50,7 +50,9 @@ export function score(queryWords: string[], entry: { text: string; words: string
             ? 7
             : q.length >= 3 && w.includes(q)
               ? 4
-              : q.length >= 4 && near(q, w.slice(0, q.length + 1), q.length >= 8 ? 2 : 1)
+              : q.length >= 4 &&
+                  (near(q, w.slice(0, q.length), q.length >= 8 ? 2 : 1) ||
+                    near(q, w.slice(0, q.length + 1), q.length >= 8 ? 2 : 1))
                 ? 2
                 : 0;
       if (s > best) best = s;

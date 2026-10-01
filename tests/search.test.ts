@@ -4,6 +4,11 @@ import { index, search } from '../src/search';
 const titles = ['Black Hole Sun', 'Spoonman', 'Fell on Black Days', 'Wired For Sound', 'Hotel California', 'Blackbird'];
 const entries = index(titles, (t) => t);
 
+describe('half-typed words with a typo', () => {
+  it('still match', () => {
+    expect(search('beetl', index(['The Beatles'], (t) => t))).toEqual(['The Beatles']);
+  });
+});
 describe('search', () => {
   it('ranks whole-phrase starts and exact words first', () => {
     expect(search('black', entries)).toEqual(['Black Hole Sun', 'Fell on Black Days', 'Blackbird']);

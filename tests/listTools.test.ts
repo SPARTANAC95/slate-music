@@ -82,8 +82,13 @@ describe('picking several songs', () => {
     sel = nextSelection(nextSelection(noSelection, keys, 3, {}), keys, 0, { shift: true });
     expect(pickedRows(sel, keys)).toEqual([0, 1, 2, 3]);
     sel = nextSelection(nextSelection(noSelection, keys, 0, {}), keys, 1, { ctrl: true });
-    sel = nextSelection({ ...sel, anchor: 3 }, keys, 4, { shift: true, ctrl: true });
+    sel = nextSelection({ ...sel, anchor: 'd' }, keys, 4, { shift: true, ctrl: true });
     expect(pickedRows(sel, keys)).toEqual([0, 1, 3, 4]);
+  });
+  it('keeps the Shift+click starting point on the same song after the list is re-sorted', () => {
+    const sel = nextSelection(noSelection, keys, 1, {});
+    const resorted = ['e', 'd', 'c', 'b', 'a'];
+    expect(pickedRows(nextSelection(sel, resorted, 1, { shift: true }), resorted)).toEqual([1, 2, 3]);
   });
 });
 

@@ -220,6 +220,7 @@ export function TrackTable({
   onSort,
   hasCustomOrder = false,
   picked,
+  rowKeys,
   onPick,
   onDragRows,
   onReorder,
@@ -247,8 +248,10 @@ export function TrackTable({
   onSort?: (mode: SortMode) => void;
   /** The list has an order of its own (album, playlist, search matches) to return to. */
   hasCustomOrder?: boolean;
-  /** Picked rows, by song id (or queue position in the queue). */
+  /** Picked rows, by row key (see `rowKeys`). */
   picked?: Set<string>;
+  /** Each row's key for picking: queue position, playlist entry or song id. */
+  rowKeys?: string[];
   onPick?: (row: number, e: MouseEvent) => void;
   onDragRows?: (row: number, e: DragEvent) => void;
   /** Present when rows can be dragged into a new order. */
@@ -328,7 +331,7 @@ export function TrackTable({
             const t = tracks[row.index];
             const index = rowIndices?.[row.index] ?? row.index;
             const active = queue ? currentIndex === index : currentId === t.id;
-            const isPicked = !!picked?.has(queue ? String(index) : t.id);
+            const isPicked = !!picked?.has(rowKeys?.[row.index] ?? (queue ? String(index) : t.id));
             const drop =
               dropAt === row.index
                 ? 'drop-before'
