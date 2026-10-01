@@ -2861,11 +2861,19 @@ details.advanced[open] summary {
   gap: 8px;
   animation: page-in 0.2s ease-out;
 }
-.np-art.with-path .np-cover .art,
+/* With the signal path open only the cover gives way; the text keeps its width, so the
+   format line and the path's rows stay on one line each. */
+.np-art.with-path .np-cover .art {
+  width: min(100%, 26vh, 300px);
+}
 .np-art.with-path .np-meta,
 .np-art.with-path .np-quality,
 .np-art.with-path .np-path {
-  width: min(100%, 34vh, 440px);
+  width: min(100%, 48vh, 560px);
+}
+.np-quality > *,
+.quality-badge {
+  white-space: nowrap;
 }
 .np-path li {
   display: grid;

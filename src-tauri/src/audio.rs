@@ -495,6 +495,10 @@ fn device_changed(
         Some(name) => shown.fallback && names.iter().any(|n| n == name),
     }
 }
+/// Whether the device playing (`shown`) is no longer among the devices Windows offers.
+fn device_gone(shown: Option<&OutputInfo>, names: &[String]) -> bool {
+    shown.is_some_and(|s| !names.iter().any(|n| *n == s.device))
+}
 /// Where sound goes: Windows' shared mixer, or the device to ourselves (exclusive mode).
 /// Holding one keeps it playing; dropping it stops it, so its parts are never read.
 #[allow(dead_code)]
@@ -1347,7 +1351,15 @@ impl Engine {
                         )
                     {
                         stalled = 0;
-                        engine.render.lock().unwrap().reopen = true;
+                        // The device that was playing is gone (headphones unplugged): pause, as
+                        // for a disconnect, so music never jumps out loud to the speakers. A
+                        // device that only stopped being the default keeps playing on the new one.
+                        let gone = device_gone(shown.as_ref(), &output_devices().0);
+                        let mut r = engine.render.lock().unwrap();
+                        if gone {
+                            r.state.playing = false;
+                        }
+                        r.reopen = true;
                     }
                 }
                 let reopen = std::mem::take(&mut engine.render.lock().unwrap().reopen);
@@ -1736,6 +1748,14 @@ mod tests {
             None,
             &names(&["Speakers"])
         ));
+        // Unplugged headphones are gone (pause); speakers that stop being the default are not.
+        let headphones = playing("Headphones", false);
+        assert!(device_gone(Some(&headphones), &names(&["Speakers"])));
+        assert!(!device_gone(
+            Some(&speakers),
+            &names(&["Speakers", "Headphones"])
+        ));
+        assert!(!device_gone(None, &[]));
         // Playing on the chosen device: other changes don't matter.
         assert!(!device_changed(
             Some("DAC"),
