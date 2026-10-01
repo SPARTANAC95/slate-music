@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-10-01
 
 - **Now Playing:** a full-window view with a large, sharp cover, a backdrop blurred from the artwork, and synced lyrics that follow the song (click a line to jump to it), or the queue. Open it by clicking the song in the player bar or the cover in the listening panel, with the new button beside the volume, or with Ctrl+L; Esc closes it.
 - **Lyrics** come from an .lrc file beside the song, lyrics stored in the file, or, when "Find lyrics online" is on, LRCLIB (a free lyrics database; artist, title, album and length are sent, and results are remembered).
@@ -37,6 +37,8 @@
 - Back no longer needs two presses after reopening the page already shown, such as after saving the open playlist.
 - Deleting a virtual album returns to Albums instead of Playlists.
 - The native tests build and run outside Windows too (checked on Linux).
+- **Music follows your headphones.** Plugging headphones in or reconnecting them moves the music to them (it no longer stays silent on the old device after a long pause or a reconnect); a chosen device is used again when it comes back; unplugging the device that plays pauses the music. An output that silently stops is replaced.
+- Fixes from the full 1.1.0 review: left and right no longer swap after a seek or crossfade; editing the queue in a song's last moments no longer stops playback; switching off exclusive mode never plays a song at the wrong speed; exclusive mode no longer cuts the end of a song before a rate change or trims its start; the equalizer stays accurate at high sample rates; large queue edits no longer stall the audio; Discord reconnects sensibly and notices a restart; Last.fm sign-in can be cancelled, keeps scrobbles over the daily limit and counts repeats with crossfade; MusicBrainz lookups share one pace; artist names with "/" work; slow settings no longer hold up the window.
 
 ## 1.0.3 — 2026-09-30
 

@@ -55,7 +55,7 @@ Normally the engine mixes decoded audio at 48 kHz in stereo and plays it through
 
 While exclusive mode plays, other apps can't make sound through that device. Slate Music lets it go a few seconds after you pause and takes it back when you press play. If Windows doesn't allow exclusive use (Sound settings → the device → Properties → Advanced → "Allow applications to take exclusive control of this device"), or another app holds it, Slate Music says so and plays through Windows instead.
 
-A disconnected audio device pauses playback; the engine attempts to reconnect without starting audio unexpectedly.
+Slate Music follows Windows' default output: plug headphones in or reconnect them and the music moves to them. A device you chose in Settings → Playback is used whenever it is connected, and Slate Music returns to it when it comes back. A device that disconnects pauses playback, so music never suddenly plays out loud through another speaker.
 
 ## Spotify playlist import
 

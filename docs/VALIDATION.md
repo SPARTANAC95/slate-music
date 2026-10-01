@@ -1,3 +1,19 @@
+# Validation — 1.1.0
+
+## October 1 review, fixes and release checks
+
+Before release, four reviewers read every 1.1.0 change (audio engine, Rust services, app logic and screens) and recorded 33 findings in [review-1.1.0.md](review-1.1.0.md). All were fixed, each with a note on where. Two owner reports were fixed as well: no sound after a long pause or after reconnecting headphones, and the Discord status needing an application of one's own.
+
+| Check | Result |
+|---|---|
+| TypeScript and frontend | 54 tests passed; TypeScript and Vite production build passed |
+| Native engine and services | Rust tests passed on Linux, including new tests for channel order after a mid-frame load and an odd-sample crossfade, waiting for a next song still being prepared, never playing at the wrong rate, following the default device and pausing when the playing device disappears, equalizer accuracy at 192/384 kHz, Discord refusals, Last.fm daily limits and repeat scrobbles, artist name encoding and the Spotify sign-in callback |
+| Windows code | The whole crate, including the WASAPI exclusive output and taskbar code, type-checked for the Windows target; GitHub Actions runs every test and builds and signs the installer on Windows |
+| Interface | The real 1.1.0 frontend was driven in Chromium with a simulated backend: favorites from another window, seek-slider keys, Shuffle starting at random, Back after reopening a page and virtual-album deletion (each failing before its fix), plus the website screenshots |
+| Native interface scenarios | Before this round of fixes, all 28 `tools/qa.mjs` scenarios and the Phase 3–6 checks passed in the native app (see the review's test notes) |
+
+Not yet measured on hardware for this release: the device-following and silence watchdog with real headphones, and exclusive-mode rate changes on a physical DAC. They are covered by unit tests of the decisions involved, not by listening tests.
+
 # Validation — 1.0.3
 
 ## September 30 feature and review pass
