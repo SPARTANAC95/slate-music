@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Disc3, ListMusic, Music2, Search, Sparkles, Users, CornerDownLeft } from 'lucide-react';
 import type { Album, Collection, Track } from './types';
 import { Art, scrollInside } from './components';
+import { evaluateSmart } from './smart';
+import { plural } from './library';
 import { index, search } from './search';
 
 export interface PaletteCommand {
@@ -43,7 +45,7 @@ export default function CommandPalette({
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
   const list = useRef<HTMLDivElement>(null);
-  const indexes = useMemo(() => {
+  const library = useMemo(() => {
     const artists = new Map<string, { name: string; art: string | null; songs: number }>();
     for (const a of albums) {
       const e = artists.get(a.artist) || { name: a.artist, art: null, songs: 0 };
@@ -51,14 +53,23 @@ export default function CommandPalette({
       e.songs += a.tracks.length;
       artists.set(a.artist, e);
     }
+    const now = Date.now();
     return {
-      commands: index(commands, (c) => `${c.label} ${c.keywords ?? ''}`),
       artists: index([...artists.values()], (a) => a.name),
       albums: index(albums, (a) => `${a.name} ${a.artist} ${a.year || ''}`),
       songs: index(tracks.filter((t) => !t.missing), (t) => `${t.title} ${t.artist} ${t.album}`),
       playlists: index(collections, (c) => c.name),
+      counts: new Map(
+        collections.map((c) => [
+          c.id,
+          c.kind === 'smart' && c.rules ? evaluateSmart(c.rules, tracks, now, c.id).length : c.entries.length,
+        ]),
+      ),
     };
-  }, [tracks, albums, collections, commands]);
+  }, [tracks, albums, collections]);
+  // Commands change with playback (Play/Pause and so on), so they are indexed on their own.
+  const commandIndex = useMemo(() => index(commands, (c) => `${c.label} ${c.keywords ?? ''}`), [commands]);
+  const indexes = { ...library, commands: commandIndex };
   const groups = useMemo(() => {
     if (!query.trim())
       return [{ title: 'Actions', items: commands.slice(0, 8).map((command) => ({ kind: 'command' as const, key: command.label, command })) }];
@@ -70,7 +81,7 @@ export default function CommandPalette({
       { title: 'Actions', items: search(query, indexes.commands, 5).map((command) => ({ kind: 'command' as const, key: command.label, command })) },
     ];
     return out.filter((g) => g.items.length);
-  }, [query, indexes, commands]);
+  }, [query, library, commandIndex, commands]); // eslint-disable-line react-hooks/exhaustive-deps
   const flat = groups.flatMap((g) => g.items);
   useEffect(() => setSelected(0), [query]);
   useEffect(() => {
@@ -98,6 +109,10 @@ export default function CommandPalette({
             value={query}
             placeholder="Search songs, albums, artists, playlists and actions…"
             aria-label="Search everything"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="palette-results"
+            aria-activedescendant={flat.length ? `palette-option-${selected}` : undefined}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown') {
@@ -118,7 +133,7 @@ export default function CommandPalette({
           />
           <kbd>Esc</kbd>
         </label>
-        <div className="palette-results" ref={list} role="listbox">
+        <div className="palette-results" id="palette-results" ref={list} role="listbox">
           {groups.map((g) => (
             <section key={g.title}>
               <h4>{g.title}</h4>
@@ -129,6 +144,8 @@ export default function CommandPalette({
                   <button
                     key={r.key}
                     data-index={i}
+                    id={`palette-option-${i}`}
+                    tabIndex={-1}
                     role="option"
                     aria-selected={i === selected}
                     className={`palette-item ${i === selected ? 'selected' : ''}`}
@@ -162,12 +179,12 @@ export default function CommandPalette({
                         {r.kind === 'command'
                           ? r.command.hint
                           : r.kind === 'artist'
-                            ? `Artist · ${r.songs} songs`
+                            ? `Artist · ${plural(r.songs, 'song')}`
                             : r.kind === 'album'
                               ? `Album · ${r.album.artist}${r.album.year ? ` · ${r.album.year}` : ''}`
                               : r.kind === 'song'
                                 ? `Song · ${r.track.artist} · ${r.track.album}`
-                                : `${r.collection.kind === 'smart' ? 'Smart playlist' : 'Playlist'} · ${r.collection.entries.length} songs`}
+                                : `${r.collection.kind === 'smart' ? 'Smart playlist' : 'Playlist'} · ${plural(library.counts.get(r.collection.id) ?? 0, 'song')}`}
                       </small>
                     </span>
                     {i === selected && <CornerDownLeft size={14} className="palette-enter" />}

@@ -1135,6 +1135,14 @@ export default function App() {
     </button>
   );
   const allPickedFavorite = pickedTracks.every((t) => t.favorite);
+  const smartCounts = useMemo(() => {
+    const now = Date.now();
+    return new Map(
+      (data?.collections ?? [])
+        .filter((c) => c.kind === 'smart' && c.rules)
+        .map((c) => [c.id, evaluateSmart(c.rules!, tracks, now, c.id).length]),
+    );
+  }, [data?.collections, tracks]);
   const selectionBar = (
     <div className="selection-bar" role="toolbar" aria-label="Selected songs">
       <strong>{plural(pickedIdx.length, 'song')} selected</strong>
@@ -1814,7 +1822,7 @@ export default function App() {
                         <strong>{c.name}</strong>
                         <span>
                           {c.kind === 'smart' && c.rules
-                            ? `Smart · ${plural(evaluateSmart(c.rules, tracks, Date.now(), c.id).length, 'song')}`
+                            ? `Smart · ${plural(smartCounts.get(c.id) ?? 0, 'song')}`
                             : plural(c.entries.length, 'song')}
                         </span>
                       </button>

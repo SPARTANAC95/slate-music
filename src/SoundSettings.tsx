@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { SlidersHorizontal } from 'lucide-react';
 import type { EqSettings, Playback, Settings, Snapshot } from './types';
 import { Toggle } from './components';
+import { eqChanges } from './NowPlaying';
 
 export const EQ_BANDS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
 /** Equalizer presets in dB per band, with a preamp that keeps boosts from clipping. */
@@ -41,12 +42,24 @@ export default function SoundSettings({
   useEffect(() => {
     invoke<{ devices: string[]; default: string | null }>('audio_devices').then(setDevices, () => {});
   }, []);
-  const eq = pb.eq?.bands?.length === 10 ? pb.eq : flatEq();
+  // While a slider moves, its value lives here, so it follows the hand; the equalizer is
+  // applied (and remembered) once the slider rests for a moment.
+  const [draft, setDraft] = useState<EqSettings | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const eq = draft ?? (pb.eq?.bands?.length === 10 ? pb.eq : flatEq());
   const deviceKey = pb.outputDevice ?? '';
   /** Applies an equalizer and remembers it for the current output device. */
-  function applyEq(next: EqSettings) {
-    onPlayback('eq', next);
+  async function applyEq(next: EqSettings) {
+    window.clearTimeout(timer.current);
     onSettings({ ...settings, eqByDevice: { ...settings.eqByDevice, [deviceKey]: next } });
+    await onPlayback('eq', next);
+    setDraft((d) => (d === next ? null : d));
+  }
+  function slide(next: EqSettings) {
+    setDraft(next);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => applyEq(next), 150);
   }
   async function chooseDevice(name: string) {
     const device = name || null;
@@ -54,8 +67,8 @@ export default function SoundSettings({
     // Each device keeps its own equalizer, e.g. one for headphones and one for speakers.
     await onPlayback('eq', eqFor(settings, device));
   }
-  /** Nothing changes the samples: full volume, no EQ, no levelling. */
-  const untouched = pb.volume >= 1 && !pb.eq?.enabled && pb.levelling === 'off';
+  /** Nothing in Slate Music changes the samples: full volume, flat EQ, no levelling. */
+  const untouched = pb.volume >= 1 && !eqChanges(pb) && pb.levelling === 'off';
   const total = data.tracks.filter((t) => !t.missing).length;
   const measured = Math.min(data.loudnessMeasured ?? 0, total);
   return (
@@ -90,7 +103,7 @@ export default function SoundSettings({
               ? 'On, but the device can’t be used exclusively right now, so Slate Music plays through Windows. The message at the top of the window says why.'
               : `On: ${pb.output.device} plays each song at its own rate and is let go a few seconds after you pause.${
                   untouched
-                    ? ' Songs reach it exactly as they are in the file.'
+                    ? ' Songs the device takes at their own rate reach it exactly as they are in the file; Now Playing → Signal path checks each song.'
                     : ' For bit-perfect sound, set the volume to 100% and turn the equalizer and levelling off.'
                 }`
         }
@@ -161,7 +174,7 @@ export default function SoundSettings({
               value={eq.preamp}
               disabled={!eq.enabled}
               style={{ '--fill': `${((eq.preamp + 12) / 12) * 100}%` } as React.CSSProperties}
-              onChange={(e) => applyEq({ ...eq, preamp: Number(e.target.value), preset: 'Custom' })}
+              onChange={(e) => slide({ ...eq, preamp: Number(e.target.value), preset: 'Custom' })}
             />
             <span>Pre</span>
           </label>
@@ -178,7 +191,7 @@ export default function SoundSettings({
                 disabled={!eq.enabled}
                 style={{ '--fill': `${((eq.bands[i] + 12) / 24) * 100}%` } as React.CSSProperties}
                 onChange={(e) =>
-                  applyEq({
+                  slide({
                     ...eq,
                     bands: eq.bands.map((b, n) => (n === i ? Number(e.target.value) : b)),
                     preset: 'Custom',

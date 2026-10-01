@@ -64,6 +64,13 @@ export default function NowPlaying({
   const active = currentLine(lines, position + 0.15);
   const list = useRef<HTMLDivElement>(null);
   const userScrolled = useRef(0);
+  const root = useRef<HTMLDivElement>(null);
+  // Keyboard focus moves into the view, and back to where it was when the view closes.
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    root.current?.querySelector<HTMLElement>('button')?.focus();
+    return () => before?.focus?.();
+  }, []);
   useEffect(() => {
     if (!track) return setLyrics(null);
     let live = true;
@@ -99,7 +106,9 @@ export default function NowPlaying({
     <div
       className="now-playing"
       role="dialog"
+      aria-modal="true"
       aria-label="Now playing"
+      ref={root}
       style={accent ? ({ '--np-accent': accent } as React.CSSProperties) : undefined}
     >
       <div className="np-backdrop" aria-hidden="true">
@@ -239,6 +248,9 @@ export default function NowPlaying({
   );
 }
 
+/** Whether the equalizer changes the sound: on, with a band or the preamp away from 0 dB. */
+export const eqChanges = (pb: Playback) =>
+  !!pb.eq?.enabled && (pb.eq.preamp !== 0 || pb.eq.bands.some((b) => b !== 0));
 /** Every step between the file and the speakers, stated plainly. */
 function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
   const q = quality(track);
@@ -246,14 +258,17 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
   const out = pb.output;
   const kHz = (hz: number) => `${Math.round(hz / 100) / 10} kHz`;
   const exclusive = !!out?.exclusive;
-  // What keeps the device from getting exactly what is in the file.
+  // What keeps the device from getting exactly what is in the file. A flat equalizer and an
+  // unmeasured song leave the samples untouched; 32-bit files are decoded at 24-bit precision.
   const changes = [
     !q.lossless && 'a lossy file',
     pb.volume < 1 && `volume at ${Math.round(pb.volume * 100)}%`,
-    pb.eq?.enabled && 'the equalizer',
-    pb.gainKind !== 'off' && 'loudness levelling',
+    eqChanges(pb) && 'the equalizer',
+    (pb.gainKind === 'track' || pb.gainKind === 'album') && 'loudness levelling',
+    !rate && 'an unknown sample rate',
     out && rate && out.sampleRate !== rate && 'a rate conversion',
     out?.bits && track.bitDepth > out.bits && `${out.bits}-bit output`,
+    track.bitDepth > 24 && '32-bit samples decoded at 24-bit precision',
   ].filter(Boolean) as string[];
   const steps: [string, string][] = [
     ['Source', `${track.format}${q.detail ? ` · ${q.detail}` : ''}${q.label ? ` · ${q.label}` : ''}`],
@@ -272,13 +287,15 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
     ['Volume', pb.volume >= 1 ? '100%' : `${Math.round(pb.volume * 100)}%`],
     [
       'Mixing',
-      exclusive && out
-        ? rate && rate !== out.sampleRate
-          ? `Converted from ${kHz(rate)} to ${kHz(out.sampleRate)}; the device doesn’t take ${kHz(rate)}`
-          : `${kHz(out.sampleRate)}, no conversion`
-        : rate && rate !== 48000
-          ? `Converted from ${kHz(rate)} to 48 kHz`
-          : '48 kHz, no conversion',
+      !rate
+        ? 'Source rate unknown'
+        : exclusive && out
+          ? rate !== out.sampleRate
+            ? `Converted from ${kHz(rate)} to ${kHz(out.sampleRate)}; the device doesn’t take ${kHz(rate)}`
+            : `${kHz(out.sampleRate)}, no conversion`
+          : `${rate !== 48000 ? `Converted from ${kHz(rate)} to 48 kHz` : '48 kHz, no conversion'}${
+              out && out.sampleRate !== 48000 ? `, then by Windows to ${kHz(out.sampleRate)}` : ''
+            }`,
     ],
     [
       'Output',

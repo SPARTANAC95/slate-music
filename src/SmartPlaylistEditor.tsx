@@ -96,7 +96,10 @@ export default function SmartPlaylistEditor({
                   value={String(rule.value)}
                   min={0}
                   onChange={(e) =>
-                    setRule(i, { ...rule, value: kind === 'text' ? e.target.value : Number(e.target.value) })
+                    setRule(i, {
+                      ...rule,
+                      value: kind === 'text' || e.target.value === '' ? e.target.value : Number(e.target.value),
+                    })
                   }
                 />
               )}

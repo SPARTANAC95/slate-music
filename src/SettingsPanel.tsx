@@ -169,7 +169,12 @@ export default function SettingsPanel({
         <div className="setting-row">
           <span>
             <strong>Gapless playback</strong>
-            <small>One continuous native audio stream. On when crossfade is off.</small>
+            <small>
+              One continuous native audio stream. On when crossfade is off.
+              {pb.output?.exclusive
+                ? ' In exclusive mode there is a short pause when the sample rate changes between songs.'
+                : ''}
+            </small>
           </span>
           <span className="badge">
             <CheckCircle2 size={12} />
@@ -180,7 +185,7 @@ export default function SettingsPanel({
           <span>
             <strong>Crossfade</strong>
             <small>
-              {pb.exclusive
+              {pb.output?.exclusive
                 ? 'Not used in exclusive mode, which sends every song untouched.'
                 : 'Blend the end of one track into the next.'}
             </small>

@@ -63,12 +63,15 @@ export function matches(t: Track, rule: SmartRule, now: number): boolean {
   }
   if (kind === 'number') {
     const a = Number(v),
-      b = Number(rule.value);
+      b = rule.value === '' ? NaN : Number(rule.value);
+    // An empty number never matches, and neither does an unknown year (stored as 0).
+    if (!Number.isFinite(b) || (rule.field === 'year' && !a)) return false;
     return rule.op === 'gt' ? a > b : rule.op === 'lt' ? a < b : Math.round(a) === Math.round(b);
   }
   if (kind === 'bool') return rule.op === 'is' ? v === true : v !== true;
   if (kind === 'date') {
     const at = Number(v);
+    if (rule.value === '' || !Number.isFinite(Number(rule.value))) return false;
     const within = at > 0 && now - at <= Number(rule.value) * DAY;
     return rule.op === 'withinDays' ? within : !within;
   }
