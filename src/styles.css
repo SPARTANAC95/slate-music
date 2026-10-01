@@ -1768,6 +1768,20 @@ input[type='range']:disabled {
   justify-content: space-between;
   gap: 10px;
 }
+details.advanced {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+details.advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+details.advanced[open] summary {
+  margin-bottom: 10px;
+}
 .scan-errors {
   font-size: 11px;
   color: #c5a786;

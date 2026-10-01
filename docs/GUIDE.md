@@ -82,7 +82,7 @@ As verified September 25, 2026, Spotify Development Mode requires an active Prem
 
 ## Last.fm and Discord
 
-Both are off until you set them up in Settings, and both use your own free accounts, so nothing is shared through anyone else's.
+Both are off until you switch them on in Settings. Last.fm uses your own free API account; the Discord status works straight away.
 
 **Last.fm scrobbling**
 
@@ -94,9 +94,10 @@ A song is scrobbled once you have heard half of it or four minutes, whichever co
 
 **Discord status**
 
-1. In Settings → Discord status, choose **Developer Portal**, sign in and choose **New Application**. Name it "Slate Music"; friends will see "Listening to Slate Music". You can add the Slate Music icon as its App Icon.
-2. Copy the **Application ID** from General Information into Settings and choose **Save**.
-3. Keep Discord open. Under Discord's Activity Privacy, sharing your activity must be allowed.
+1. In Settings → Discord status, switch on **Show what I'm listening to on Discord**. Friends see "Listening to Slate Music".
+2. Keep Discord open. Under Discord's Activity Privacy, sharing your activity must be allowed.
+
+To show a different name, create an application in the Discord Developer Portal and save its **Application ID** under **Use your own Discord application**; **Use Slate Music's** switches back.
 
 While a song plays, Discord shows its title, artist and album with a progress bar; paused music shows nothing.
 

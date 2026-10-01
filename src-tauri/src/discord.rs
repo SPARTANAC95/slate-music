@@ -1,7 +1,7 @@
-//! Discord Rich Presence: while a song plays, Discord shows "Listening to <your app name>" with
-//! the title, artist and a progress bar. It talks to the Discord app on this PC through its local
-//! pipe (nothing is sent over the internet by Slate Music) using the user's own Discord
-//! application ID. Paused or stopped clears the status.
+//! Discord Rich Presence: while a song plays, Discord shows "Listening to Slate Music" with the
+//! title, artist and a progress bar. It talks to the Discord app on this PC through its local
+//! pipe (nothing is sent over the internet by Slate Music), as Slate Music's own Discord
+//! application unless the user sets their own. Paused or stopped clears the status.
 use crate::db::{now, Database, Track};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -17,17 +17,25 @@ pub fn status(db: &Database) -> Value {
     let (connected, problem) = STATUS.lock().unwrap().clone();
     json!({
         "clientId": client_id(db),
+        "customId": custom_id(db),
         "connected": connected,
         "problem": problem,
     })
 }
-fn client_id(db: &Database) -> Option<String> {
+/// Slate Music's own Discord application, so the status works with nothing to set up. An
+/// application ID is public: Discord shows it to everyone who sees the status.
+pub const SLATE_APP: &str = "1555080359019020409";
+/// An application of the user's own, if they set one.
+fn custom_id(db: &Database) -> Option<String> {
     db.get("discord_client_id")
         .as_str()
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
 }
-/// Saves the Discord application ID ("" removes it).
+fn client_id(db: &Database) -> String {
+    custom_id(db).unwrap_or_else(|| SLATE_APP.into())
+}
+/// Saves the user's own Discord application ID ("" goes back to Slate Music's).
 pub fn setup(db: &Database, id: &str) -> crate::db::Result<Value> {
     let id = id.trim();
     if !id.is_empty() && (!(17..=20).contains(&id.len()) || !id.chars().all(|c| c.is_ascii_digit()))
@@ -227,8 +235,7 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
         loop {
             std::thread::sleep(Duration::from_secs(1));
             let on = db.get("settings")["discordPresence"].as_bool() == Some(true);
-            let id = client_id(&db);
-            let wanted_id = if on { id } else { None };
+            let wanted_id = on.then(|| client_id(&db));
             // Only a real change of setting or ID starts afresh, so the waits below between
             // connection attempts apply.
             if wanted_id != last_wanted {
@@ -426,6 +433,11 @@ mod tests {
             setup(&db, " 123456789012345678 ").unwrap()["clientId"],
             "123456789012345678"
         );
-        assert_eq!(setup(&db, "").unwrap()["clientId"], Value::Null);
+        let built_in = setup(&db, "").unwrap();
+        assert_eq!(
+            built_in["clientId"], SLATE_APP,
+            "Slate Music's own application"
+        );
+        assert_eq!(built_in["customId"], Value::Null);
     }
 }

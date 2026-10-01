@@ -14,7 +14,10 @@ interface LastfmStatus {
   problem: string | null;
 }
 interface DiscordStatus {
-  clientId: string | null;
+  /** The application in use: Slate Music's own, or the user's. */
+  clientId: string;
+  /** The user's own application, when they set one. */
+  customId: string | null;
   connected: boolean;
   problem: string | null;
 }
@@ -68,7 +71,7 @@ export default function SharingSettings({
     }
   }
   const hex32 = (s: string) => /^[0-9a-f]{32}$/i.test(s.trim());
-  const id = appId ?? discord?.clientId ?? '';
+  const id = appId ?? discord?.customId ?? '';
   const idOk = /^\d{17,20}$/.test(id.trim());
   const problem = (where: string) =>
     error?.where === where && (
@@ -214,64 +217,71 @@ export default function SharingSettings({
         </div>
         <p>
           Show friends on Discord what you are listening to, with the song, artist and a progress
-          bar. Nothing shows while music is paused.
+          bar. Nothing shows while music is paused. Just switch it on; Discord needs to be open on
+          this PC.
         </p>
-        <ol className="setup-steps">
-          <li>
-            Open the Discord Developer Portal with the button below and choose{' '}
-            <strong>New Application</strong>. Name it “Slate Music”: friends will see “Listening to
-            Slate Music”.
-          </li>
-          <li>
-            Copy the <strong>Application ID</strong> from General Information, paste it here and
-            choose Save.
-          </li>
-        </ol>
-        <label className="field">
-          Discord Application ID
-          <input
-            value={id}
-            onChange={(e) => setAppId(e.target.value.trim())}
-            inputMode="numeric"
-            placeholder="A long number, e.g. 1234567890123456789"
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <div className="button-row">
-          <button
-            className="primary"
-            disabled={!!busy || !idOk || id === discord?.clientId}
-            onClick={() =>
-              run('discord', async () => {
-                await invoke('discord_setup', { id });
-                if (!settings.discordPresence) onSettings({ ...settings, discordPresence: true });
-                setAppId(null);
-              })
-            }
-          >
-            {id && id === discord?.clientId ? 'Saved' : 'Save'}
-          </button>
-          <button onClick={() => open('https://discord.com/developers/applications')}>
-            <ExternalLink size={14} />
-            Developer Portal
-          </button>
-        </div>
         <Toggle
           label="Show what I’m listening to on Discord"
           description={
-            !discord?.clientId
-              ? 'Save your Application ID first.'
-              : !settings.discordPresence
-                ? 'Off. Friends see nothing from Slate Music.'
-                : discord.connected
-                  ? discord.problem || 'On. Discord shows the song while music plays.'
-                  : discord.problem || 'Looking for Discord…'
+            !settings.discordPresence
+              ? 'Off. Friends see nothing from Slate Music.'
+              : discord?.connected
+                ? discord.problem || 'On. Discord shows the song while music plays.'
+                : discord?.problem || 'Looking for Discord…'
           }
-          checked={!!settings.discordPresence && !!discord?.clientId}
-          disabled={!discord?.clientId}
+          checked={!!settings.discordPresence}
           onChange={(v) => onSettings({ ...settings, discordPresence: v })}
         />
+        <details className="advanced">
+          <summary>Use your own Discord application (optional)</summary>
+          <p>
+            Slate Music shows up as “Slate Music” on its own. To show another name, create an
+            application in the Discord Developer Portal, copy its <strong>Application ID</strong>{' '}
+            from General Information and save it here.
+          </p>
+          <label className="field">
+            Discord Application ID
+            <input
+              value={id}
+              onChange={(e) => setAppId(e.target.value.trim())}
+              inputMode="numeric"
+              placeholder="A long number, e.g. 1234567890123456789"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <div className="button-row">
+            <button
+              className="primary"
+              disabled={!!busy || !idOk || id === discord?.customId}
+              onClick={() =>
+                run('discord', async () => {
+                  await invoke('discord_setup', { id });
+                  setAppId(null);
+                })
+              }
+            >
+              {id && id === discord?.customId ? 'Saved' : 'Save'}
+            </button>
+            {discord?.customId && (
+              <button
+                disabled={!!busy}
+                onClick={() =>
+                  run('discord', async () => {
+                    await invoke('discord_setup', { id: '' });
+                    setAppId(null);
+                  })
+                }
+              >
+                Use Slate Music’s
+              </button>
+            )}
+            <button onClick={() => open('https://discord.com/developers/applications')}>
+              <ExternalLink size={14} />
+              Developer Portal
+            </button>
+          </div>
+        </details>
         {problem('discord')}
         <p className="fine-print">
           Slate Music talks only to the Discord app on this PC; it sends nothing over the internet
