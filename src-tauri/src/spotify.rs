@@ -148,8 +148,11 @@ fn store(db: &Database, mut value: Value, previous: Option<&Value>) -> Result<()
         db.set("spotify_scope", &value["scope"])?;
     }
     let encrypted = protect(value.to_string().as_bytes(), false)?;
+    // Written under a temporary name and renamed, so a crash never leaves half a sign-in.
     let path = db.directory.join("spotify.dpapi");
-    std::fs::write(path, encrypted).map_err(err)
+    let temporary = db.directory.join("spotify.dpapi.tmp");
+    std::fs::write(&temporary, encrypted).map_err(err)?;
+    std::fs::rename(&temporary, &path).map_err(err)
 }
 pub fn connected(db: &Database) -> bool {
     db.directory.join("spotify.dpapi").is_file()
