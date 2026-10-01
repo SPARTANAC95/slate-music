@@ -7,14 +7,14 @@
     <title>Slate Music — Your music. In its own space.</title>
     <meta
       name="description"
-      content="A quiet, beautifully organized home for your local music. Slate Music is a free, open-source Windows player with gapless audio, playlists and Spotify playlist matching."
+      content="A quiet, beautifully organized home for your local music. Slate Music is a free, open-source Windows player with synced lyrics, bit-perfect exclusive output, loudness levelling, smart playlists and Spotify playlist matching."
     />
     <link rel="canonical" href="https://SPARTANAC95.github.io/slate-music/" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Slate Music — Your music. In its own space." />
     <meta
       property="og:description"
-      content="A local music player for Windows. Beautifully organized. Completely yours. Free and open source."
+      content="A local music player for Windows with synced lyrics, bit-perfect sound and your year in music. Free and open source."
     />
     <meta property="og:url" content="https://SPARTANAC95.github.io/slate-music/" />
     <meta
@@ -25,13 +25,13 @@
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="Slate Music, a dark Windows music player shown with an original demo collection"
+      content="Slate Music's Now Playing view with synced lyrics, shown with an original demo collection"
     />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Slate Music — Your music. In its own space." />
     <meta
       name="twitter:description"
-      content="A beautiful home for your local music. Free and open source for Windows."
+      content="Synced lyrics, bit-perfect sound and your year in music, for the collection you own. Free and open source for Windows."
     />
     <meta
       name="twitter:image"
@@ -51,8 +51,8 @@
         ></a
       >
       <nav aria-label="Main navigation">
-        <a href="#experience">The player</a><a href="#spotify">Spotify import</a
-        ><a href="#get-started">Get started</a>
+        <a href="#experience">The player</a><a href="#sound">Sound</a
+        ><a href="#spotify">Spotify import</a><a href="#get-started">Get started</a>
       </nav>
       <a class="github-link" href="https://github.com/SPARTANAC95/slate-music"
         ><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
@@ -70,12 +70,12 @@
           <h1 id="hero-title">Your music.<br />In its own space.</h1>
           <div class="hero-aside">
             <p>
-              A beautiful home for the records you own. A local music player that puts listening
-              first.
+              A beautiful home for the records you own. Synced lyrics, bit-perfect sound and a
+              library that keeps up with you.
             </p>
             <a
               class="button button-primary"
-              href="https://github.com/SPARTANAC95/slate-music/releases/download/v1.0.3/Slate-Music_1.0.3_x64-setup.exe"
+              href="https://github.com/SPARTANAC95/slate-music/releases/download/v1.1.0/Slate-Music_1.1.0_x64-setup.exe"
               ><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                 <path
                   d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"
@@ -87,7 +87,7 @@
                 /></svg
               >Download for Windows</a
             >
-            <p class="download-note">Windows 10 / 11 · v1.0.3 · Free &amp; open source</p>
+            <p class="download-note">Windows 10 / 11 · v1.1.0 · Free &amp; open source</p>
           </div>
         </div>
         <figure class="player-showcase" id="experience">
@@ -97,7 +97,7 @@
               src="assets/player-home.png"
               width="1440"
               height="940"
-              alt="Slate Music Home, showing album artwork, a local music library and the listening queue"
+              alt="Slate Music Home, with Jump back in and Recently added shelves of demo albums and the listening panel"
               fetchpriority="high"
             />
           </div>
@@ -105,10 +105,12 @@
             <div class="view-switcher" aria-label="Player screenshots" hidden>
               <button type="button" class="view-button active" aria-pressed="true" data-view="home">
                 Home</button
+              ><button type="button" class="view-button" aria-pressed="false" data-view="playing">
+                Now Playing</button
               ><button type="button" class="view-button" aria-pressed="false" data-view="albums">
                 Albums</button
-              ><button type="button" class="view-button" aria-pressed="false" data-view="queue">
-                Queue
+              ><button type="button" class="view-button" aria-pressed="false" data-view="year">
+                Your year
               </button>
             </div>
             <span class="screenshot-note" id="view-caption" aria-live="polite"
@@ -162,22 +164,151 @@
             <article>
               <h3>Find your way back.</h3>
               <p>
-                Browse by album or artist. Search in a moment. Keep favorites close and make
-                playlists for whatever comes next.
+                Browse by album or artist, or press Ctrl+K and type a few letters: search forgives
+                typos and finds songs, albums, artists and actions in one place.
               </p>
             </article>
             <article>
               <h3>Let the record play.</h3>
               <p>
-                Native gapless playback keeps consecutive tracks together. Or choose a gentle
-                crossfade, from 2 to 12 seconds.
+                Gapless playback keeps an album together. Smart crossfades start where the music
+                ends and never fade a song that runs into the next.
               </p>
             </article>
             <article>
-              <h3>Pick up where you left off.</h3>
+              <h3>Arrange it your way.</h3>
               <p>
-                Your queue, playlists and listening position are remembered. Reopen to a paused
-                session, ready when you are.
+                Pick several songs, drag them onto a playlist or the queue, and sort any list by
+                its columns. Your queue and place are there when you come back.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="collection-section wrap section-space" aria-labelledby="playing-title">
+        <div class="section-intro">
+          <h2 id="playing-title">Every word,<br />right on time.</h2>
+          <p>
+            Now Playing gives a song the whole window: a large, sharp cover, colours taken from
+            it, and lyrics that follow along.
+          </p>
+        </div>
+        <div class="collection-layout">
+          <div class="album-feature">
+            <img
+              src="assets/player-now-playing.png"
+              width="1440"
+              height="940"
+              alt="Now Playing with a demo song: the cover on the left and synced lyrics highlighting the current line"
+              loading="lazy"
+            />
+          </div>
+          <div class="feature-writing">
+            <article>
+              <h3>Synced lyrics.</h3>
+              <p>
+                From an .lrc file beside the song, lyrics stored in the file, or optionally the
+                free LRCLIB database. Click a line to jump to it.
+              </p>
+            </article>
+            <article>
+              <h3>Made from the cover.</h3>
+              <p>
+                The progress bar, playing indicator and backdrop take their colour from the album
+                art. Covers are kept sharp for large screens.
+              </p>
+            </article>
+            <article>
+              <h3>Up next, in reach.</h3>
+              <p>
+                Switch to the queue without leaving the view. Ctrl+L opens it from anywhere; Esc
+                takes you back.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="collection-section wrap section-space" id="sound" aria-labelledby="sound-title">
+        <div class="section-intro">
+          <h2 id="sound-title">Hear exactly<br />what you own.</h2>
+          <p>
+            Every step from the file to your speakers is shown, and nothing changes the sound
+            unless you ask it to.
+          </p>
+        </div>
+        <div class="collection-layout flip">
+          <div class="album-feature">
+            <img
+              src="assets/player-signal-path.png"
+              width="1440"
+              height="940"
+              alt="The signal path of a 24-bit, 96 kHz demo song played bit-perfect in exclusive mode"
+              loading="lazy"
+            />
+          </div>
+          <div class="feature-writing">
+            <article>
+              <h3>Bit-perfect, when you want it.</h3>
+              <p>
+                Exclusive mode sends each song at its own sample rate, with no Windows mixing or
+                resampling. The signal path says when the device gets exactly what is in the file.
+              </p>
+            </article>
+            <article>
+              <h3>Even volume, no clipping.</h3>
+              <p>
+                Loudness levelling measures every song once (EBU R128, or the file's ReplayGain)
+                and keeps albums as they were mastered.
+              </p>
+            </article>
+            <article>
+              <h3>Tuned to your headphones.</h3>
+              <p>
+                A 10-band equalizer with presets, remembered for each output device. Plug your
+                headphones back in and the music follows them.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="collection-section wrap section-space" aria-labelledby="listening-title">
+        <div class="section-intro">
+          <h2 id="listening-title">Your listening,<br />looked after.</h2>
+          <p>Worked out from what you play on this PC. Nothing leaves it unless you choose.</p>
+        </div>
+        <div class="collection-layout">
+          <div class="album-feature">
+            <img
+              src="assets/player-year.png"
+              width="1440"
+              height="940"
+              alt="Your year with a demo listening history: hours listened, longest streak, top songs and top artists"
+              loading="lazy"
+            />
+          </div>
+          <div class="feature-writing">
+            <article>
+              <h3>Your year in music.</h3>
+              <p>
+                Plays, minutes, your longest streak, new artists, and your top songs, artists and
+                albums. Home brings back what you were playing and favourites you forgot.
+              </p>
+            </article>
+            <article>
+              <h3>Smart playlists.</h3>
+              <p>
+                Build playlists from rules, such as favourites you haven't played in months or
+                songs from the 80s, and they keep themselves up to date.
+              </p>
+            </article>
+            <article>
+              <h3>Share it, if you like.</h3>
+              <p>
+                Scrobble to Last.fm, and let Discord show what you're listening to. Both are off
+                until you switch them on.
               </p>
             </article>
           </div>
@@ -190,16 +321,16 @@
             <span class="detail-symbol" aria-hidden="true">⌨</span>
             <h3>A little less reaching.</h3>
             <p>
-              Keyboard shortcuts, Windows media controls, and a mini-player that stays out of the
-              way.
+              Keyboard shortcuts, a command bar, Windows media and taskbar controls, and a
+              mini-player that stays out of the way.
             </p>
           </div>
           <div>
             <span class="detail-symbol folder-symbol" aria-hidden="true">▱</span>
             <h3>A library that keeps up.</h3>
             <p>
-              Watched folders, incremental rescans, artwork caching and clear unavailable-file
-              states.
+              Watched folders, quick rescans, moved songs recognized with their plays and
+              favorites, and covers found beside your files.
             </p>
           </div>
           <div>
@@ -347,8 +478,8 @@
                 limited seeking support. Opus, WMA, APE, DSD and protected files are not supported.
               </p>
               <p>
-                Output uses the Windows default device at 48 kHz stereo. Exclusive and bit-perfect
-                output are not supported.
+                Music plays through Windows at 48 kHz stereo, or, with exclusive mode on, at each
+                song's own sample rate with nothing changed on the way (bit-perfect).
                 <a
                   href="https://github.com/SPARTANAC95/slate-music/blob/main/docs/GUIDE.md#audio-support"
                   >See audio details.</a
@@ -360,9 +491,19 @@
             <summary>Does it really work offline?<span aria-hidden="true">+</span></summary>
             <div>
               <p>
-                Yes. Local playback, search, playlists and your saved library work offline. Spotify
-                metadata import and update checks use the internet. You can disable automatic update
-                checks and downloads in Settings.
+                Yes. Playback, search, playlists, lyrics files and your saved library work offline.
+                Only optional features go online: Spotify import, online lyrics, original years,
+                artist photos, Last.fm and update checks. Each can be switched off in Settings.
+              </p>
+            </div>
+          </details>
+          <details>
+            <summary>What does Discord see?<span aria-hidden="true">+</span></summary>
+            <div>
+              <p>
+                Nothing, until you switch on the Discord status in Settings. Then the Discord app on
+                your PC shows "Listening to Slate Music" with the song and artist while music plays.
+                Slate Music talks only to that app and needs no Discord setup.
               </p>
             </div>
           </details>
@@ -422,7 +563,7 @@
         <h2>Good records.<br />A good place to keep them.</h2>
         <a
           class="button button-primary"
-          href="https://github.com/SPARTANAC95/slate-music/releases/download/v1.0.3/Slate-Music_1.0.3_x64-setup.exe"
+          href="https://github.com/SPARTANAC95/slate-music/releases/download/v1.1.0/Slate-Music_1.1.0_x64-setup.exe"
           >Download Slate Music
           <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
             <path
@@ -464,8 +605,9 @@
           <a href="https://github.com/SPARTANAC95">SPARTANAC95</a>.
         </p>
         <p>
-          App screenshots use original demo artwork and synthetic files. No music is bundled. Not
-          affiliated with Spotify.
+          App screenshots show the real interface with an original demo collection: fictional
+          albums, songs, lyrics and artwork. No music is bundled. Not affiliated with Spotify,
+          Last.fm or Discord.
         </p>
       </div>
     </footer>

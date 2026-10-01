@@ -306,6 +306,12 @@ h2 {
   gap: 62px;
   align-items: center;
 }
+.collection-layout.flip {
+  grid-template-columns: 1fr 1.7fr;
+}
+.collection-layout.flip .album-feature {
+  order: 2;
+}
 .album-feature {
   min-width: 0;
   background: #17151b;
@@ -712,6 +718,9 @@ h3 {
     gap: 35px;
     grid-template-columns: 1.5fr 1fr;
   }
+  .collection-layout.flip {
+    grid-template-columns: 1fr 1.5fr;
+  }
   .feature-writing {
     gap: 24px;
   }
@@ -840,9 +849,13 @@ h3 {
     max-width: 410px;
     font-size: 14px;
   }
-  .collection-layout {
+  .collection-layout,
+  .collection-layout.flip {
     grid-template-columns: 1fr;
     gap: 33px;
+  }
+  .collection-layout.flip .album-feature {
+    order: 0;
   }
   .album-feature {
     padding: 10px 10px 8px;
