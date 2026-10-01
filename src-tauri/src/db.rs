@@ -147,6 +147,19 @@ impl Database {
         }
         Ok(out)
     }
+    /// The available songs of one album (same album name and album artist). Filtered inside
+    /// SQLite, so preparing a song no longer decodes every song in the library.
+    pub fn album_tracks(&self, album: &str, album_artist: &str) -> Result<Vec<Track>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c
+            .prepare("SELECT data FROM tracks WHERE missing=0 AND json_extract(data,'$.album')=?1 AND json_extract(data,'$.albumArtist')=?2")
+            .map_err(err)?;
+        let rows = s
+            .query_map(params![album, album_artist], |r| r.get::<_, String>(0))
+            .map_err(err)?;
+        rows.map(|data| serde_json::from_str(&data.map_err(err)?).map_err(err))
+            .collect()
+    }
     /// Songs whose original year is unknown and has not been looked up recently.
     pub fn years_needed(&self) -> Result<Vec<YearRequest>> {
         let checked: HashMap<String, (u32, i64)> = {

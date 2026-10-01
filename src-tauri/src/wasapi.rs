@@ -136,6 +136,15 @@ pub fn probe(name: Option<String>) -> Result<Support, String> {
     .map_err(|_| "checking the device failed".to_string())?
 }
 
+/// A Windows event handle, closed when dropped (also when opening a stream fails half-way).
+struct Event(HANDLE);
+impl Drop for Event {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
 /// What one buffer held: whether the song still needs this rate, and whether music played.
 struct Filled {
     same_rate: bool,
@@ -145,7 +154,7 @@ struct Filled {
 struct Stream {
     client: IAudioClient,
     output: IAudioRenderClient,
-    event: HANDLE,
+    event: Event,
     frames: u32,
     layout: Layout,
 }
@@ -185,8 +194,8 @@ impl Stream {
                 }
             }
             opened?;
-            let event = CreateEventW(None, false, false, None)?;
-            client.SetEventHandle(event)?;
+            let event = Event(CreateEventW(None, false, false, None)?);
+            client.SetEventHandle(event.0)?;
             let frames = client.GetBufferSize()?;
             let output: IAudioRenderClient = client.GetService()?;
             Ok(Stream {
@@ -209,9 +218,7 @@ impl Stream {
             let playing = r.state.playing;
             for chunk in out.chunks_exact_mut(bytes) {
                 let sample = if same_rate && !r.rate_pending {
-                    let s = r.sample();
-                    r.channel ^= 1;
-                    s
+                    r.sample()
                 } else {
                     0.
                 };
@@ -242,19 +249,24 @@ impl Stream {
             {
                 break;
             }
-            if unsafe { WaitForSingleObject(self.event, 2000) } != WAIT_OBJECT_0 {
+            if unsafe { WaitForSingleObject(self.event.0, 2000) } != WAIT_OBJECT_0 {
                 return Err("the device stopped responding".into());
             }
             filled = self.fill(render, rate).map_err(fail)?;
+        }
+        if !filled.same_rate {
+            // The next song needs another rate. The buffer before this one still holds the end
+            // of the last song: let it play out before the device is stopped and reopened.
+            unsafe { WaitForSingleObject(self.event.0, 2000) };
         }
         Ok(())
     }
 }
 impl Drop for Stream {
     fn drop(&mut self) {
+        // The event closes after this, with the other fields.
         unsafe {
             let _ = self.client.Stop();
-            let _ = CloseHandle(self.event);
         }
     }
 }
@@ -302,34 +314,52 @@ fn run(
     render: &Mutex<RenderState>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
-    let (device, _, _) = find(wanted).map_err(|e| describe(&e))?;
     while !stop.load(Ordering::SeqCst) {
-        let (rate, bits, playing) = {
+        let (rate, bits, playing, loaded) = {
             let r = render.lock().unwrap();
-            (r.current_rate(), r.current_bits(), r.state.playing)
+            (
+                r.current_rate(),
+                r.current_bits(),
+                r.state.playing,
+                r.current.is_some(),
+            )
         };
-        let layout = support
-            .layout_for(rate, bits)
-            .ok_or("the device takes no format at this song's sample rate")?;
+        let layout = support.layout_for(rate, bits);
         {
-            let info = OutputInfo {
-                device: support.device.clone(),
-                sample_rate: rate,
-                channels: 2,
-                fallback: support.fallback,
-                exclusive: true,
-                bits: layout.valid,
-            };
+            // With nothing loaded the rate may be one the device doesn't take; show the format
+            // a song at that rate would get instead of failing.
+            let shown = layout.map(|l| (rate, l)).or_else(|| {
+                let near = support.rate_for(rate);
+                support.layout_for(near, bits).map(|l| (near, l))
+            });
             let mut r = render.lock().unwrap();
-            if r.state.output.as_ref() != Some(&info) {
-                r.state.output = Some(info);
+            if let Some((sample_rate, l)) = shown {
+                let info = OutputInfo {
+                    device: support.device.clone(),
+                    sample_rate,
+                    channels: 2,
+                    fallback: support.fallback,
+                    exclusive: true,
+                    bits: l.valid,
+                };
+                if r.state.output.as_ref() != Some(&info) {
+                    r.state.output = Some(info);
+                }
             }
             r.state.engine_ready = true;
         }
         // Paused: the device stays free for other apps until music plays again.
-        if !playing {
+        if !playing || !loaded {
             std::thread::sleep(Duration::from_millis(40));
             continue;
+        }
+        let layout = layout.ok_or("the device takes no format at this song's sample rate")?;
+        // Look the device up again each time music starts: headphones may have been plugged
+        // in or reconnected since. Another device is checked afresh by the engine.
+        let (device, name, fallback) = find(wanted).map_err(|e| describe(&e))?;
+        if name != support.device || fallback != support.fallback {
+            render.lock().unwrap().reopen = true;
+            return Ok(());
         }
         let stream = Stream::open(&device, rate, layout).map_err(|e| describe(&e))?;
         render.lock().unwrap().use_rate(rate);

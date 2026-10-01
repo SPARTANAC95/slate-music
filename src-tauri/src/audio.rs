@@ -33,6 +33,8 @@ pub struct Deck {
     pub continues_album: bool,
     /// The rate this song is mixed at: 48 kHz normally, its own rate in exclusive mode.
     pub rate: u32,
+    /// The file's own sample rate.
+    pub native: u32,
     /// Bits per sample in the file (0 for lossy formats).
     pub bits: u16,
 }
@@ -44,7 +46,8 @@ impl Deck {
             .total_duration()
             .map(|d| d.as_secs_f64())
             .unwrap_or(track.duration);
-        let rate = rate_for(decoder.sample_rate());
+        let native = decoder.sample_rate();
+        let rate = rate_for(native);
         Ok(Self {
             id: track.id.clone(),
             index,
@@ -58,6 +61,7 @@ impl Deck {
             start_silence: 0.,
             continues_album: false,
             rate,
+            native,
             bits: track.bit_depth as u16,
         })
     }
@@ -172,6 +176,12 @@ pub struct RenderState {
     pub exclusive: Option<crate::exclusive::Support>,
     /// The next song needs the device at another rate; silence until it is reopened.
     pub rate_pending: bool,
+    /// Samples handed to the output so far. A shared output whose count stops rising has
+    /// silently died (a device that went away without an error) and is opened again.
+    pub pulled: u64,
+    /// The song ended while the next one was still being prepared (for example after a queue
+    /// edit in its last moments): playback stays on, silent, until the next song is ready.
+    pub waiting: bool,
 }
 impl RenderState {
     /// The rate a song whose file is at `native` Hz is mixed at.
@@ -193,6 +203,36 @@ impl RenderState {
         self.rate_pending = false;
         self.channel = 0;
     }
+    /// The crossfade in use: none for the end-of-song sleep timer (the song plays to its real
+    /// end) or in exclusive mode (songs are sent untouched, never mixed).
+    fn effective_crossfade(&self) -> f64 {
+        if self.state.sleep_end_of_track || self.exclusive.is_some() {
+            0.
+        } else {
+            self.state.crossfade
+        }
+    }
+    /// The loaded song was opened for another output rate (exclusive mode just ended) and must
+    /// be opened again before it plays, never at the wrong speed.
+    fn wrong_rate(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|d| d.rate != self.deck_rate(d.native))
+    }
+    /// Unloads the playing song but keeps its place, so Play opens it again.
+    fn unload(&mut self) {
+        let s = self.snapshot();
+        self.state.cursor = s.cursor;
+        self.state.current_id = s.current_id;
+        self.state.position = s.position;
+        self.state.duration = s.duration;
+        self.state.playing = false;
+        self.current = None;
+        self.next = None;
+        self.waiting = false;
+        self.epoch += 1;
+        self.next_attempt = None;
+    }
     /// Ends a sleep timer whose time is up: pauses if playing, and clears it either way (a
     /// deadline that passes while paused must not stop the next play).
     fn apply_sleep(&mut self, now: i64) {
@@ -202,17 +242,30 @@ impl RenderState {
         }
     }
     fn remove_queued(&mut self, index: usize) {
-        let cursor = self.snapshot().cursor;
-        self.state.queue.remove(index);
-        let next_cursor = cursor
-            .saturating_sub(usize::from(index < cursor))
-            .min(self.state.queue.len().saturating_sub(1));
+        let mut remove = vec![false; self.state.queue.len()];
+        if let Some(slot) = remove.get_mut(index) {
+            *slot = true;
+            self.remove_rows(&remove);
+        }
+    }
+    /// Removes every queue entry marked in `remove` in one pass, keeping the cursor on the same
+    /// song (or, when that song itself is removed, on the one after it).
+    fn remove_rows(&mut self, remove: &[bool]) {
+        let cursor = self.current.as_ref().map_or(self.state.cursor, |d| d.index);
+        let removed_before = remove.iter().take(cursor).filter(|r| **r).count();
+        let cursor_removed = remove.get(cursor) == Some(&true);
+        let mut i = 0;
+        self.state.queue.retain(|_| {
+            i += 1;
+            !remove.get(i - 1).copied().unwrap_or(false)
+        });
+        let next_cursor = (cursor - removed_before).min(self.state.queue.len().saturating_sub(1));
         self.state.cursor = next_cursor;
         if let Some(deck) = self.current.as_mut() {
             deck.index = next_cursor;
         }
         self.state.current_id = self.state.queue.get(next_cursor).cloned();
-        if index == cursor && self.current.is_none() {
+        if cursor_removed && self.current.is_none() {
             self.state.position = 0.;
             self.state.duration = 0.;
             self.state.playing = false;
@@ -243,6 +296,7 @@ impl RenderState {
         // In exclusive mode a song at another rate waits for the device to be reopened.
         self.rate_pending = self.exclusive.is_some() && next.rate != self.rate;
         self.current = Some(next);
+        self.waiting = false;
         self.transition += 1;
         self.epoch += 1;
         self.next_attempt = None;
@@ -267,17 +321,18 @@ impl RenderState {
             None
         }
     }
+    /// The next output sample. Output alternates left and right, starting on the left.
     pub fn sample(&mut self) -> f32 {
+        self.pulled += 1;
+        let sample = self.render_sample();
+        self.channel ^= 1;
+        sample
+    }
+    fn render_sample(&mut self) -> f32 {
         if !self.state.playing || self.stopping || self.rate_pending {
             return 0.;
         }
-        // "End of this song" plays the song to its real end, so no crossfade; exclusive mode
-        // sends songs untouched, so never mixes two.
-        let crossfade = if self.state.sleep_end_of_track || self.exclusive.is_some() {
-            0.
-        } else {
-            self.state.crossfade
-        };
+        let crossfade = self.effective_crossfade();
         let smart = self.state.smart_crossfade;
         let fades_into_next = crossfade > 0.
             && self
@@ -289,16 +344,27 @@ impl RenderState {
         if smart && fades_into_next {
             if let Some(current) = &self.current {
                 if current.samples % 2 == 0
+                    && self.channel == 0
                     && current.position() >= current.audible_end
                     && self.advance()
                 {
-                    return self.sample();
+                    return self.render_sample();
                 }
             }
         }
+        // Never play a song opened for another output rate: it would play at the wrong speed.
+        if self.exclusive.is_none() && self.wrong_rate() {
+            return 0.;
+        }
+        let channel = self.channel as u64;
         let Some(current) = self.current.as_mut() else {
             return 0.;
         };
+        // A song loaded or sought between a left and a right sample waits for the next left
+        // one, so its left channel is never played on the right.
+        if current.samples % 2 != channel {
+            return 0.;
+        }
         if let Some(sample) = current.source.next() {
             let mut sample = sample * current.gain;
             let fade = if fades_into_next {
@@ -317,10 +383,14 @@ impl RenderState {
             let remaining = end - current.position();
             if fade > 0. && remaining <= fade {
                 if let Some(next) = self.next.as_mut() {
-                    if let Some(n) = next.source.next() {
-                        let ratio = (1. - remaining / fade).clamp(0., 1.) as f32;
-                        sample = sample * (1. - ratio) + n * next.gain * ratio;
-                        next.samples += 1;
+                    // The next song joins on a left sample and then keeps step, so its
+                    // channels stay in order through the fade and after it.
+                    if next.samples % 2 == current.samples % 2 {
+                        if let Some(n) = next.source.next() {
+                            let ratio = (1. - remaining / fade).clamp(0., 1.) as f32;
+                            sample = sample * (1. - ratio) + n * next.gain * ratio;
+                            next.samples += 1;
+                        }
                     }
                 }
             }
@@ -335,7 +405,13 @@ impl RenderState {
                 self.state.playing = false;
                 return 0.;
             }
-            return self.sample();
+            return self.render_sample();
+        }
+        if self.next_index().is_some() {
+            // The next song is still being prepared (the queue or a setting changed in the
+            // song's last moments): stay on, silent, instead of stopping.
+            self.waiting = true;
+            return 0.;
         }
         self.state.sleep_end_of_track = false;
         self.state.playing = false;
@@ -346,6 +422,7 @@ impl RenderState {
 /// The new order of a list of `len` items after moving `rows` (kept in their order) to sit
 /// before position `to` of the original list (`to == len` moves them to the end).
 pub fn move_rows(len: usize, rows: &[usize], to: usize) -> Vec<usize> {
+    let rows: HashSet<usize> = rows.iter().copied().collect();
     let moving: Vec<usize> = (0..len).filter(|i| rows.contains(i)).collect();
     let mut order: Vec<usize> = (0..len).filter(|i| !rows.contains(i)).collect();
     let at = order.iter().position(|&i| i >= to).unwrap_or(order.len());
@@ -371,7 +448,7 @@ fn choose_device(wanted: Option<&str>) -> (Option<rodio::Device>, String, bool) 
         None => (None, default_name, wanted.is_some()),
     }
 }
-/// Output devices Windows offers, and which one is the default.
+/// Queue positions from a command's list.
 fn indices(value: &serde_json::Value) -> Result<Vec<usize>> {
     let rows: Vec<usize> = value
         .as_array()
@@ -384,17 +461,39 @@ fn indices(value: &serde_json::Value) -> Result<Vec<usize>> {
     }
     Ok(rows)
 }
+/// Output devices Windows offers, and which one is the default.
 pub fn output_devices() -> (Vec<String>, Option<String>) {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
-    let host = rodio::cpal::default_host();
-    let names = host
+    let names = rodio::cpal::default_host()
         .output_devices()
         .map(|all| all.filter_map(|d| d.name().ok()).collect())
         .unwrap_or_default();
-    (
-        names,
-        host.default_output_device().and_then(|d| d.name().ok()),
-    )
+    (names, default_device_name())
+}
+/// The name of Windows' current default output device.
+fn default_device_name() -> Option<String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    rodio::cpal::default_host()
+        .default_output_device()
+        .and_then(|d| d.name().ok())
+}
+/// Whether the open output should be replaced: while following Windows' default, the default
+/// is now another device (headphones plugged in or reconnected); or a chosen device that was
+/// missing, so the default stood in, is connected again. `shown` is the device playing,
+/// `default` and `names` what Windows offers now.
+fn device_changed(
+    wanted: Option<&str>,
+    shown: Option<&OutputInfo>,
+    default: Option<&str>,
+    names: &[String],
+) -> bool {
+    let Some(shown) = shown else {
+        return false;
+    };
+    match wanted {
+        None => default.is_some_and(|d| d != shown.device),
+        Some(name) => shown.fallback && names.iter().any(|n| n == name),
+    }
 }
 /// Where sound goes: Windows' shared mixer, or the device to ourselves (exclusive mode).
 /// Holding one keeps it playing; dropping it stops it, so its parts are never read.
@@ -408,10 +507,7 @@ pub struct Mixer(pub Arc<Mutex<RenderState>>);
 impl Iterator for Mixer {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
-        let mut r = self.0.lock().unwrap();
-        let sample = r.sample();
-        r.channel ^= 1;
-        Some(sample)
+        Some(self.0.lock().unwrap().sample())
     }
 }
 impl Source for Mixer {
@@ -484,6 +580,8 @@ impl Engine {
                 rate: RATE,
                 exclusive: None,
                 rate_pending: false,
+                pulled: 0,
+                waiting: false,
             })),
             db,
             command_lock: Mutex::new(()),
@@ -523,6 +621,7 @@ impl Engine {
                     start_silence: 0.,
                     continues_album: false,
                     rate: RATE,
+                    native: RATE,
                     bits: 0,
                 };
                 self.shape(&mut probe, &t, &levelling, &queue);
@@ -570,39 +669,18 @@ impl Engine {
     pub fn forget(&self, ids: &HashSet<String>) {
         {
             let mut r = self.render.lock().unwrap();
-            let cursor = r.snapshot().cursor;
             let loaded = r.current.as_ref().map(|d| d.index);
-            let keep: Vec<bool> = r
+            let remove: Vec<bool> = r
                 .state
                 .queue
                 .iter()
                 .enumerate()
-                .map(|(i, id)| !ids.contains(id) || Some(i) == loaded)
+                .map(|(i, id)| ids.contains(id) && Some(i) != loaded)
                 .collect();
-            if keep.iter().all(|k| *k) {
+            if !remove.iter().any(|r| *r) {
                 return;
             }
-            let removed_before = keep.iter().take(cursor).filter(|k| !**k).count();
-            let cursor_removed = keep.get(cursor) == Some(&false);
-            let mut i = 0;
-            r.state.queue.retain(|_| {
-                i += 1;
-                keep[i - 1]
-            });
-            let next_cursor = (cursor - removed_before).min(r.state.queue.len().saturating_sub(1));
-            r.state.cursor = next_cursor;
-            if let Some(deck) = r.current.as_mut() {
-                deck.index = next_cursor;
-            }
-            r.state.current_id = r.state.queue.get(next_cursor).cloned();
-            if cursor_removed {
-                r.state.position = 0.;
-                r.state.duration = 0.;
-                r.state.playing = false;
-            }
-            r.next = None;
-            r.epoch += 1;
-            r.next_attempt = None;
+            r.remove_rows(&remove);
         }
         self.save();
     }
@@ -628,6 +706,24 @@ impl Engine {
         };
         if let Some((index, position, playing)) = reload {
             let _ = self.load(index, position, playing);
+        }
+        self.fix_rate();
+    }
+    /// A song still opened for the previous output rate (its reload failed or was overtaken)
+    /// is opened again where it was; if that fails it is unloaded, keeping its place.
+    fn fix_rate(&self) {
+        let reload = {
+            let r = self.render.lock().unwrap();
+            if !r.wrong_rate() {
+                return;
+            }
+            let s = r.snapshot();
+            (s.cursor, s.position, s.playing)
+        };
+        if self.load(reload.0, reload.1, reload.2).is_err()
+            || self.render.lock().unwrap().wrong_rate()
+        {
+            self.render.lock().unwrap().unload();
         }
     }
     fn prepare(&self, id: &str, index: usize) -> Result<Deck> {
@@ -683,23 +779,23 @@ impl Engine {
                 && (previous.as_ref().is_some_and(same_album)
                     || following.as_ref().is_some_and(same_album)));
         let album = if album_mode {
-            self.db.tracks().ok().and_then(|tracks| {
-                let songs: Vec<Track> = tracks
-                    .into_iter()
-                    .filter(|o| !o.missing && same_album(o))
-                    .collect();
-                let keys: Vec<String> = songs.iter().map(crate::loudness::key).collect();
-                let measured = self.db.loudness(&keys).ok()?;
-                let list: Vec<_> = songs
-                    .iter()
-                    .filter_map(|o| {
-                        measured
-                            .get(&crate::loudness::key(o))
-                            .map(|l| (l.clone(), o.duration))
-                    })
-                    .collect();
-                crate::loudness::album_gain(&list)
-            })
+            self.db
+                .album_tracks(&t.album, &t.album_artist)
+                .ok()
+                .and_then(|tracks| {
+                    let songs: Vec<Track> = tracks.into_iter().filter(same_album).collect();
+                    let keys: Vec<String> = songs.iter().map(crate::loudness::key).collect();
+                    let measured = self.db.loudness(&keys).ok()?;
+                    let list: Vec<_> = songs
+                        .iter()
+                        .filter_map(|o| {
+                            measured
+                                .get(&crate::loudness::key(o))
+                                .map(|l| (l.clone(), o.duration))
+                        })
+                        .collect();
+                    crate::loudness::album_gain(&list)
+                })
         } else {
             None
         };
@@ -715,41 +811,43 @@ impl Engine {
         deck.gain_kind = kind.into();
     }
     fn load(&self, index: usize, position: f64, playing: bool) -> Result<()> {
-        let (id, epoch) = {
-            let r = self.render.lock().unwrap();
-            (
-                r.state.queue.get(index).cloned().ok_or("Queue is empty")?,
-                r.epoch,
-            )
-        };
-        let mut deck = self.prepare(&id, index)?;
-        if position > 0. {
-            let target = position.min((deck.duration - 0.1).max(0.));
-            deck.source
-                .try_seek(Duration::from_secs_f64(target))
-                .map_err(err)?;
-            deck.samples = (target * (deck.rate * 2) as f64) as u64;
-        }
-        let mut r = self.render.lock().unwrap();
-        if r.epoch != epoch {
+        // Opening a song takes a moment; if a song ended or the queue moved meanwhile, open it
+        // again rather than silently ignoring the request.
+        for _ in 0..3 {
+            let (id, epoch) = {
+                let r = self.render.lock().unwrap();
+                (
+                    r.state.queue.get(index).cloned().ok_or("Queue is empty")?,
+                    r.epoch,
+                )
+            };
+            let mut deck = self.prepare(&id, index)?;
+            if position > 0. {
+                deck.skip_to(position)?;
+            }
+            let mut r = self.render.lock().unwrap();
+            if r.epoch != epoch {
+                continue;
+            }
+            let new_play = r
+                .current
+                .as_ref()
+                .is_none_or(|d| d.id != id || d.index != index);
+            r.current = Some(deck);
+            r.next = None;
+            r.waiting = false;
+            r.state.cursor = index;
+            r.state.current_id = Some(id);
+            r.state.playing = playing;
+            r.state.error = None;
+            r.epoch += 1;
+            if new_play {
+                r.transition += 1;
+            }
+            r.next_attempt = None;
             return Ok(());
         }
-        let new_play = r
-            .current
-            .as_ref()
-            .is_none_or(|d| d.id != id || d.index != index);
-        r.current = Some(deck);
-        r.next = None;
-        r.state.cursor = index;
-        r.state.current_id = Some(id);
-        r.state.playing = playing;
-        r.state.error = None;
-        r.epoch += 1;
-        if new_play {
-            r.transition += 1;
-        }
-        r.next_attempt = None;
-        Ok(())
+        Err("Playback changed while the song was opening. Try again.".into())
     }
     pub fn command(&self, action: &str, value: serde_json::Value) -> Result<Playback> {
         let _guard = self.command_lock.lock().unwrap();
@@ -804,6 +902,7 @@ impl Engine {
                         r.state.error = None;
                         r.current = Some(deck);
                         r.next = None;
+                        r.waiting = false;
                         r.epoch += 1;
                         r.transition += 1;
                         r.next_attempt = None;
@@ -819,7 +918,10 @@ impl Engine {
                     }
                     if self.render.lock().unwrap().current.is_none() {
                         self.load(s.cursor, s.position, true)?
-                    } else if !s.playing && s.position >= s.duration - 0.03 {
+                    } else if !s.playing
+                        && s.position >= s.duration - 0.03
+                        && !self.render.lock().unwrap().waiting
+                    {
                         self.load(s.cursor, 0., true)?
                     } else {
                         let mut r = self.render.lock().unwrap();
@@ -953,6 +1055,7 @@ impl Engine {
                         None => {
                             r.state.queue.clear();
                             r.current = None;
+                            r.waiting = false;
                             r.state.current_id = None;
                             r.state.position = 0.;
                             r.state.duration = 0.;
@@ -1070,17 +1173,16 @@ impl Engine {
                     r.next_attempt = None;
                 }
                 "remove_many" => {
-                    let mut rows = indices(&value)?;
+                    let rows: HashSet<usize> = indices(&value)?.into_iter().collect();
                     let mut r = self.render.lock().unwrap();
                     let cursor = r.snapshot().cursor;
                     let playing = r.current.is_some();
-                    rows.sort_unstable();
-                    rows.dedup();
-                    // From the end, so earlier positions stay valid; the playing song stays.
-                    for &i in rows.iter().rev() {
-                        if i < r.state.queue.len() && !(playing && i == cursor) {
-                            r.remove_queued(i);
-                        }
+                    // One pass, however many rows; the playing song stays.
+                    let remove: Vec<bool> = (0..r.state.queue.len())
+                        .map(|i| rows.contains(&i) && !(playing && i == cursor))
+                        .collect();
+                    if remove.iter().any(|r| *r) {
+                        r.remove_rows(&remove);
                     }
                 }
                 "jump" => {
@@ -1092,6 +1194,7 @@ impl Engine {
                     r.state.queue.clear();
                     r.current = None;
                     r.next = None;
+                    r.waiting = false;
                     r.state.current_id = None;
                     r.state.position = 0.;
                     r.state.duration = 0.;
@@ -1159,6 +1262,10 @@ impl Engine {
             let mut last_play = String::new();
             let mut tick = 0u64;
             let mut last_transition = 0;
+            // A message to show once an output opens (why exclusive mode stopped).
+            let mut notice: Option<String> = None;
+            // Output watchdog: samples handed out at the last check, and checks without any.
+            let (mut last_pulled, mut stalled) = (0u64, 0u32);
             loop {
                 std::thread::sleep(Duration::from_millis(80));
                 tick += 1;
@@ -1168,23 +1275,70 @@ impl Engine {
                     let mut r = engine.render.lock().unwrap();
                     r.state.playing = false;
                     r.state.engine_ready = false;
-                    r.state.error = Some(match why {
+                    let message = match why {
                         Some(why) => {
                             exclusive_blocked = true;
-                            format!("Exclusive mode stopped: {why}. Slate Music plays through Windows instead until you turn exclusive mode on again.")
+                            let message = format!("Exclusive mode stopped: {why}. Slate Music plays through Windows instead until you turn exclusive mode on again.");
+                            // Kept until the shared output opens, so it isn't wiped a moment later.
+                            notice = Some(message.clone());
+                            message
                         }
                         None => {
                             "Audio device disconnected. Reconnecting; playback will stay paused."
                                 .into()
                         }
-                    });
+                    };
+                    r.state.error = Some(message);
+                }
+                // About once a second: follow Windows' default device (headphones plugged in
+                // or reconnected), return to a chosen device that is back, and replace an
+                // output that stopped asking for sound without reporting an error.
+                if output.is_some() && tick % 12 == 6 {
+                    let (wanted, shown, pulled) = {
+                        let r = engine.render.lock().unwrap();
+                        (
+                            r.state.output_device.clone(),
+                            r.state.output.clone(),
+                            r.pulled,
+                        )
+                    };
+                    let shared = matches!(output, Some(Output::Shared(..)));
+                    stalled = if shared && pulled == last_pulled {
+                        stalled + 1
+                    } else {
+                        0
+                    };
+                    last_pulled = pulled;
+                    // Only what the check needs: the default's name, or the device list.
+                    let (names, default) = match (&wanted, &shown) {
+                        (None, Some(_)) => (Vec::new(), default_device_name()),
+                        (Some(_), Some(s)) if s.fallback => (output_devices().0, None),
+                        _ => (Vec::new(), None),
+                    };
+                    if stalled >= 2
+                        || device_changed(
+                            wanted.as_deref(),
+                            shown.as_ref(),
+                            default.as_deref(),
+                            &names,
+                        )
+                    {
+                        stalled = 0;
+                        engine.render.lock().unwrap().reopen = true;
+                    }
                 }
                 let reopen = std::mem::take(&mut engine.render.lock().unwrap().reopen);
                 if reopen {
                     output.take();
                     exclusive_blocked = false;
+                    // The old output is gone; a failure it reported on its way out must not
+                    // stop the new one.
+                    lost.store(false, Ordering::SeqCst);
+                    problem.lock().unwrap().take();
                 }
-                let mut notice = None;
+                // Exclusive mode (Windows only) can ask for the shared output at once.
+                #[cfg_attr(not(windows), allow(unused_mut))]
+                let mut open_now = reopen;
                 #[cfg(windows)]
                 if output.is_none() && (reopen || tick % 12 == 1) {
                     let (wanted, exclusive) = {
@@ -1202,15 +1356,17 @@ impl Engine {
                                     problem.clone(),
                                     lost.clone(),
                                 )));
+                                notice = None;
                             }
                             Err(why) => {
                                 exclusive_blocked = true;
+                                open_now = true;
                                 notice = Some(format!("Exclusive mode isn't available: {why}. Slate Music plays through Windows instead."));
                             }
                         }
                     }
                 }
-                if output.is_none() && (reopen || notice.is_some() || tick % 12 == 1) {
+                if output.is_none() && (open_now || tick % 12 == 1) {
                     engine.use_exclusive(None);
                     let signal = lost.clone();
                     let wanted = engine.render.lock().unwrap().state.output_device.clone();
@@ -1235,6 +1391,8 @@ impl Engine {
                                 fallback,
                                 ..Default::default()
                             };
+                            // The new stream asks for a left sample first.
+                            engine.render.lock().unwrap().channel = 0;
                             let sink = Sink::connect_new(stream.mixer());
                             sink.append(Mixer(engine.render.clone()));
                             output = Some(Output::Shared(stream, sink));
@@ -1242,6 +1400,8 @@ impl Engine {
                             r.state.engine_ready = true;
                             r.state.error = notice.take();
                             r.state.output = Some(info);
+                            last_pulled = r.pulled;
+                            stalled = 0;
                         }
                         Err(e) => {
                             let mut r = engine.render.lock().unwrap();
@@ -1251,6 +1411,8 @@ impl Engine {
                         }
                     }
                 }
+                // A song left at the previous output's rate is reopened, never played fast or slow.
+                engine.fix_rate();
                 let target = {
                     let mut r = engine.render.lock().unwrap();
                     if r.stopping {
@@ -1278,7 +1440,7 @@ impl Engine {
                         Ok(mut deck) => {
                             let (crossfade, smart) = {
                                 let r = engine.render.lock().unwrap();
-                                (r.state.crossfade, r.state.smart_crossfade)
+                                (r.effective_crossfade(), r.state.smart_crossfade)
                             };
                             if smart
                                 && crossfade > 0.
@@ -1298,6 +1460,10 @@ impl Engine {
                                 r.state.error = Some(e);
                                 if index != r.snapshot().cursor && index < r.state.queue.len() {
                                     r.remove_queued(index);
+                                } else if r.waiting {
+                                    // Nothing else can follow: stop as at the end of the queue.
+                                    r.waiting = false;
+                                    r.state.playing = false;
                                 }
                             }
                         }
@@ -1374,6 +1540,7 @@ mod tests {
             start_silence: 0.,
             continues_album: false,
             rate: RATE,
+            native: RATE,
             bits: 16,
         }
     }
@@ -1398,6 +1565,8 @@ mod tests {
             rate: RATE,
             exclusive: None,
             rate_pending: false,
+            pulled: 0,
+            waiting: false,
         }
     }
     /// Writes a WAV of pseudo-random samples and returns them as whole numbers.
@@ -1474,7 +1643,6 @@ mod tests {
             let mut out = [0u8; 4];
             for (i, want) in values.iter().enumerate() {
                 let sample = r.sample();
-                r.channel ^= 1;
                 to_pcm(sample, layout, &mut out);
                 let got = match layout.container {
                     16 => i16::from_le_bytes([out[0], out[1]]) as i32,
@@ -1503,6 +1671,122 @@ mod tests {
         let mut shared = render();
         let _: Vec<f32> = (0..961).map(|_| shared.sample()).collect();
         assert!(!shared.rate_pending);
+    }
+    #[test]
+    fn output_follows_the_default_device_and_returns_to_a_chosen_one() {
+        let playing = |device: &str, fallback| OutputInfo {
+            device: device.into(),
+            fallback,
+            ..Default::default()
+        };
+        let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let speakers = playing("Speakers", false);
+        // Following the default: headphones plugged in or reconnected become the default.
+        assert!(device_changed(
+            None,
+            Some(&speakers),
+            Some("Headphones"),
+            &[]
+        ));
+        assert!(!device_changed(
+            None,
+            Some(&speakers),
+            Some("Speakers"),
+            &[]
+        ));
+        assert!(
+            !device_changed(None, Some(&speakers), None, &[]),
+            "no device: keep trying"
+        );
+        assert!(!device_changed(None, None, Some("Headphones"), &[]));
+        // A chosen device that was missing (the default stood in) is back.
+        let stand_in = playing("Speakers", true);
+        assert!(device_changed(
+            Some("DAC"),
+            Some(&stand_in),
+            None,
+            &names(&["Speakers", "DAC"])
+        ));
+        assert!(!device_changed(
+            Some("DAC"),
+            Some(&stand_in),
+            None,
+            &names(&["Speakers"])
+        ));
+        // Playing on the chosen device: other changes don't matter.
+        assert!(!device_changed(
+            Some("DAC"),
+            Some(&playing("DAC", false)),
+            Some("Headphones"),
+            &names(&["DAC", "Headphones"])
+        ));
+    }
+    /// A deck whose left and right samples differ, to catch swapped channels.
+    fn stereo(id: &str, index: usize, left: f32, right: f32, frames: usize) -> Deck {
+        let mut d = deck(id, index, 0., frames);
+        d.source = Box::new(rodio::buffer::SamplesBuffer::new(
+            2,
+            RATE,
+            [left, right].repeat(frames),
+        ));
+        d
+    }
+    #[test]
+    fn a_song_loaded_between_left_and_right_keeps_its_channels() {
+        let mut r = render();
+        r.current = Some(stereo("a", 0, 0.1, 0.9, 100));
+        r.next = None;
+        r.channel = 1; // the output is about to ask for a right sample
+        let out: Vec<f32> = (0..5).map(|_| r.sample()).collect();
+        assert_eq!(out, [0., 0.1, 0.9, 0.1, 0.9]);
+    }
+    #[test]
+    fn channels_stay_in_order_after_a_crossfade_that_starts_on_a_right_sample() {
+        let mut r = render();
+        r.state.smart_crossfade = false;
+        r.current = Some(stereo("a", 0, 0., 0., 1000));
+        r.next = Some(stereo("b", 1, 0.2, 0.8, 1000));
+        // Chosen so the fade window opens on sample 1519, a right sample.
+        r.state.crossfade = 481.5 / (2. * RATE as f64);
+        let out: Vec<f32> = (0..2400).map(|_| r.sample()).collect();
+        assert_eq!(r.snapshot().current_id.as_deref(), Some("b"));
+        for (i, v) in out.iter().enumerate().skip(2010) {
+            let want = if i % 2 == 0 { 0.2 } else { 0.8 };
+            assert!((v - want).abs() < 1e-6, "sample {i}: {v}, not {want}");
+        }
+    }
+    #[test]
+    fn a_song_ending_while_the_next_is_prepared_waits_instead_of_stopping() {
+        let mut r = render();
+        r.next = None; // the queue just changed, so the next song is being prepared again
+        let first: Vec<f32> = (0..960).map(|_| r.sample()).collect();
+        assert_eq!(first, vec![0.25; 960]);
+        assert_eq!(r.sample(), 0.);
+        assert!(r.state.playing && r.waiting, "still on, silent");
+        r.next = Some(deck("b", 1, 0.5, 480));
+        // It starts on the next left sample.
+        let resumed: Vec<f32> = (0..3).map(|_| r.sample()).collect();
+        assert_eq!(resumed, [0., 0.5, 0.5]);
+        assert!(!r.waiting);
+        assert_eq!(r.snapshot().current_id.as_deref(), Some("b"));
+        // At the real end of the queue playback stops as before.
+        let _: Vec<f32> = (0..960).map(|_| r.sample()).collect();
+        assert!(!r.state.playing && !r.waiting);
+    }
+    #[test]
+    fn a_song_opened_for_another_rate_never_plays_at_the_wrong_speed() {
+        let mut r = render();
+        r.current.as_mut().unwrap().rate = 96000;
+        r.current.as_mut().unwrap().native = 96000;
+        assert!(r.wrong_rate(), "shared output runs at 48 kHz");
+        assert_eq!(r.sample(), 0.);
+        r.unload();
+        assert!(r.current.is_none() && !r.state.playing);
+        assert_eq!(
+            r.snapshot().current_id.as_deref(),
+            Some("a"),
+            "keeps its place"
+        );
     }
     #[test]
     fn sample_exact_gapless_boundary() {
