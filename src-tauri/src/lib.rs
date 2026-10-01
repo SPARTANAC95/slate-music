@@ -25,6 +25,17 @@ struct AppState {
     library: Arc<library::Library>,
     engine: Arc<audio::Engine>,
 }
+/// Runs `work` with the database on a background thread, so the window never waits for the
+/// disk, decryption or the network.
+async fn blocking<T: Send + 'static>(
+    db: &Arc<Database>,
+    work: impl FnOnce(&Database) -> T + Send + 'static,
+) -> Result<T> {
+    let db = db.clone();
+    tauri::async_runtime::spawn_blocking(move || work(&db))
+        .await
+        .map_err(err)
+}
 #[tauri::command]
 async fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<()> {
     state.engine.save();
@@ -169,17 +180,21 @@ async fn add_folder(
     Ok(None)
 }
 #[tauri::command]
-fn remove_folder(
+async fn remove_folder(
     folder: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<()> {
-    let mut folders = state.db.folders();
-    folders.retain(|f| f != &folder);
-    state.db.set("folders", &json!(folders))?;
-    for t in state.db.tracks()?.iter().filter(|t| t.folder == folder) {
-        state.db.missing(&t.id, true)?;
-    }
+    blocking(&state.db, move |db| -> Result<()> {
+        let mut folders = db.folders();
+        folders.retain(|f| f != &folder);
+        db.set("folders", &json!(folders))?;
+        for t in db.tracks()?.iter().filter(|t| t.folder == folder) {
+            db.missing(&t.id, true)?;
+        }
+        Ok(())
+    })
+    .await??;
     library::watch(state.db.clone(), state.library.clone(), app.clone());
     let _ = app.emit("library-changed", ());
     Ok(())
@@ -192,8 +207,8 @@ async fn spotify_connect(client_id: String, state: tauri::State<'_, AppState>) -
         .map_err(err)?
 }
 #[tauri::command]
-fn spotify_disconnect(state: tauri::State<'_, AppState>) -> Result<()> {
-    spotify::disconnect(&state.db)
+async fn spotify_disconnect(state: tauri::State<'_, AppState>) -> Result<()> {
+    blocking(&state.db, spotify::disconnect).await?
 }
 #[tauri::command]
 async fn spotify_playlists(state: tauri::State<'_, AppState>) -> Result<Value> {
@@ -224,13 +239,15 @@ async fn spotify_revision(source: String, state: tauri::State<'_, AppState>) -> 
         .map_err(err)?
 }
 #[tauri::command]
-fn collection(id: String, state: tauri::State<'_, AppState>) -> Result<Value> {
-    Ok(state
-        .db
-        .collections()?
-        .into_iter()
-        .find(|c| c["id"].as_str() == Some(id.as_str()))
-        .unwrap_or(Value::Null))
+async fn collection(id: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    blocking(&state.db, move |db| {
+        Ok(db
+            .collections()?
+            .into_iter()
+            .find(|c| c["id"].as_str() == Some(id.as_str()))
+            .unwrap_or(Value::Null))
+    })
+    .await?
 }
 #[tauri::command]
 async fn spotify_playlist(url: String, state: tauri::State<'_, AppState>) -> Result<Value> {
@@ -258,7 +275,8 @@ fn open_link(url: String) -> Result<()> {
     {
         return Err("This link is not supported".into());
     }
-    open::that(url).map_err(err)
+    // Open exactly the address that was checked.
+    open::that(u.as_str()).map_err(err)
 }
 /// Listening history between two times (Unix ms), as [track ID, time played] pairs.
 #[tauri::command]
@@ -278,16 +296,16 @@ async fn artist_info(name: String, state: tauri::State<'_, AppState>) -> Result<
 }
 /// Artist photos that are already saved, for the Artists page.
 #[tauri::command]
-fn artist_photos(
+async fn artist_photos(
     names: Vec<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Map<String, Value>> {
-    artists::photos(&state.db, &names)
+    blocking(&state.db, move |db| artists::photos(db, &names)).await?
 }
 /// Last.fm scrobbling: status, the user's API account, and signing in or out.
 #[tauri::command]
-fn lastfm_status(state: tauri::State<AppState>) -> Value {
-    scrobble::status(&state.db)
+async fn lastfm_status(state: tauri::State<'_, AppState>) -> Result<Value> {
+    blocking(&state.db, scrobble::status).await
 }
 #[tauri::command]
 async fn lastfm_setup(
@@ -308,21 +326,21 @@ async fn lastfm_connect(state: tauri::State<'_, AppState>) -> Result<()> {
         .map_err(err)?
 }
 #[tauri::command]
-fn lastfm_disconnect(state: tauri::State<AppState>) -> Result<()> {
-    scrobble::disconnect(&state.db)
+async fn lastfm_disconnect(state: tauri::State<'_, AppState>) -> Result<()> {
+    blocking(&state.db, scrobble::disconnect).await?
 }
 #[tauri::command]
-fn lastfm_forget(state: tauri::State<AppState>) -> Result<()> {
-    scrobble::forget(&state.db)
+async fn lastfm_forget(state: tauri::State<'_, AppState>) -> Result<()> {
+    blocking(&state.db, scrobble::forget).await?
 }
 /// Discord's "Listening to" status: whether it is connected, and the user's application ID.
 #[tauri::command]
-fn discord_status(state: tauri::State<AppState>) -> Value {
-    discord::status(&state.db)
+async fn discord_status(state: tauri::State<'_, AppState>) -> Result<Value> {
+    blocking(&state.db, discord::status).await
 }
 #[tauri::command]
-fn discord_setup(id: String, state: tauri::State<AppState>) -> Result<Value> {
-    discord::setup(&state.db, &id)
+async fn discord_setup(id: String, state: tauri::State<'_, AppState>) -> Result<Value> {
+    blocking(&state.db, move |db| discord::setup(db, &id)).await?
 }
 /// Output devices Windows offers, for Settings.
 #[tauri::command]
@@ -444,18 +462,33 @@ pub fn run() {
             let app = context.app_handle();
             let state = app.state::<AppState>();
             let dir = state.db.directory.join("artwork");
-            let data = if id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-                large
-                    .then(|| std::fs::read(dir.join(format!("{id}-xl.jpg"))).ok())
-                    .flatten()
-                    .or_else(|| std::fs::read(dir.join(format!("{id}.jpg"))).ok())
+            let valid = id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit());
+            let exact = valid
+                .then(|| {
+                    let name = if large {
+                        format!("{id}-xl.jpg")
+                    } else {
+                        format!("{id}.jpg")
+                    };
+                    std::fs::read(dir.join(name)).ok()
+                })
+                .flatten();
+            // A large cover not made yet falls back to the 640 px one.
+            let fallback = (valid && large && exact.is_none())
+                .then(|| std::fs::read(dir.join(format!("{id}.jpg"))).ok())
+                .flatten();
+            // Only the exact file is cached for good: a stand-in or a miss is asked for again,
+            // so a large cover (or artwork) made later appears.
+            let cache = if exact.is_some() {
+                "max-age=31536000, immutable"
             } else {
-                None
+                "no-cache"
             };
+            let data = exact.or(fallback);
             tauri::http::Response::builder()
                 .status(if data.is_some() { 200 } else { 404 })
                 .header("Content-Type", "image/jpeg")
-                .header("Cache-Control", "max-age=31536000, immutable")
+                .header("Cache-Control", cache)
                 .header("Access-Control-Allow-Origin", "*")
                 .body(data.unwrap_or_default())
                 .unwrap()
