@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Disc3, ListMusic, Music2, Search, Sparkles, Users, CornerDownLeft } from 'lucide-react';
 import type { Album, Collection, Track } from './types';
-import { Art } from './components';
+import { Art, scrollInside } from './components';
 import { index, search } from './search';
 
 export interface PaletteCommand {
@@ -74,7 +74,9 @@ export default function CommandPalette({
   const flat = groups.flatMap((g) => g.items);
   useEffect(() => setSelected(0), [query]);
   useEffect(() => {
-    list.current?.querySelector<HTMLElement>(`[data-index="${selected}"]`)?.scrollIntoView({ block: 'nearest' });
+    const box = list.current;
+    const item = box?.querySelector<HTMLElement>(`[data-index="${selected}"]`);
+    if (box && item) scrollInside(box, item, 'nearest');
   }, [selected]);
   function run(r: Result | undefined) {
     if (!r) return;

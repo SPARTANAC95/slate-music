@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, Heart, ListMusic, MicVocal, Waves } from 'lucide-react';
 import type { Playback, Track } from './types';
-import { Art, IconButton } from './components';
+import { Art, IconButton, scrollInside } from './components';
 import { quality, time } from './library';
 import { currentLine, parseLrc } from './lrc';
 
@@ -76,13 +76,21 @@ export default function NowPlaying({
       live = false;
     };
   }, [track?.id, lookupLyrics]);
-  // Keep the sung line centred, unless the listener scrolled in the last few seconds.
+  // Keep the sung line centred, unless the listener scrolled in the last few seconds. Only the
+  // lyrics move: near the end of a song the line can't be centred, and scrolling anything
+  // around it would shift the whole view.
   useEffect(() => {
-    if (active < 0 || Date.now() - userScrolled.current < 4000) return;
-    list.current
-      ?.querySelector<HTMLElement>(`[data-line="${active}"]`)
-      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [active]);
+    const box = list.current;
+    if (!box || Date.now() - userScrolled.current < 4000) return;
+    const line = active >= 0 ? box.querySelector<HTMLElement>(`[data-line="${active}"]`) : null;
+    if (line) scrollInside(box, line, 'center', true);
+    else box.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [active, lines]);
+  // A new song starts at the top of its lyrics.
+  useEffect(() => {
+    userScrolled.current = 0;
+    list.current?.scrollTo({ top: 0 });
+  }, [track?.id]);
   const q = track ? quality(track) : null;
   const upNext = pb.queue.slice(pb.cursor + 1, pb.cursor + 31);
   const hasLyrics = !!(lyrics?.synced || lyrics?.plain);

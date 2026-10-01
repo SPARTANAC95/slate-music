@@ -318,6 +318,19 @@ try {
     await page.getByRole('button', { name: 'Close Now Playing (Esc)' }).click();
     await page.locator('.now-playing').waitFor({ state: 'detached' });
   });
+  await test('Now Playing stays in place when lyrics reach the end of a song', async () => {
+    const song = initial.tracks.find((t) => !t.missing);
+    await invoke('playback', { action: 'queue', value: { ids: [song.id], index: 0 } });
+    await page.keyboard.press('Control+l');
+    await page.locator('.now-playing').waitFor();
+    await page.waitForTimeout(700);
+    await invoke('playback', { action: 'seek', value: Math.max(0, song.duration - 4) });
+    await page.waitForTimeout(2500);
+    const scrolled = await page.locator('.now-playing').evaluate((el) => el.scrollTop);
+    assert.equal(scrolled, 0, 'the view never slides out of place');
+    await page.keyboard.press('Escape');
+    await invoke('playback', { action: 'pause' });
+  });
   await test('Command bar finds and plays a song, and runs actions', async () => {
     const song = initial.tracks.find((t) => !t.missing);
     await page.keyboard.press('Control+k');

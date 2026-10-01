@@ -28,6 +28,19 @@ import { time } from './library';
 import type { ListSort, SortMode } from './listTools';
 import { dragged, endDrag } from './dnd';
 
+/** Scrolls only `box` so `el` is centred in it (or just in view, for 'nearest'). Unlike
+ * scrollIntoView, the views around it never move. */
+export function scrollInside(box: HTMLElement, el: HTMLElement, align: 'center' | 'nearest', smooth = false) {
+  const b = box.getBoundingClientRect();
+  const e = el.getBoundingClientRect();
+  const offset = e.top - b.top;
+  let top = box.scrollTop;
+  if (align === 'center') top += offset - (box.clientHeight - e.height) / 2;
+  else if (offset < 0) top += offset;
+  else if (offset + e.height > box.clientHeight) top += offset + e.height - box.clientHeight;
+  else return;
+  box.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
+}
 /** Where each song list was scrolled to, so returning to it keeps your place. */
 const scrollMemory = new Map<string, number>();
 /** Modes whose natural order is largest or newest first. */

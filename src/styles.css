@@ -2552,7 +2552,8 @@ input[type='range']:disabled {
   z-index: 15;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  overflow: hidden;
+  /* clip, not hidden: a clipped view can't be scrolled, so it never slides out of place. */
+  overflow: clip;
   background: #09090b;
   color: #f1eef6;
   animation: np-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
