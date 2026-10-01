@@ -35,16 +35,18 @@ impl EqSettings {
     }
 }
 
+/// Coefficients and memory are kept in f64: in f32 the low bands lose their shape at the high
+/// sample rates exclusive mode uses (192–384 kHz).
 #[derive(Clone)]
 struct Biquad {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
     /// Filter memory per channel (transposed direct form II).
-    z1: [f32; 2],
-    z2: [f32; 2],
+    z1: [f64; 2],
+    z2: [f64; 2],
 }
 impl Biquad {
     fn peaking(freq: f64, gain_db: f64, rate: f64) -> Self {
@@ -53,16 +55,16 @@ impl Biquad {
         let alpha = w0.sin() / (2. * std::f64::consts::SQRT_2);
         let a0 = 1. + alpha / a;
         Self {
-            b0: ((1. + alpha * a) / a0) as f32,
-            b1: ((-2. * w0.cos()) / a0) as f32,
-            b2: ((1. - alpha * a) / a0) as f32,
-            a1: ((-2. * w0.cos()) / a0) as f32,
-            a2: ((1. - alpha / a) / a0) as f32,
+            b0: (1. + alpha * a) / a0,
+            b1: (-2. * w0.cos()) / a0,
+            b2: (1. - alpha * a) / a0,
+            a1: (-2. * w0.cos()) / a0,
+            a2: (1. - alpha / a) / a0,
             z1: [0.; 2],
             z2: [0.; 2],
         }
     }
-    fn process(&mut self, x: f32, ch: usize) -> f32 {
+    fn process(&mut self, x: f64, ch: usize) -> f64 {
         let y = self.b0 * x + self.z1[ch];
         self.z1[ch] = self.b1 * x - self.a1 * y + self.z2[ch];
         self.z2[ch] = self.b2 * x - self.a2 * y;
@@ -110,9 +112,20 @@ impl Equalizer {
         if self.filters.is_empty() {
             return x * self.preamp;
         }
-        self.filters
+        let y = self
+            .filters
             .iter_mut()
-            .fold(x * self.preamp, |s, f| f.process(s, ch & 1))
+            .fold(x as f64 * self.preamp as f64, |s, f| f.process(s, ch & 1));
+        if !y.is_finite() {
+            // A broken sample would otherwise stay in the filter memory and silence (or blast)
+            // everything after it: start the filters afresh.
+            for f in &mut self.filters {
+                f.z1 = [0.; 2];
+                f.z2 = [0.; 2];
+            }
+            return 0.;
+        }
+        y as f32
     }
 }
 
@@ -121,16 +134,45 @@ mod tests {
     use super::*;
     /// Peak level of a sine at `freq` after the equalizer, once it has settled.
     fn response(eq: &mut Equalizer, freq: f64) -> f32 {
+        response_at(eq, freq, 48000.)
+    }
+    fn response_at(eq: &mut Equalizer, freq: f64, rate: f64) -> f32 {
         let mut peak = 0f32;
-        for i in 0..96000 {
-            let x = (2. * std::f64::consts::PI * freq * i as f64 / 48000.).sin() as f32 * 0.25;
+        let n = (2. * rate) as usize;
+        for i in 0..n {
+            let x = (2. * std::f64::consts::PI * freq * i as f64 / rate).sin() as f32 * 0.25;
             let y = eq.process(x, 0);
             eq.process(x, 1);
-            if i > 48000 {
+            if i > n / 2 {
                 peak = peak.max(y.abs());
             }
         }
         peak / 0.25
+    }
+    #[test]
+    fn low_bands_keep_their_shape_at_high_sample_rates() {
+        let mut bands = [0.; 10];
+        bands[0] = 6.; // +6 dB at 31 Hz
+        for rate in [192000., 384000.] {
+            let mut eq = Equalizer::new(&settings(bands, 0.), rate);
+            let at_31 = response_at(&mut eq, 31., rate);
+            assert!(
+                (at_31 - 2.).abs() < 0.05,
+                "about +6 dB at {rate} Hz: {at_31}"
+            );
+        }
+    }
+    #[test]
+    fn a_broken_sample_does_not_break_the_rest() {
+        let mut bands = [0.; 10];
+        bands[5] = 6.;
+        let mut eq = Equalizer::new(&settings(bands, 0.), 48000.);
+        assert_eq!(eq.process(f32::NAN, 0), 0.);
+        assert_eq!(eq.process(f32::INFINITY, 1), 0.);
+        assert!(
+            (response(&mut eq, 1000.) - 2.).abs() < 0.1,
+            "plays normally afterwards"
+        );
     }
     fn settings(bands: [f32; 10], preamp: f32) -> EqSettings {
         EqSettings {
