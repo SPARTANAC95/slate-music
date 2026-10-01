@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Hearts set in the mini-player now appear in the main window right away, and the other way round.
+- Spotify sign-in no longer fails when the browser opens an extra connection to Slate Music without sending anything; it keeps waiting for the real answer.
+- Moving the seek slider with ↑/↓ or Page Up/Down plays from the new position instead of freezing the time display. ←/→ no longer show an error when nothing is loaded.
+- "Shuffle your library" starts with a random song instead of always the library's first.
+- Back no longer needs two presses after reopening the page already shown, such as after saving the open playlist.
+- Deleting a virtual album returns to Albums instead of Playlists.
+- The website's download buttons point to 1.0.3.
+- The native tests build and run outside Windows too (checked on Linux).
+
 ## 1.0.3 — 2026-09-30
 
 - Import Spotify playlists instead of albums. Pick from your own playlists or paste a playlist link, then update an imported playlist from Spotify later without losing songs you already matched. Uses Spotify's 2026 playlist API; earlier connections need one Reconnect for playlist access.

@@ -567,15 +567,17 @@ mod tests {
         let art = |dir: &str| {
             tracks
                 .iter()
-                .find(|t| t.path.contains(dir))
+                .find(|t| {
+                    Path::new(&t.path)
+                        .parent()
+                        .is_some_and(|p| p.ends_with(dir))
+                })
                 .unwrap()
                 .artwork
                 .clone()
         };
-        assert!(
-            art("\\A\\").is_some() || art("/A/").is_some(),
-            "front.png is used instead"
-        );
+        assert!(art("A").is_some(), "front.png is used instead");
+        assert!(art("B").is_none(), "an unreadable cover is not used");
         assert_eq!(
             scan(&db, |_| {}).changed,
             0,

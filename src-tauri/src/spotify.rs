@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     io::{Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     time::{Duration, Instant},
 };
 
@@ -184,33 +184,11 @@ pub fn connect(db: &Database, client_id: &str) -> Result<()> {
     let mut code = None;
     while start.elapsed() < Duration::from_secs(180) {
         if let Ok((mut stream, _)) = listener.accept() {
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .map_err(err)?;
-            let mut buffer = [0u8; 8192];
-            let n = stream.read(&mut buffer).map_err(err)?;
-            let request = String::from_utf8_lossy(&buffer[..n]);
-            let path = request
-                .lines()
-                .next()
-                .unwrap_or("")
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or("/");
-            let u = url::Url::parse(&format!("http://127.0.0.1:43829{path}")).map_err(err)?;
-            let pairs: std::collections::HashMap<_, _> = u.query_pairs().into_owned().collect();
-            if u.path() != "/callback" || pairs.get("state") != Some(&state) {
-                let _ = stream.write_all(
-                    b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid sign-in state.",
-                );
-                continue;
+            if let Some(result) = callback(&mut stream, &state) {
+                code = Some(result?);
+                break;
             }
-            let _=stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><body style='background:#0a0a0b;color:#ededf0;font:20px system-ui;padding:80px'><h1>Return to Slate Music.</h1><p>You can close this window.</p></body></html>");
-            if pairs.contains_key("error") {
-                return Err("Spotify sign-in was cancelled".into());
-            }
-            code = pairs.get("code").cloned();
-            break;
+            continue;
         }
         std::thread::sleep(Duration::from_millis(120));
     }
@@ -231,6 +209,42 @@ pub fn connect(db: &Database, client_id: &str) -> Result<()> {
     store(db, value, None)?;
     db.set("spotify_client_id", &json!(client_id))?;
     Ok(())
+}
+/// Reads one browser request to the sign-in address. `None` means keep waiting: a spare
+/// connection that never sent a request (browsers open these), a request for another path such
+/// as /favicon.ico, or a stale sign-in. Otherwise the authorization code, or why sign-in ended.
+fn callback(stream: &mut TcpStream, state: &str) -> Option<Result<String>> {
+    // On Windows an accepted socket inherits the listener's non-blocking mode, so a request
+    // still on its way would read as an error. Wait for it briefly instead.
+    stream.set_nonblocking(false).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+    let mut buffer = [0u8; 8192];
+    let n = stream.read(&mut buffer).ok().filter(|n| *n > 0)?;
+    let request = String::from_utf8_lossy(&buffer[..n]);
+    let path = request
+        .lines()
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/");
+    let u = url::Url::parse(&format!("http://127.0.0.1:43829{path}")).ok()?;
+    let pairs: std::collections::HashMap<_, _> = u.query_pairs().into_owned().collect();
+    if u.path() != "/callback" || pairs.get("state").map(String::as_str) != Some(state) {
+        let _ = stream.write_all(
+            b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid sign-in state.",
+        );
+        return None;
+    }
+    let _=stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><body style='background:#0a0a0b;color:#ededf0;font:20px system-ui;padding:80px'><h1>Return to Slate Music.</h1><p>You can close this window.</p></body></html>");
+    Some(if pairs.contains_key("error") {
+        Err("Spotify sign-in was cancelled".into())
+    } else {
+        pairs
+            .get("code")
+            .cloned()
+            .ok_or_else(|| "Spotify did not return a sign-in code. Try connecting again.".into())
+    })
 }
 fn token(db: &Database) -> Result<String> {
     let bytes = std::fs::read(db.directory.join("spotify.dpapi")).map_err(|_| {
@@ -682,6 +696,55 @@ mod tests {
             .iter()
             .all(|t| t.starts_with("/v1/me/playlists?x=1&limit=50&offset=")));
         assert!(seen[3].ends_with("offset=100"));
+    }
+    #[test]
+    fn sign_in_waits_past_spare_connections_and_other_requests() {
+        // Set up like `connect`: a non-blocking listener polled for connections.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        // Connects, optionally waits, sends `request` ("" sends nothing) and returns the reply.
+        let browser = |request: &'static str, delay: u64| {
+            let mut s = TcpStream::connect(address).unwrap();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(delay));
+                if !request.is_empty() {
+                    s.write_all(request.as_bytes()).unwrap();
+                }
+                let _ = s.shutdown(std::net::Shutdown::Write);
+                let mut reply = String::new();
+                let _ = s.read_to_string(&mut reply);
+                reply
+            })
+        };
+        let answer = |request: &'static str, delay: u64| {
+            let client = browser(request, delay);
+            let mut stream = loop {
+                if let Ok((s, _)) = listener.accept() {
+                    break s;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let result = callback(&mut stream, "s1");
+            drop(stream);
+            (result, client.join().unwrap())
+        };
+        // A spare connection stays silent past the read timeout; sign-in keeps waiting.
+        let (spare, _) = answer("", 3500);
+        assert!(spare.is_none(), "a connection without a request is skipped");
+        let (icon, reply) = answer("GET /favicon.ico HTTP/1.1\r\n\r\n", 0);
+        assert!(icon.is_none() && reply.starts_with("HTTP/1.1 400"));
+        let (stale, _) = answer("GET /callback?state=old&code=x HTTP/1.1\r\n\r\n", 0);
+        assert!(stale.is_none());
+        let (cancelled, _) = answer(
+            "GET /callback?state=s1&error=access_denied HTTP/1.1\r\n\r\n",
+            0,
+        );
+        assert!(cancelled.unwrap().unwrap_err().contains("cancelled"));
+        // The request arrives a moment after the connection was accepted.
+        let (code, reply) = answer("GET /callback?state=s1&code=abc HTTP/1.1\r\n\r\n", 300);
+        assert_eq!(code.unwrap().unwrap(), "abc");
+        assert!(reply.starts_with("HTTP/1.1 200"));
     }
     #[test]
     fn liked_songs_revision_changes_with_count_and_newest_like() {
