@@ -265,7 +265,7 @@ export default function SharingSettings({
               : !settings.discordPresence
                 ? 'Off. Friends see nothing from Slate Music.'
                 : discord.connected
-                  ? 'On. Discord shows the song while music plays.'
+                  ? discord.problem || 'On. Discord shows the song while music plays.'
                   : discord.problem || 'Looking for Discord…'
           }
           checked={!!settings.discordPresence && !!discord?.clientId}
