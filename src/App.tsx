@@ -70,6 +70,7 @@ import {
   playable,
   playableIndices,
   plural,
+  quality,
   queueEntries,
   time,
 } from './library';
@@ -104,6 +105,7 @@ import {
   type Selection as Picks,
   type SortMode,
 } from './listTools';
+import { queueMoveResult, sameQueueItems } from './listView';
 import { dropZone, endDrag, startDrag, type DragSongs } from './dnd';
 import { forgottenFavorites, jumpBackIn, onThisDay, recentlyAdded, type Play as PlayRow } from './insights';
 import { index as searchIndex, search } from './search';
@@ -579,8 +581,7 @@ export default function App() {
     }
     if (filter === 'available') result = result.filter((t) => !t.missing);
     if (filter === 'missing') result = result.filter((t) => t.missing);
-    if (filter === 'lossless')
-      result = result.filter((t) => ['FLAC', 'WAV', 'AIF', 'AIFF'].includes(t.format));
+    if (filter === 'lossless') result = result.filter((t) => quality(t).lossless);
     if (filter === 'duplicates') result = result.filter((t) => duplicateIds.has(t.id));
     // Each playlist row's entry in the playlist, so sorted rows still edit the right entry.
     const entries =
@@ -632,14 +633,24 @@ export default function App() {
           : shownTracks.map((t) => t.id),
     [page, visibleQueue, shown.entries, shownTracks],
   );
-  useEffect(() => setPicked(noSelection), [listId]);
+  const ownQueueMove = useRef<ReturnType<typeof queueMoveResult> | null>(null);
+  const entryOrder = useMemo(
+    () => page === 'Collection' && collection && collection.kind !== 'smart'
+      ? JSON.stringify(collection.entries.map((e) => [e.trackId, e.status]))
+      : null,
+    [page, collection],
+  );
+  useEffect(() => {
+    setPicked(noSelection);
+    ownQueueMove.current = null;
+  }, [listId, entryOrder]);
   // Queue positions shift when the queue changes (play next, shuffle, removals), so picks
   // there are cleared, except right after our own drag, which re-picks the moved songs.
-  const ownQueueMove = useRef(false);
   useEffect(() => {
+    const moved = ownQueueMove.current;
+    ownQueueMove.current = null;
     if (page !== 'Queue') return;
-    if (ownQueueMove.current) ownQueueMove.current = false;
-    else setPicked(noSelection);
+    setPicked(moved && pb && sameQueueItems(moved.queue, pb.queue) ? moved.selection : noSelection);
   }, [pb?.queue]); // eslint-disable-line react-hooks/exhaustive-deps
   const pickedIdx = useMemo(() => pickedRows(picked, rowKeys), [picked, rowKeys]);
   const pickedTracks = pickedIdx.map((i) => shownTracks[i]);
@@ -1001,22 +1012,20 @@ export default function App() {
   function reorderRows(rows: number[], to: number) {
     if (page === 'Queue') {
       // The moved songs stay picked at their new places.
-      const order = moveRows(
-        rowKeys.map((_, i) => i),
-        rows,
-        to,
-      );
+      const before = pb?.queue ?? [];
       const positions = rows.map((r) => visibleQueue[r].index);
       const target = to < visibleQueue.length ? visibleQueue[to].index : (pb?.queue.length ?? 0);
-      ownQueueMove.current = true;
-      command('move_many', { rows: positions, to: target }).then(
-        (done) =>
-          done &&
-          setPicked({
-            keys: new Set(order.flatMap((old, at) => (rows.includes(old) ? [String(at)] : []))),
-            anchor: null,
-          }),
-      );
+      const moved = queueMoveResult(before, positions, target);
+      ownQueueMove.current = moved;
+      command('move_many', { rows: positions, to: target }).then((done) => {
+        if (ownQueueMove.current !== moved) return;
+        // Failed and unchanged moves do not trigger the queue-change effect. Consume
+        // their pending state now so the next unrelated edit cannot keep stale picks.
+        if (!done || sameQueueItems(before, done.queue)) {
+          ownQueueMove.current = null;
+          if (done) setPicked(moved.selection);
+        }
+      });
       return;
     }
     const c = editablePlaylist;

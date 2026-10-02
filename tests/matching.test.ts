@@ -130,6 +130,27 @@ describe('Spotify local matching', () => {
       [null, 'missing'],
     ]);
   });
+  it('keeps separate review decisions for repeated occurrences of the same song', () => {
+    const entry: Entry = {
+      spotifyId: 'repeated', title: 'Song', artist: 'Artist', duration: 200,
+      trackId: null, status: 'uncertain',
+    };
+    const previous: Entry[] = [
+      { ...entry, trackId: 'first-file', status: 'available' },
+      { ...entry, status: 'missing', rejected: true },
+      entry,
+      { ...entry, trackId: 'fourth-file', status: 'available' },
+    ];
+    const fresh = { ...entry, trackId: 'auto-match', status: 'available' as const };
+    const result = keepConfirmed(previous, Array.from({ length: 5 }, () => ({ ...fresh })));
+    expect(result.map((e) => [e.trackId, e.status, !!e.rejected])).toEqual([
+      ['first-file', 'available', false],
+      [null, 'missing', true],
+      ['auto-match', 'available', false],
+      ['fourth-file', 'available', false],
+      ['auto-match', 'available', false],
+    ]);
+  });
 });
 describe('library ordering and queues', () => {
   it('shows unavailable saved matches as missing without discarding their confirmed identity', () => {

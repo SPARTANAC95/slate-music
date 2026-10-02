@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -483,12 +483,17 @@ impl Database {
     /// unavailable. This pairs each such leftover with its identical new copy (same size, tags
     /// and length), carries over its favorite, plays, history and playlist entries, and removes
     /// the leftover. Songs in folders or drives that are not currently available are left
-    /// alone, and ambiguous duplicates are skipped. Returns (old ID, new ID) pairs.
-    pub fn relink_moved(&self) -> Result<Vec<(String, String)>> {
+    /// alone, and ambiguous duplicates are skipped. Only IDs first indexed by this scan
+    /// can be destinations; a surviving, already indexed copy is not evidence of a move.
+    /// Returns (old ID, new ID) pairs.
+    pub fn relink_moved(&self, new_ids: &HashSet<String>) -> Result<Vec<(String, String)>> {
         let tracks = self.tracks()?;
         let key = |t: &Track| (t.size, t.title.clone(), t.artist.clone(), t.album.clone());
         let mut present: HashMap<_, Vec<&Track>> = HashMap::new();
-        for t in tracks.iter().filter(|t| !t.missing) {
+        for t in tracks
+            .iter()
+            .filter(|t| !t.missing && new_ids.contains(&t.id))
+        {
             present.entry(key(t)).or_default().push(t);
         }
         let file_name = |p: &str| Path::new(p).file_name().map(|n| n.to_ascii_lowercase());
@@ -514,6 +519,13 @@ impl Database {
                 _ => {}
             }
         }
+        // A destination must identify exactly one source as well. Otherwise two deleted
+        // copies would be folded into one song and their independent saved state lost.
+        let mut destinations = HashMap::new();
+        for (_, new) in &pairs {
+            *destinations.entry(new.id.as_str()).or_insert(0) += 1;
+        }
+        pairs.retain(|(_, new)| destinations[new.id.as_str()] == 1);
         if pairs.is_empty() {
             return Ok(Vec::new());
         }

@@ -20,17 +20,24 @@ pub fn enabled(db: &Database) -> bool {
 
 /// Whether text contains LRC time stamps such as "[01:23.45]".
 pub fn is_synced(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim_start();
-        line.strip_prefix('[').is_some_and(|rest| {
-            let mut parts = rest.splitn(2, ':');
-            let minutes = parts.next().unwrap_or_default();
-            !minutes.is_empty()
-                && minutes.chars().all(|c| c.is_ascii_digit())
-                && parts
-                    .next()
-                    .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_digit()))
-        })
+    // Keep the accepted timestamp grammar in step with src/lrc.ts. Partial timestamps
+    // must remain plain text, otherwise the renderer has no lines it can display.
+    let digits = |s: &str, max: usize| {
+        !s.is_empty() && s.len() <= max && s.bytes().all(|c| c.is_ascii_digit())
+    };
+    text.split('[').skip(1).any(|part| {
+        let Some((stamp, _)) = part.split_once(']') else {
+            return false;
+        };
+        let Some((minutes, seconds)) = stamp.split_once(':') else {
+            return false;
+        };
+        let (seconds, fraction) = seconds
+            .split_once(['.', ':'])
+            .map_or((seconds, None), |(s, f)| (s, Some(f)));
+        digits(minutes, 3)
+            && digits(seconds, 2)
+            && fraction.is_none_or(|fraction| digits(fraction, 3))
     })
 }
 
@@ -73,15 +80,23 @@ fn cache_key(track: &Track) -> String {
 /// Picks LRCLIB's best result: the exact match first, otherwise the closest length within
 /// three seconds, preferring synced lyrics.
 pub fn best_result(results: &[Value], duration: f64) -> Option<Value> {
+    let has_text = |r: &Value, field: &str| {
+        r[field]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty())
+    };
     results
         .iter()
+        .filter(|r| {
+            r["instrumental"] == true || has_text(r, "syncedLyrics") || has_text(r, "plainLyrics")
+        })
         .filter(|r| {
             r["duration"]
                 .as_f64()
                 .is_none_or(|d| (d - duration).abs() <= 3.)
         })
         .min_by_key(|r| {
-            let synced = r["syncedLyrics"].as_str().is_some_and(|s| !s.is_empty());
+            let synced = has_text(r, "syncedLyrics");
             let delta = r["duration"].as_f64().map_or(3., |d| (d - duration).abs());
             (!synced, (delta * 10.) as i64)
         })
@@ -173,6 +188,37 @@ mod tests {
         assert!(is_synced("  [1:02]Late start"));
         assert!(!is_synced("Just words\n[Chorus]\nMore words"));
         assert!(!is_synced(""));
+    }
+    #[test]
+    fn only_treats_complete_supported_timestamps_as_synced() {
+        for text in [
+            "[1:2 people] sing",
+            "[00:12.30 without a closing bracket",
+            "[1234:05]Words",
+        ] {
+            assert!(!is_synced(text), "not a supported timestamp: {text}");
+            assert_eq!(answer(text.into(), "file")["plain"], text);
+        }
+        // The renderer also understands a timestamp after a BOM or another tag.
+        assert!(is_synced("\u{feff}[00:01.00]Hello"));
+        assert!(is_synced("[ar:Someone][01:02:300]Hello"));
+    }
+    #[test]
+    fn search_does_not_let_empty_results_hide_available_lyrics() {
+        let results = vec![
+            json!({"duration": 200.0, "plainLyrics": "", "syncedLyrics": "   "}),
+            json!({"duration": 201.0, "plainLyrics": "Words", "syncedLyrics": null}),
+        ];
+        assert_eq!(
+            best_result(&results, 200.0).unwrap()["plainLyrics"],
+            "Words"
+        );
+        assert!(best_result(&results[..1], 200.0).is_none());
+        assert_eq!(
+            best_result(&[json!({"duration": 200.0, "instrumental": true})], 200.0).unwrap()
+                ["instrumental"],
+            true
+        );
     }
     #[test]
     fn prefers_synced_results_with_the_closest_length() {

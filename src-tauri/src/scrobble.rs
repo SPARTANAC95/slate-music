@@ -25,7 +25,7 @@ const INVALID_SESSION: i64 = 9;
 /// the same request can simply be tried again.
 const TEMPORARY: [i64; 4] = [8, 11, 16, 29];
 /// A scrobble ignored because the daily scrobble limit was reached; it is sent another day.
-const DAILY_LIMIT: &str = "5";
+const DAILY_LIMIT: i64 = 5;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct Secrets {
@@ -136,13 +136,15 @@ fn call(
         client.get(&url).query(&params)
     };
     let response = request.send().map_err(|_| Failure::Network)?;
+    let successful = response.status().is_success();
     let value: Value = response.json().map_err(|_| Failure::Network)?;
     match value["error"].as_i64() {
         Some(code) => Err(Failure::Api(
             code,
             value["message"].as_str().unwrap_or_default().to_owned(),
         )),
-        None => Ok(value),
+        None if successful => Ok(value),
+        None => Err(Failure::Network),
     }
 }
 
@@ -163,18 +165,36 @@ fn looks_like_key(s: &str) -> bool {
 }
 /// Saves the user's API key and shared secret after checking them with Last.fm.
 pub fn setup(db: &Database, key: &str, secret: &str) -> Result<Value> {
+    setup_with_validation(db, key, secret, |key, secret| {
+        match call(key, secret, "auth.getToken", vec![], false) {
+            Err(f @ Failure::Api(..)) => Err(f.message()),
+            // Offline: keep them, they are checked again when you connect.
+            Err(Failure::Network) | Ok(_) => Ok(()),
+        }
+    })
+}
+fn setup_with_validation(
+    db: &Database,
+    key: &str,
+    secret: &str,
+    validate: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<Value> {
     let (key, secret) = (key.trim(), secret.trim());
     if !looks_like_key(key) || !looks_like_key(secret) {
         return Err("The API key and shared secret are each 32 letters and numbers, as shown on your Last.fm API account page.".into());
     }
-    match call(key, secret, "auth.getToken", vec![], false) {
-        Err(f @ Failure::Api(..)) => return Err(f.message()),
-        // Offline: keep them, they are checked again when you connect.
-        Err(Failure::Network) | Ok(_) => {}
-    }
+    let generation = {
+        let _file = FILE_LOCK.lock().unwrap();
+        let generation = SIGN_IN.fetch_add(1, Ordering::SeqCst) + 1;
+        *WAITING.lock().unwrap() = false;
+        generation
+    };
+    let checked = validate(key, secret);
     let _file = FILE_LOCK.lock().unwrap();
-    SIGN_IN.fetch_add(1, Ordering::SeqCst);
-    *WAITING.lock().unwrap() = false;
+    if SIGN_IN.load(Ordering::SeqCst) != generation {
+        return Ok(status(db));
+    }
+    checked?;
     db.set("lastfm_api_key", &json!(key))?;
     save(
         db,
@@ -190,24 +210,33 @@ pub fn setup(db: &Database, key: &str, secret: &str) -> Result<Value> {
 /// Opens Last.fm in the browser to allow Slate Music, then waits (up to five minutes) for the
 /// user to approve it there. A newer sign-in, Sign out or Remove stops the wait.
 pub fn connect(db: Arc<Database>) -> Result<()> {
-    let (Some(key), Some(secrets)) = (api_key(&db), load(&db)) else {
-        return Err("Add your Last.fm API key and shared secret first.".into());
+    let Some(SignIn {
+        generation,
+        key,
+        secrets,
+        token,
+    }) = prepare_sign_in(
+        &db,
+        |key, secret| {
+            call(key, secret, "auth.getToken", vec![], false).map_err(|f| f.message())?["token"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "Last.fm didn't send a sign-in token".into())
+        },
+        |key, token| {
+            if api().is_none() {
+                open::that(format!(
+                    "https://www.last.fm/api/auth/?api_key={key}&token={token}"
+                ))
+                .map_err(err)?;
+            }
+            Ok(())
+        },
+    )?
+    else {
+        return Ok(());
     };
-    let token = call(&key, &secrets.secret, "auth.getToken", vec![], false)
-        .map_err(|f| f.message())?["token"]
-        .as_str()
-        .ok_or("Last.fm didn't send a sign-in token")?
-        .to_owned();
-    if api().is_none() {
-        open::that(format!(
-            "https://www.last.fm/api/auth/?api_key={key}&token={token}"
-        ))
-        .map_err(err)?;
-    }
-    let generation = SIGN_IN.fetch_add(1, Ordering::SeqCst) + 1;
     let current = move || SIGN_IN.load(Ordering::SeqCst) == generation;
-    *WAITING.lock().unwrap() = true;
-    problem(None);
     std::thread::spawn(move || {
         let started = Instant::now();
         let mut ended = false;
@@ -237,12 +266,16 @@ pub fn connect(db: Arc<Database>) -> Result<()> {
                 Err(Failure::Api(NOT_AUTHORIZED, _)) => continue,
                 Err(f) if f.temporary() => continue,
                 Err(f) => {
-                    problem(Some(f.message()));
+                    let _file = FILE_LOCK.lock().unwrap();
+                    if current() {
+                        problem(Some(f.message()));
+                    }
                     ended = true;
                     break;
                 }
             }
         }
+        let _file = FILE_LOCK.lock().unwrap();
         if current() {
             if !ended {
                 problem(Some(
@@ -254,6 +287,51 @@ pub fn connect(db: Arc<Database>) -> Result<()> {
         }
     });
     Ok(())
+}
+struct SignIn {
+    generation: u64,
+    key: String,
+    secrets: Secrets,
+    token: String,
+}
+/// Registers an attempt before its first network call. Cancellation during token retrieval
+/// must win too, before a browser opens or the session poller is started.
+fn prepare_sign_in(
+    db: &Database,
+    request_token: impl FnOnce(&str, &str) -> Result<String>,
+    open_browser: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<Option<SignIn>> {
+    let (generation, key, secrets) = {
+        let _file = FILE_LOCK.lock().unwrap();
+        let (Some(key), Some(secrets)) = (api_key(db), load(db)) else {
+            return Err("Add your Last.fm API key and shared secret first.".into());
+        };
+        let generation = SIGN_IN.fetch_add(1, Ordering::SeqCst) + 1;
+        *WAITING.lock().unwrap() = true;
+        problem(None);
+        (generation, key, secrets)
+    };
+    let token = request_token(&key, &secrets.secret);
+    let _file = FILE_LOCK.lock().unwrap();
+    if SIGN_IN.load(Ordering::SeqCst) != generation {
+        return Ok(None);
+    }
+    let token = match token.and_then(|token| {
+        open_browser(&key, &token)?;
+        Ok(token)
+    }) {
+        Ok(token) => token,
+        Err(e) => {
+            *WAITING.lock().unwrap() = false;
+            return Err(e);
+        }
+    };
+    Ok(Some(SignIn {
+        generation,
+        key,
+        secrets,
+        token,
+    }))
 }
 /// Signs out of Last.fm but keeps the API key, so connecting again is one click.
 pub fn disconnect(db: &Database) -> Result<()> {
@@ -326,18 +404,27 @@ fn signed_out(db: &Database, session: &str) {
 }
 /// Which scrobbles of a batch Last.fm ignored for its daily limit (they stay queued). Last.fm
 /// answers with one entry per scrobble, as a list, or a single object for one scrobble.
-fn over_daily_limit(answer: &Value, count: usize) -> Vec<bool> {
+fn over_daily_limit(answer: &Value, count: usize) -> Result<Vec<bool>> {
+    let invalid = || {
+        "Last.fm didn't acknowledge the whole batch. Waiting scrobbles are kept for another attempt.".to_string()
+    };
     let entries: Vec<&Value> = match &answer["scrobbles"]["scrobble"] {
         Value::Array(list) => list.iter().collect(),
         Value::Object(_) => vec![&answer["scrobbles"]["scrobble"]],
         _ => vec![],
     };
-    (0..count)
-        .map(|i| {
-            entries.get(i).is_some_and(|e| {
-                let code = &e["ignoredMessage"]["code"];
-                code.as_str() == Some(DAILY_LIMIT) || code.as_i64() == Some(5)
-            })
+    if entries.len() != count {
+        return Err(invalid());
+    }
+    entries
+        .iter()
+        .map(|e| {
+            let code = &e["ignoredMessage"]["code"];
+            match code.as_i64().or_else(|| code.as_str()?.parse().ok()) {
+                Some(0..=4) => Ok(false),
+                Some(DAILY_LIMIT) => Ok(true),
+                _ => Err(invalid()),
+            }
         })
         .collect()
 }
@@ -366,7 +453,13 @@ fn flush(db: &Database) {
         }
         match call(&key, &secrets.secret, "track.scrobble", params, true) {
             Ok(answer) => {
-                let limited = over_daily_limit(&answer, batch.len());
+                let limited = match over_daily_limit(&answer, batch.len()) {
+                    Ok(limited) => limited,
+                    Err(e) => {
+                        problem(Some(e));
+                        break;
+                    }
+                };
                 let sent: Vec<i64> = batch
                     .iter()
                     .zip(&limited)
@@ -578,6 +671,115 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn token_retrieval_obeys_cancellation_and_newer_sign_ins() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        let configure = || {
+            db.set("lastfm_api_key", &json!("a".repeat(32))).unwrap();
+            save(
+                &db,
+                &Secrets {
+                    secret: "b".repeat(32),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        };
+        for remove in [false, true] {
+            configure();
+            let mut opened = false;
+            let attempt = prepare_sign_in(
+                &db,
+                |_, _| {
+                    assert_eq!(status(&db)["waiting"], true);
+                    if remove {
+                        forget(&db).unwrap();
+                    } else {
+                        disconnect(&db).unwrap();
+                    }
+                    Ok("cancelled-token".into())
+                },
+                |_, _| {
+                    opened = true;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(
+                attempt.is_none(),
+                "a cancelled attempt must not start polling"
+            );
+            assert!(!opened, "cancellation must happen before opening a browser");
+            assert_eq!(status(&db)["waiting"], false);
+            assert_eq!(status(&db)["connected"], false);
+            assert_eq!(status(&db)["configured"], !remove);
+        }
+        configure();
+        let mut newer = None;
+        let older = prepare_sign_in(
+            &db,
+            |_, _| {
+                newer = prepare_sign_in(&db, |_, _| Ok("new-token".into()), |_, _| Ok(()))?;
+                Ok("old-token".into())
+            },
+            |_, _| panic!("the superseded attempt must not open a browser"),
+        )
+        .unwrap();
+        assert!(older.is_none());
+        let newer = newer.unwrap();
+        assert_eq!(newer.token, "new-token");
+        assert_eq!(SIGN_IN.load(Ordering::SeqCst), newer.generation);
+        assert_eq!(status(&db)["waiting"], true);
+        disconnect(&db).unwrap();
+
+        // Failures during either initial step must also clear the pending state.
+        assert!(prepare_sign_in(
+            &db,
+            |_, _| Err("offline".into()),
+            |_, _| panic!("no token was received"),
+        )
+        .is_err());
+        assert_eq!(status(&db)["waiting"], false);
+        assert!(prepare_sign_in(
+            &db,
+            |_, _| Ok("token".into()),
+            |_, _| Err("browser unavailable".into()),
+        )
+        .is_err());
+        assert_eq!(status(&db)["waiting"], false);
+
+        // Key validation is another network wait: Remove or Sign out during it wins too.
+        for remove in [false, true] {
+            configure();
+            setup_with_validation(&db, &"c".repeat(32), &"d".repeat(32), |_, _| {
+                if remove {
+                    forget(&db)?;
+                } else {
+                    disconnect(&db)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(status(&db)["configured"], !remove);
+            assert_eq!(api_key(&db), (!remove).then(|| "a".repeat(32)));
+            assert_eq!(
+                load(&db).map(|s| s.secret),
+                (!remove).then(|| "b".repeat(32))
+            );
+        }
+        configure();
+        // Even a late validation error from an older setup cannot replace newer settings.
+        setup_with_validation(&db, &"c".repeat(32), &"d".repeat(32), |_, _| {
+            setup_with_validation(&db, &"e".repeat(32), &"f".repeat(32), |_, _| Ok(()))?;
+            Err("old validation failed".into())
+        })
+        .unwrap();
+        assert_eq!(api_key(&db), Some("e".repeat(32)));
+        assert_eq!(load(&db).unwrap().secret, "f".repeat(32));
+        forget(&db).unwrap();
+    }
     fn song(id: &str, duration: f64) -> Track {
         Track {
             id: id.into(),
@@ -707,18 +909,33 @@ mod tests {
             {"ignoredMessage": {"code": "0"}},
             {"ignoredMessage": {"code": "5"}},
         ]}});
-        assert_eq!(over_daily_limit(&list, 2), [false, true]);
+        assert_eq!(over_daily_limit(&list, 2).unwrap(), [false, true]);
         let one = json!({"scrobbles": {"scrobble": {"ignoredMessage": {"code": "5"}}}});
-        assert_eq!(over_daily_limit(&one, 1), [true]);
-        assert_eq!(
-            over_daily_limit(&json!({}), 2),
-            [false, false],
-            "unknown shape: sent"
-        );
+        assert_eq!(over_daily_limit(&one, 1).unwrap(), [true]);
         assert!(Failure::Api(29, String::new()).temporary());
         assert!(Failure::Network.temporary());
         assert!(!Failure::Api(10, String::new()).temporary());
         assert!(!Failure::Network.message().contains("retry"));
+    }
+    #[test]
+    fn incomplete_or_malformed_acknowledgements_never_clear_a_batch() {
+        for answer in [
+            json!({}),
+            json!({"scrobbles": {"scrobble": []}}),
+            json!({"scrobbles": {"scrobble": {"ignoredMessage": {"code": "0"}}}}),
+            json!({"scrobbles": {"scrobble": [
+                {"ignoredMessage": {"code": "0"}}, {}
+            ]}}),
+            json!({"scrobbles": {"scrobble": [
+                {"ignoredMessage": {"code": "0"}}, {"ignoredMessage": {"code": "unknown"}}
+            ]}}),
+        ] {
+            assert!(over_daily_limit(&answer, 2).is_err(), "{answer}");
+        }
+        let complete = json!({"scrobbles": {"scrobble": [
+            {"ignoredMessage": {"code": 0}}, {"ignoredMessage": {"code": 5}}
+        ]}});
+        assert_eq!(over_daily_limit(&complete, 2).unwrap(), [false, true]);
     }
     #[test]
     fn waiting_scrobbles_are_kept_in_order() {

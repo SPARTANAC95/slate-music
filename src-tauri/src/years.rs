@@ -21,9 +21,7 @@ pub fn musicbrainz_turn() {
     let mut last = LAST_REQUEST.lock().unwrap();
     if let Some(at) = *last {
         let gap = Duration::from_millis(1100);
-        if at.elapsed() < gap {
-            std::thread::sleep(gap - at.elapsed());
-        }
+        std::thread::sleep(gap.saturating_sub(at.elapsed()));
     }
     *last = Some(Instant::now());
 }

@@ -315,22 +315,17 @@ fn run(
     stop: &AtomicBool,
 ) -> Result<(), String> {
     while !stop.load(Ordering::SeqCst) {
-        let (rate, bits, playing, loaded) = {
+        let (rate, playing, loaded) = {
             let r = render.lock().unwrap();
-            (
-                r.current_rate(),
-                r.current_bits(),
-                r.state.playing,
-                r.current.is_some(),
-            )
+            (r.current_rate(), r.state.playing, r.current.is_some())
         };
-        let layout = support.layout_for(rate, bits);
+        let layout = support.stream_layout(rate);
         {
             // With nothing loaded the rate may be one the device doesn't take; show the format
             // a song at that rate would get instead of failing.
             let shown = layout.map(|l| (rate, l)).or_else(|| {
                 let near = support.rate_for(rate);
-                support.layout_for(near, bits).map(|l| (near, l))
+                support.stream_layout(near).map(|l| (near, l))
             });
             let mut r = render.lock().unwrap();
             if let Some((sample_rate, l)) = shown {

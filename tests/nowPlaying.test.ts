@@ -24,6 +24,14 @@ describe('synced lyrics', () => {
     expect(currentLine(lines, 100)).toBe(2);
     expect(currentLine([], 5)).toBe(-1);
   });
+  it('applies a file-wide offset even when its tag follows the lyrics', () => {
+    const words = '[00:01]First\n[00:03]Second';
+    expect(parseLrc(`${words}\n[offset:+1500]`)).toEqual([
+      { time: 0, text: 'First' },
+      { time: 1.5, text: 'Second' },
+    ]);
+    expect(parseLrc(`[offset:-500]\n${words}`)).toEqual(parseLrc(`${words}\n[offset:-500]`));
+  });
 });
 
 describe('cover colours', () => {

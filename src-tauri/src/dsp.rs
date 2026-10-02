@@ -109,23 +109,25 @@ impl Equalizer {
     }
     /// One sample of channel `ch` (0 = left, 1 = right).
     pub fn process(&mut self, x: f32, ch: usize) -> f32 {
-        if self.filters.is_empty() {
-            return x * self.preamp;
-        }
-        let y = self
-            .filters
-            .iter_mut()
-            .fold(x as f64 * self.preamp as f64, |s, f| f.process(s, ch & 1));
+        let ch = ch & 1;
+        let y = if self.filters.is_empty() {
+            x * self.preamp
+        } else {
+            self.filters
+                .iter_mut()
+                .fold(x as f64 * self.preamp as f64, |s, f| f.process(s, ch)) as f32
+        };
+        // Check the delivered f32 sample too: a finite f64 can overflow on conversion.
         if !y.is_finite() {
             // A broken sample would otherwise stay in the filter memory and silence (or blast)
-            // everything after it: start the filters afresh.
+            // everything after it: restart this channel without disturbing the other one.
             for f in &mut self.filters {
-                f.z1 = [0.; 2];
-                f.z2 = [0.; 2];
+                f.z1[ch] = 0.;
+                f.z2[ch] = 0.;
             }
             return 0.;
         }
-        y as f32
+        y
     }
 }
 
@@ -173,6 +175,49 @@ mod tests {
             (response(&mut eq, 1000.) - 2.).abs() < 0.1,
             "plays normally afterwards"
         );
+    }
+    #[test]
+    fn broken_samples_are_silent_without_active_filters() {
+        for config in [
+            EqSettings::default(),
+            settings([0.; 10], 0.),
+            settings([0.; 10], -6.),
+        ] {
+            let mut eq = Equalizer::new(&config, 48000.);
+            for x in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                assert_eq!(eq.process(x, 0), 0.);
+                assert_eq!(eq.process(x, 1), 0.);
+                // Finite bypass samples retain their exact f32 arithmetic.
+                assert_eq!(eq.process(0.3, 0), 0.3 * eq.preamp);
+            }
+        }
+    }
+    #[test]
+    fn output_overflow_resets_the_affected_filters() {
+        let mut bands = [0.; 10];
+        bands[5] = 12.;
+        let config = settings(bands, 0.);
+        for x in [f32::MAX, -f32::MAX] {
+            let mut eq = Equalizer::new(&config, 48000.);
+            assert_eq!(eq.process(x, 0), 0., "overflow is silenced");
+            let mut fresh = Equalizer::new(&config, 48000.);
+            for sample in [0.25, -0.25, 0.] {
+                assert_eq!(eq.process(sample, 0), fresh.process(sample, 0));
+            }
+        }
+    }
+    #[test]
+    fn a_broken_sample_does_not_reset_the_other_channel() {
+        let mut bands = [0.; 10];
+        bands[5] = 6.;
+        let mut eq = Equalizer::new(&settings(bands, 0.), 48000.);
+        eq.process(0.25, 0);
+        eq.process(-0.5, 1);
+        let mut reference = eq.clone();
+        assert_eq!(eq.process(f32::NAN, 0), 0.);
+        for sample in [0.25, -0.25, 0.] {
+            assert_eq!(eq.process(sample, 1), reference.process(sample, 1));
+        }
     }
     fn settings(bands: [f32; 10], preamp: f32) -> EqSettings {
         EqSettings {

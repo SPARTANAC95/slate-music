@@ -14,17 +14,19 @@ interface Lyrics {
 }
 /** Playback position between the engine's updates (every ~240 ms), for smooth lyrics. */
 function usePosition(pb: Playback) {
-  const received = useRef({ position: pb.position, at: performance.now() });
+  // Rebase during this render so paused seeks update immediately. Playback state is part
+  // of the anchor: otherwise resuming adds the entire paused interval to the lyric time.
+  const received = useMemo(
+    () => ({ position: pb.position, at: performance.now() }),
+    [pb.position, pb.currentId, pb.playing],
+  );
   const [, redraw] = useState(0);
-  useEffect(() => {
-    received.current = { position: pb.position, at: performance.now() };
-  }, [pb.position, pb.currentId]);
   useEffect(() => {
     if (!pb.playing) return;
     const timer = setInterval(() => redraw((n) => n + 1), 100);
     return () => clearInterval(timer);
   }, [pb.playing]);
-  const { position, at } = received.current;
+  const { position, at } = received;
   return pb.playing ? position + (performance.now() - at) / 1000 : position;
 }
 
@@ -72,7 +74,11 @@ export default function NowPlaying({
     return () => before?.focus?.();
   }, []);
   useEffect(() => {
-    if (!track) return setLyrics(null);
+    if (!track) {
+      setLyrics(null);
+      setLoading(false);
+      return;
+    }
     let live = true;
     setLyrics(null);
     setLoading(true);

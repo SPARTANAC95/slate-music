@@ -13,6 +13,7 @@
     "dev:app": "tauri dev",
     "build:app": "node tools/build.mjs",
     "test": "vitest run",
+    "test:browser": "node tools/check-now-playing.mjs && node tools/frontend-selection-check.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:ui": "node tools/qa.mjs",
     "site:screenshots": "node tools/screenshots.mjs"

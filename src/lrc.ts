@@ -24,10 +24,12 @@ export function parseLrc(text: string): LyricLine[] {
       .trim();
     for (const [, minutes, seconds] of stamps)
       lines.push({
-        time: Math.max(0, Number(minutes) * 60 + Number(seconds.replace(':', '.')) - offset),
+        time: Number(minutes) * 60 + Number(seconds.replace(':', '.')),
         text: words,
       });
   }
+  // Offset is file metadata, even when an editor writes the tag after the timed lines.
+  for (const line of lines) line.time = Math.max(0, line.time - offset);
   return lines.sort((a, b) => a.time - b.time);
 }
 /** Index of the line being sung at `position` seconds, or -1 before the first line. */

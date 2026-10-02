@@ -88,6 +88,12 @@ impl Support {
         });
         options.first().copied()
     }
+    /// A stream stays open across songs at the same rate, including songs with a higher bit
+    /// depth. Use the widest supported layout so a later song never loses precision. Lower
+    /// bit depths are carried exactly by zero-padding, without reopening the device.
+    pub fn stream_layout(&self, rate: u32) -> Option<Layout> {
+        self.layout_for(rate, 32)
+    }
 }
 
 /// Writes one sample as a little-endian whole number in `out` (container/8 bytes), with the
@@ -156,6 +162,15 @@ mod tests {
         let small = support(&[(44100, L16)]);
         assert_eq!(small.layout_for(44100, 24), Some(L16), "the best there is");
         assert_eq!(small.layout_for(96000, 16), None);
+    }
+    #[test]
+    fn stream_layout_keeps_room_for_later_higher_bit_depth_songs() {
+        let dac = support(&[(44100, L16), (44100, L2432), (48000, L16)]);
+        assert_eq!(dac.stream_layout(44100), Some(L2432));
+        assert_eq!(dac.stream_layout(48000), Some(L16));
+        assert_eq!(dac.stream_layout(96000), None);
+        let full = support(&[(44100, L16), (44100, L2432), (44100, L32)]);
+        assert_eq!(full.stream_layout(44100), Some(L32));
     }
     #[test]
     fn whole_numbers_come_back_exactly() {

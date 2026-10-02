@@ -148,22 +148,29 @@ export const entryKey = (e: Entry) =>
   e.spotifyId || `~${normalize(e.title)}|${normalize(e.artist)}|${Math.round(e.duration)}`;
 /** After re-reading a playlist from Spotify, keep the user's decisions: songs they matched
  * stay matched (unless that file has left the library, so it can be matched again), and
- * songs they chose to leave missing stay missing. */
+ * songs they chose to leave missing stay missing. Repeated songs keep each occurrence's
+ * decision in occurrence order; a newly added copy gets its own fresh match. */
 export function keepConfirmed(previous: Entry[], next: Entry[], tracks?: Map<string, Track>): Entry[] {
-  const confirmed = new Map<string, string>();
-  const rejected = new Set<string>();
+  const occurrences = new Map<string, Entry[]>();
   for (const e of previous) {
-    if (e.rejected) rejected.add(entryKey(e));
-    else if (e.trackId && e.status === 'available') {
-      const t = tracks?.get(e.trackId);
-      if (!tracks || (t && !t.missing)) confirmed.set(entryKey(e), e.trackId);
-    }
+    const key = entryKey(e);
+    const list = occurrences.get(key);
+    if (list) list.push(e);
+    else occurrences.set(key, [e]);
   }
+  const positions = new Map<string, number>();
   return next.map((e) => {
     const key = entryKey(e);
-    const trackId = confirmed.get(key);
-    if (trackId) return { ...e, trackId, status: 'available' };
-    if (rejected.has(key)) return { ...e, trackId: null, status: 'missing', rejected: true };
+    const position = positions.get(key) ?? 0;
+    positions.set(key, position + 1);
+    const prior = occurrences.get(key)?.[position];
+    if (prior?.rejected) return { ...e, trackId: null, status: 'missing', rejected: true };
+    if (prior?.trackId && prior.status === 'available') {
+      const t = tracks?.get(prior.trackId);
+      if (!tracks || (t && !t.missing)) {
+        return { ...e, trackId: prior.trackId, status: 'available', rejected: undefined };
+      }
+    }
     return e;
   });
 }

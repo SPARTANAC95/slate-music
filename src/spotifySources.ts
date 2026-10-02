@@ -75,8 +75,14 @@ export function mergeUpdate(
 ) {
   const byId = new Map(tracks.map((t) => [t.id, t]));
   const entries = keepConfirmed(current.entries, matched, byId);
+  // Compare what will actually be saved, including metadata and review candidates. Raw
+  // scores and extra candidates are deliberately compacted so they do not cause repeat saves.
   const signature = (list: Entry[]) =>
-    JSON.stringify(list.map((e) => [e.spotifyId, e.title, e.trackId, e.status]));
+    JSON.stringify(compact({ ...current, entries: list }).entries.map((e) => [
+      e.spotifyId ?? null, e.title, e.artist, e.duration, e.trackId, e.status, !!e.rejected,
+      e.candidates?.map((c) => [c.id, c.score, c.reason]) ?? [],
+    ]));
+  const nextRevision = revision ?? current.revision ?? null;
   const before = new Set(
     current.entries.filter((e) => e.trackId && e.status === 'available').map((e) => e.trackId),
   );
@@ -86,8 +92,8 @@ export function mergeUpdate(
       )
     : [];
   return {
-    collection: { ...current, entries, revision: revision ?? current.revision ?? null },
-    changed: signature(entries) !== signature(current.entries) || revision !== current.revision,
+    collection: { ...current, entries, revision: nextRevision },
+    changed: signature(entries) !== signature(current.entries) || nextRevision !== (current.revision ?? null),
     hearts,
   };
 }

@@ -333,6 +333,7 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
         .iter()
         .map(|track| (track.id.as_str(), track))
         .collect();
+    let mut new_ids = HashSet::new();
     // Whether a folder has a usable cover, looked up once per folder per scan.
     let mut cover_here: HashMap<PathBuf, bool> = HashMap::new();
     for folder in db.folders() {
@@ -394,6 +395,9 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
                         if let Err(e) = db.upsert(&t, mtime) {
                             status.errors.push(e)
                         } else {
+                            if !known_by_id.contains_key(id.as_str()) {
+                                new_ids.insert(id.clone());
+                            }
                             status.changed += 1
                         }
                     }
@@ -421,7 +425,7 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
             }
         }
     }
-    match db.relink_moved() {
+    match db.relink_moved(&new_ids) {
         Ok(moved) => status.relinked = moved,
         Err(e) => status
             .errors
@@ -563,6 +567,65 @@ mod tests {
         let entry = &db.collections().unwrap()[0]["entries"][0];
         assert_eq!(entry["trackId"], t.id.as_str());
         assert_eq!(entry["candidates"][0]["id"], t.id.as_str());
+    }
+    #[test]
+    fn deleting_a_duplicate_does_not_relink_it_to_an_existing_copy() {
+        let d = tempfile::tempdir().unwrap();
+        let music = d.path().join("music");
+        let before = music.join("a").join("Album").join("song.wav");
+        let surviving = music.join("b").join("Album").join("song.wav");
+        wav(&before, 4800);
+        wav(&surviving, 4800);
+        let db = library(d.path(), &[&music]);
+        scan(&db, |_| {});
+        let old = id_for(&before);
+        let kept = id_for(&surviving);
+        db.favorite(&old, true).unwrap();
+        db.played(&old).unwrap();
+        db.save_collection(serde_json::json!({"id":"p","name":"Mix","entries":[{"trackId":old}]}))
+            .unwrap();
+
+        std::fs::remove_file(&before).unwrap();
+        let status = scan(&db, |_| {});
+
+        assert!(status.relinked.is_empty());
+        assert_eq!(db.tracks().unwrap().len(), 2);
+        assert!(db.track(&old).unwrap().missing);
+        assert!(db.track(&old).unwrap().favorite);
+        assert_eq!(db.track(&old).unwrap().play_count, 1);
+        assert!(!db.track(&kept).unwrap().favorite);
+        assert_eq!(db.track(&kept).unwrap().play_count, 0);
+        assert_eq!(db.collections().unwrap()[0]["entries"][0]["trackId"], old);
+    }
+    #[test]
+    fn two_missing_copies_do_not_merge_into_one_new_destination() {
+        let d = tempfile::tempdir().unwrap();
+        let music = d.path().join("music");
+        let first = music.join("a").join("Album").join("song.wav");
+        let second = music.join("b").join("Album").join("song.wav");
+        let after = music.join("c").join("Album").join("song.wav");
+        wav(&first, 4800);
+        wav(&second, 4800);
+        let db = library(d.path(), &[&music]);
+        scan(&db, |_| {});
+        let old = [id_for(&first), id_for(&second)];
+        db.favorite(&old[0], true).unwrap();
+        db.played(&old[1]).unwrap();
+        std::fs::create_dir_all(after.parent().unwrap()).unwrap();
+        std::fs::rename(&first, &after).unwrap();
+        std::fs::remove_file(&second).unwrap();
+
+        let status = scan(&db, |_| {});
+
+        assert!(
+            status.relinked.is_empty(),
+            "the move is ambiguous in reverse"
+        );
+        assert_eq!(db.tracks().unwrap().len(), 3);
+        assert!(old.iter().all(|id| db.track(id).unwrap().missing));
+        let new = db.track(&id_for(&after)).unwrap();
+        assert!(!new.favorite);
+        assert_eq!(new.play_count, 0);
     }
     #[test]
     fn unavailable_folders_and_ambiguous_copies_are_left_alone() {

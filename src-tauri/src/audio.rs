@@ -35,8 +35,6 @@ pub struct Deck {
     pub rate: u32,
     /// The file's own sample rate.
     pub native: u32,
-    /// Bits per sample in the file (0 for lossy formats).
-    pub bits: u16,
 }
 impl Deck {
     /// Opens a song, mixed at the rate `rate_for` picks for the file's own rate.
@@ -62,7 +60,6 @@ impl Deck {
             continues_album: false,
             rate,
             native,
-            bits: track.bit_depth as u16,
         })
     }
     /// Jumps forward, keeping the position count in whole stereo frames.
@@ -163,6 +160,9 @@ pub struct RenderState {
     pub transition: u64,
     pub stopping: bool,
     pub next_attempt: Option<(u64, usize)>,
+    /// A failed repeat of the current song, scoped to the queue/settings epoch. At EOF it
+    /// must stop rather than wait forever for an attempt that has already finished.
+    pub next_failed: Option<(u64, usize)>,
     /// Old → new ID of the playing song after its file moved, so it is not counted again.
     pub renamed: HashMap<String, String>,
     pub eq: crate::dsp::Equalizer,
@@ -190,9 +190,6 @@ impl RenderState {
     }
     pub fn current_rate(&self) -> u32 {
         self.current.as_ref().map_or(self.rate, |d| d.rate)
-    }
-    pub fn current_bits(&self) -> u16 {
-        self.current.as_ref().map_or(16, |d| d.bits)
     }
     /// The output now runs at `rate`.
     pub fn use_rate(&mut self, rate: u32) {
@@ -321,6 +318,22 @@ impl RenderState {
             None
         }
     }
+    fn preload_failed(&mut self, index: usize, epoch: u64, error: String) {
+        if self.epoch != epoch {
+            return;
+        }
+        self.state.error = Some(error);
+        let cursor = self.current.as_ref().map_or(self.state.cursor, |d| d.index);
+        if index != cursor && index < self.state.queue.len() {
+            self.remove_queued(index);
+        } else {
+            self.next_failed = Some((epoch, index));
+            if self.waiting {
+                self.waiting = false;
+                self.state.playing = false;
+            }
+        }
+    }
     /// The next output sample. Output alternates left and right, starting on the left.
     pub fn sample(&mut self) -> f32 {
         self.pulled += 1;
@@ -407,12 +420,16 @@ impl RenderState {
             }
             return self.render_sample();
         }
-        if self.next_index().is_some() {
+        if self
+            .next_index()
+            .is_some_and(|index| self.next_failed != Some((self.epoch, index)))
+        {
             // The next song is still being prepared (the queue or a setting changed in the
             // song's last moments): stay on, silent, instead of stopping.
             self.waiting = true;
             return 0.;
         }
+        self.waiting = false;
         self.state.sleep_end_of_track = false;
         self.state.playing = false;
         self.state.position = self.current.as_ref().map(|d| d.duration).unwrap_or(0.);
@@ -586,6 +603,7 @@ impl Engine {
                 transition: 0,
                 stopping: false,
                 next_attempt: None,
+                next_failed: None,
                 renamed: HashMap::new(),
                 eq,
                 channel: 0,
@@ -649,7 +667,6 @@ impl Engine {
                     continues_album: false,
                     rate: RATE,
                     native: RATE,
-                    bits: 0,
                 };
                 self.shape(&mut probe, &t, &levelling, &queue);
                 let mut r = self.render.lock().unwrap();
@@ -860,6 +877,7 @@ impl Engine {
                 .current
                 .as_ref()
                 .is_none_or(|d| d.id != id || d.index != index);
+            r.rate_pending = r.exclusive.is_some() && deck.rate != r.rate;
             r.current = Some(deck);
             r.next = None;
             r.waiting = false;
@@ -927,6 +945,7 @@ impl Engine {
                         r.state.duration = deck.duration;
                         r.state.playing = true;
                         r.state.error = None;
+                        r.rate_pending = r.exclusive.is_some() && deck.rate != r.rate;
                         r.current = Some(deck);
                         r.next = None;
                         r.waiting = false;
@@ -1013,7 +1032,16 @@ impl Engine {
                         .filter(|v| v.is_finite())
                         .unwrap_or(0.)
                         .clamp(0., 12.);
-                    self.render.lock().unwrap().state.crossfade = fade;
+                    let mut r = self.render.lock().unwrap();
+                    let was_fading = r.effective_crossfade() > 0.;
+                    r.state.crossfade = fade;
+                    if was_fading != (r.effective_crossfade() > 0.) {
+                        // A smart fade may already have skipped the next song's introduction.
+                        // Prepare it again using the new setting, including when fading is off.
+                        r.next = None;
+                        r.epoch += 1;
+                        r.next_attempt = None;
+                    }
                 }
                 "shuffle" => {
                     let mut r = self.render.lock().unwrap();
@@ -1095,6 +1123,7 @@ impl Engine {
                 }
                 "sleep" => {
                     let mut r = self.render.lock().unwrap();
+                    let was_end_of_track = r.state.sleep_end_of_track;
                     r.state.sleep_at = None;
                     r.state.sleep_end_of_track = false;
                     if value["endOfTrack"].as_bool() == Some(true) {
@@ -1104,6 +1133,13 @@ impl Engine {
                         .filter(|m| m.is_finite() && *m > 0. && *m <= 720.)
                     {
                         r.state.sleep_at = Some(crate::db::now() + (minutes * 60000.) as i64);
+                    }
+                    if r.state.sleep_end_of_track != was_end_of_track {
+                        // End-of-song sleep must leave the following song at its real start,
+                        // even if it was already prepared (or partially mixed) for a crossfade.
+                        r.next = None;
+                        r.epoch += 1;
+                        r.next_attempt = None;
                     }
                 }
                 "dismiss_error" => {}
@@ -1491,16 +1527,7 @@ impl Engine {
                         }
                         Err(e) => {
                             let mut r = engine.render.lock().unwrap();
-                            if r.epoch == epoch {
-                                r.state.error = Some(e);
-                                if index != r.snapshot().cursor && index < r.state.queue.len() {
-                                    r.remove_queued(index);
-                                } else if r.waiting {
-                                    // Nothing else can follow: stop as at the end of the queue.
-                                    r.waiting = false;
-                                    r.state.playing = false;
-                                }
-                            }
+                            r.preload_failed(index, epoch, e);
                         }
                     }
                 }
@@ -1576,7 +1603,6 @@ mod tests {
             continues_album: false,
             rate: RATE,
             native: RATE,
-            bits: 16,
         }
     }
     fn render() -> RenderState {
@@ -1593,6 +1619,7 @@ mod tests {
             transition: 0,
             stopping: false,
             next_attempt: None,
+            next_failed: None,
             renamed: HashMap::new(),
             eq: crate::dsp::Equalizer::default(),
             channel: 0,
@@ -1671,7 +1698,7 @@ mod tests {
                 formats: vec![(rate, layout)],
             });
             let deck = Deck::load(&track, 0, |native| r.deck_rate(native)).unwrap();
-            assert_eq!((deck.rate, deck.bits), (rate, bits));
+            assert_eq!(deck.rate, rate);
             r.current = Some(deck);
             r.next = None;
             r.use_rate(rate);
@@ -1686,6 +1713,66 @@ mod tests {
                 assert_eq!(got, *want, "{bits}-bit sample {i}");
             }
         }
+    }
+    #[test]
+    fn exclusive_gapless_transition_preserves_a_higher_bit_depth() {
+        use crate::exclusive::{to_pcm, Layout, Support};
+        let dir = tempfile::tempdir().unwrap();
+        let support = Support {
+            device: "DAC".into(),
+            fallback: false,
+            formats: vec![
+                (
+                    RATE,
+                    Layout {
+                        container: 16,
+                        valid: 16,
+                    },
+                ),
+                (
+                    RATE,
+                    Layout {
+                        container: 32,
+                        valid: 24,
+                    },
+                ),
+            ],
+        };
+        let mut r = render();
+        r.exclusive = Some(support.clone());
+        let mut expected = Vec::new();
+        for (index, bits) in [16, 24].into_iter().enumerate() {
+            let path = dir.path().join(format!("{bits}.wav"));
+            expected.extend(
+                noise_wav(&path, RATE, bits, 32)
+                    .into_iter()
+                    .map(|value| value << (24 - bits)),
+            );
+            let track = Track {
+                id: r.state.queue[index].clone(),
+                path: path.to_string_lossy().into(),
+                bit_depth: bits as u8,
+                ..Default::default()
+            };
+            let deck = Deck::load(&track, index, |rate| rate).unwrap();
+            if index == 0 {
+                r.current = Some(deck);
+            } else {
+                r.next = Some(deck);
+            }
+        }
+        // WASAPI chooses this once and keeps it for both songs at the same rate.
+        let layout = support.stream_layout(RATE).unwrap();
+        let mut out = [0u8; 4];
+        for (index, expected) in expected.into_iter().enumerate() {
+            to_pcm(r.sample(), layout, &mut out);
+            assert_eq!(i32::from_le_bytes(out) >> 8, expected, "sample {index}");
+        }
+        assert_eq!(r.state.current_id.as_deref(), Some("b"));
+        assert!(
+            !r.rate_pending,
+            "no stream restart between equal-rate songs"
+        );
     }
     #[test]
     fn a_song_at_another_rate_waits_for_the_device_in_exclusive_mode() {
@@ -1817,6 +1904,31 @@ mod tests {
         assert!(!r.state.playing && !r.waiting);
     }
     #[test]
+    fn failed_repeat_preload_stops_at_eof_instead_of_waiting_forever() {
+        for mode in ["one", "all"] {
+            let mut r = render();
+            r.state.queue = vec!["a".into()];
+            r.state.repeat = mode.into();
+            r.next = None;
+            r.next_attempt = Some((r.epoch, 0));
+            r.preload_failed(0, r.epoch, "File unavailable".into());
+            assert!(r.state.playing, "the loaded song can finish");
+            let samples: Vec<_> = (0..960).map(|_| r.sample()).collect();
+            assert_eq!(samples, vec![0.25; 960]);
+            assert_eq!(r.sample(), 0.);
+            assert!(!r.state.playing && !r.waiting, "failed {mode} repeat ended");
+            assert_eq!(r.state.error.as_deref(), Some("File unavailable"));
+
+            // A subsequent user action can start a fresh attempt in a new epoch.
+            r.epoch += 1;
+            r.state.playing = true;
+            r.next = Some(deck("a", 0, 0.5, 480));
+            let samples: Vec<_> = (0..3).map(|_| r.sample()).collect();
+            assert_eq!(samples, [0., 0.5, 0.5]);
+            assert!(r.state.playing && !r.waiting);
+        }
+    }
+    #[test]
     fn a_song_opened_for_another_rate_never_plays_at_the_wrong_speed() {
         let mut r = render();
         r.current.as_mut().unwrap().rate = 96000;
@@ -1898,6 +2010,34 @@ mod tests {
         let engine = Engine::new(db);
         engine.render.lock().unwrap().state.engine_ready = true;
         (dir, engine)
+    }
+    #[test]
+    fn explicit_load_replaces_a_pending_exclusive_rate_change() {
+        for action in ["seek", "queue"] {
+            let (_dir, engine) = test_engine();
+            engine
+                .command("queue", serde_json::json!({"ids": ["a", "b"]}))
+                .unwrap();
+            {
+                let mut r = engine.render.lock().unwrap();
+                r.exclusive = Some(Default::default());
+                r.current.as_mut().unwrap().rate = 44100;
+                r.rate_pending = true;
+            }
+            let value = if action == "seek" {
+                serde_json::json!(0.)
+            } else {
+                serde_json::json!({"ids": ["b"]})
+            };
+            engine.command(action, value).unwrap();
+            let mut r = engine.render.lock().unwrap();
+            assert_eq!(r.current_rate(), RATE);
+            assert!(
+                !r.rate_pending,
+                "{action} returns to the open stream's rate"
+            );
+            assert!(r.sample() > 0., "{action} must resume audio immediately");
+        }
     }
     #[test]
     fn duplicate_queue_selection_keeps_the_requested_occurrence() {
@@ -2121,6 +2261,48 @@ mod tests {
         let state = engine.snapshot();
         assert_eq!(state.queue, vec!["a2", "c"], "the loaded song stays");
         assert_eq!(state.cursor, 0);
+    }
+    #[test]
+    fn disabling_fades_or_enabling_sleep_discards_a_trimmed_preload() {
+        for (action, value) in [
+            ("crossfade", serde_json::json!(0.)),
+            ("sleep", serde_json::json!({"endOfTrack": true})),
+        ] {
+            let (_dir, engine) = test_engine();
+            engine
+                .command("queue", serde_json::json!({"ids": ["a", "b"]}))
+                .unwrap();
+            engine.command("crossfade", serde_json::json!(1.)).unwrap();
+            let mut next = engine.prepare("b", 1).unwrap();
+            next.skip_to(0.5).unwrap();
+            let epoch = {
+                let mut r = engine.render.lock().unwrap();
+                r.next = Some(next);
+                r.next_attempt = Some((r.epoch, 1));
+                r.epoch
+            };
+            engine.command("crossfade", serde_json::json!(2.)).unwrap();
+            {
+                let r = engine.render.lock().unwrap();
+                assert!(r.next.as_ref().unwrap().samples > 0);
+                assert_eq!(
+                    r.epoch, epoch,
+                    "a duration change preserves the prepared song"
+                );
+            }
+            engine.command(action, value).unwrap();
+            {
+                let r = engine.render.lock().unwrap();
+                assert!(
+                    r.next.is_none(),
+                    "{action} discarded the trimmed introduction"
+                );
+                assert!(r.epoch > epoch, "an in-flight old preload is rejected too");
+                assert!(r.next_attempt.is_none());
+                assert_eq!(r.effective_crossfade(), 0.);
+            }
+            assert_eq!(engine.prepare("b", 1).unwrap().samples, 0);
+        }
     }
     #[test]
     fn sleep_timer_is_set_cancelled_and_never_restored() {
