@@ -28,8 +28,6 @@ import {
   Shuffle,
   Repeat,
   Repeat1,
-  Volume2,
-  VolumeX,
   PanelRightClose,
   PanelRightOpen,
   Minimize2,
@@ -88,6 +86,7 @@ import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
 import { followsSpotify, updateAll } from './spotifySources';
 import NowPlaying from './NowPlaying';
+import VolumeControl from './VolumeControl';
 import CommandPalette, { type PaletteCommand } from './CommandPalette';
 import YourYear from './YourYear';
 import ArtistHero from './ArtistHero';
@@ -257,6 +256,11 @@ export default function App() {
     },
     [notify],
   );
+  const toggleMute = () => {
+    if (!pb) return;
+    if (pb.volume > 0) unmuteVolume.current = pb.volume;
+    command('volume', pb.volume === 0 ? unmuteVolume.current : 0);
+  };
   const task = useCallback(
     async (action: () => Promise<unknown>, message?: string) => {
       try {
@@ -2270,24 +2274,7 @@ export default function App() {
               <small>{Math.max(1, Math.ceil((pb.sleepAt - Date.now()) / 60000))}</small>
             )}
           </button>
-          <IconButton
-            label={pb.volume === 0 ? 'Unmute' : 'Mute'}
-            onClick={() => {
-              if (pb.volume > 0) unmuteVolume.current = pb.volume;
-              command('volume', pb.volume === 0 ? unmuteVolume.current : 0);
-            }}
-          >
-            {pb.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
-          </IconButton>
-          <input
-            type="range"
-            aria-label="Volume"
-            min={0}
-            max={1}
-            step={0.01}
-            value={pb.volume}
-            onChange={(e) => command('volume', Number(e.target.value))}
-          />
+          <VolumeControl volume={pb.volume} onChange={(value) => command('volume', value)} onMute={toggleMute} />
           <IconButton
             label="Now Playing (Ctrl+L)"
             active={nowPlaying}
@@ -2350,6 +2337,7 @@ export default function App() {
           accent={accent}
           transport={transport()}
           progress={progress}
+          volume={<VolumeControl volume={pb.volume} onChange={(value) => command('volume', value)} onMute={toggleMute} />}
           lookupLyrics={settings.lookupLyrics}
           onClose={() => setNowPlaying(false)}
           onFavorite={favorite}

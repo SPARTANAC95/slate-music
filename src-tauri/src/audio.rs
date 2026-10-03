@@ -84,6 +84,9 @@ pub struct Playback {
     pub position: f64,
     pub duration: f64,
     pub playing: bool,
+    /// Whether samples can advance. A playing queue may be waiting for a deck or device.
+    #[serde(skip_deserializing)]
+    pub clock_running: bool,
     pub volume: f32,
     pub shuffle: bool,
     pub repeat: String,
@@ -132,6 +135,7 @@ impl Default for Playback {
             position: 0.,
             duration: 0.,
             playing: false,
+            clock_running: false,
             volume: 0.7,
             shuffle: false,
             repeat: "off".into(),
@@ -273,6 +277,12 @@ impl RenderState {
     }
     fn snapshot(&self) -> Playback {
         let mut s = self.state.clone();
+        s.clock_running = s.playing
+            && self.current.is_some()
+            && !self.stopping
+            && !self.waiting
+            && !self.rate_pending
+            && !self.wrong_rate();
         if let Some(d) = &self.current {
             s.current_id = Some(d.id.clone());
             s.cursor = d.index;
@@ -1975,6 +1985,65 @@ mod tests {
         assert_eq!(r.next_index(), None);
         r.state.repeat = "all".into();
         assert_eq!(r.next_index(), Some(0));
+    }
+    #[test]
+    fn lyric_clock_maps_rendered_frames_and_freezes_when_samples_cannot_advance() {
+        for rate in [44100, 48000, 96000] {
+            let mut r = render();
+            r.current = Some(deck("a", 0, 0.25, rate as usize));
+            let d = r.current.as_mut().unwrap();
+            d.rate = rate;
+            d.native = rate;
+            r.exclusive = Some(crate::exclusive::Support::default());
+            r.use_rate(rate);
+            assert!(r.snapshot().clock_running);
+            for _ in 0..rate / 10 * 2 {
+                r.sample();
+            }
+            assert!((r.snapshot().position - 0.1).abs() < 1e-9);
+            r.state.playing = false;
+            assert!(!r.snapshot().clock_running);
+            for _ in 0..500 {
+                r.sample();
+            }
+            assert!((r.snapshot().position - 0.1).abs() < 1e-9);
+            r.state.playing = true;
+            r.rate_pending = true;
+            assert!(!r.snapshot().clock_running);
+            r.sample();
+            assert!((r.snapshot().position - 0.1).abs() < 1e-9);
+            r.rate_pending = false;
+            r.waiting = true;
+            assert!(!r.snapshot().clock_running);
+        }
+    }
+    #[test]
+    fn volume_is_the_same_gain_in_shared_and_exclusive_output() {
+        for exclusive in [false, true] {
+            let mut r = render();
+            if exclusive {
+                r.exclusive = Some(crate::exclusive::Support::default());
+            }
+            r.state.volume = 0.4;
+            assert!((r.sample() - 0.1).abs() < 1e-7);
+            r.state.volume = 0.;
+            assert_eq!(r.sample(), 0.);
+            r.state.volume = 1.;
+            assert_eq!(r.sample(), 0.25);
+        }
+    }
+    #[test]
+    fn crossfade_handoff_keeps_the_incoming_songs_real_sample_position() {
+        let mut r = render();
+        r.state.crossfade = 0.005;
+        while r.transition == 0 {
+            r.sample();
+        }
+        let d = r.current.as_ref().unwrap();
+        assert_eq!(d.id, "b");
+        assert_eq!(r.snapshot().position, d.samples as f64 / (RATE * 2) as f64);
+        assert!(r.snapshot().position >= 0.005);
+        assert!(r.snapshot().clock_running);
     }
     fn test_engine() -> (tempfile::TempDir, Arc<Engine>) {
         let dir = tempfile::tempdir().unwrap();

@@ -1,34 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, Heart, ListMusic, MicVocal, Waves } from 'lucide-react';
 import type { Playback, Track } from './types';
-import { Art, IconButton, scrollInside } from './components';
+import { Art, IconButton } from './components';
 import { quality, time } from './library';
-import { currentLine, parseLrc } from './lrc';
-
-interface Lyrics {
-  synced: string | null;
-  plain: string | null;
-  instrumental: boolean;
-  source: 'file' | 'tag' | 'lrclib' | null;
-}
-/** Playback position between the engine's updates (every ~240 ms), for smooth lyrics. */
-function usePosition(pb: Playback) {
-  // Rebase during this render so paused seeks update immediately. Playback state is part
-  // of the anchor: otherwise resuming adds the entire paused interval to the lyric time.
-  const received = useMemo(
-    () => ({ position: pb.position, at: performance.now() }),
-    [pb.position, pb.currentId, pb.playing],
-  );
-  const [, redraw] = useState(0);
-  useEffect(() => {
-    if (!pb.playing) return;
-    const timer = setInterval(() => redraw((n) => n + 1), 100);
-    return () => clearInterval(timer);
-  }, [pb.playing]);
-  const { position, at } = received;
-  return pb.playing ? position + (performance.now() - at) / 1000 : position;
-}
+import LyricsPanel from './LyricsPanel';
 
 export default function NowPlaying({
   track,
@@ -37,6 +12,7 @@ export default function NowPlaying({
   accent,
   transport,
   progress,
+  volume,
   lookupLyrics,
   onClose,
   onFavorite,
@@ -50,6 +26,7 @@ export default function NowPlaying({
   accent: string | null;
   transport: ReactNode;
   progress: ReactNode;
+  volume: ReactNode;
   lookupLyrics: boolean;
   onClose: () => void;
   onFavorite: (t: Track) => void;
@@ -59,13 +36,6 @@ export default function NowPlaying({
 }) {
   const [tab, setTab] = useState<'lyrics' | 'next'>('lyrics');
   const [path, setPath] = useState(false);
-  const [lyrics, setLyrics] = useState<Lyrics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const position = usePosition(pb);
-  const lines = useMemo(() => (lyrics?.synced ? parseLrc(lyrics.synced) : []), [lyrics]);
-  const active = currentLine(lines, position + 0.15);
-  const list = useRef<HTMLDivElement>(null);
-  const userScrolled = useRef(0);
   const root = useRef<HTMLDivElement>(null);
   // Keyboard focus moves into the view, and back to where it was when the view closes.
   useEffect(() => {
@@ -73,41 +43,8 @@ export default function NowPlaying({
     root.current?.querySelector<HTMLElement>('button')?.focus();
     return () => before?.focus?.();
   }, []);
-  useEffect(() => {
-    if (!track) {
-      setLyrics(null);
-      setLoading(false);
-      return;
-    }
-    let live = true;
-    setLyrics(null);
-    setLoading(true);
-    invoke<Lyrics>('song_lyrics', { id: track.id })
-      .then((l) => live && setLyrics(l))
-      .catch(() => live && setLyrics(null))
-      .finally(() => live && setLoading(false));
-    return () => {
-      live = false;
-    };
-  }, [track?.id, lookupLyrics]);
-  // Keep the sung line centred, unless the listener scrolled in the last few seconds. Only the
-  // lyrics move: near the end of a song the line can't be centred, and scrolling anything
-  // around it would shift the whole view.
-  useEffect(() => {
-    const box = list.current;
-    if (!box || Date.now() - userScrolled.current < 4000) return;
-    const line = active >= 0 ? box.querySelector<HTMLElement>(`[data-line="${active}"]`) : null;
-    if (line) scrollInside(box, line, 'center', true);
-    else box.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [active, lines]);
-  // A new song starts at the top of its lyrics.
-  useEffect(() => {
-    userScrolled.current = 0;
-    list.current?.scrollTo({ top: 0 });
-  }, [track?.id]);
   const q = track ? quality(track) : null;
   const upNext = pb.queue.slice(pb.cursor + 1, pb.cursor + 31);
-  const hasLyrics = !!(lyrics?.synced || lyrics?.plain);
   return (
     <div
       className="now-playing"
@@ -115,6 +52,16 @@ export default function NowPlaying({
       aria-modal="true"
       aria-label="Now playing"
       ref={root}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+        if (e.key === ' ' && (e.target as HTMLElement).closest('button')) e.stopPropagation();
+        if (e.key !== 'Tab') return;
+        const items = [...(root.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]') ?? [])]
+          .filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
+        const first = items[0], last = items.at(-1);
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+      }}
       style={accent ? ({ '--np-accent': accent } as React.CSSProperties) : undefined}
     >
       <div className="np-backdrop" aria-hidden="true">
@@ -125,12 +72,20 @@ export default function NowPlaying({
           <ChevronDown size={22} />
         </IconButton>
         <span>Now playing</span>
-        <div className="np-tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'lyrics'} className={tab === 'lyrics' ? 'active' : ''} onClick={() => setTab('lyrics')}>
+        <div className="np-tabs" role="tablist" aria-label="Now playing view" onKeyDown={(e) => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+            e.preventDefault();
+            e.stopPropagation();
+            const next = e.key === 'Home' ? 'lyrics' : e.key === 'End' ? 'next' : tab === 'lyrics' ? 'next' : 'lyrics';
+            setTab(next);
+            root.current?.querySelector<HTMLElement>('#np-tab-' + next)?.focus();
+          }
+        }}>
+          <button role="tab" id="np-tab-lyrics" aria-controls="np-panel" tabIndex={tab === 'lyrics' ? 0 : -1} aria-selected={tab === 'lyrics'} className={tab === 'lyrics' ? 'active' : ''} onClick={() => setTab('lyrics')}>
             <MicVocal size={15} />
             Lyrics
           </button>
-          <button role="tab" aria-selected={tab === 'next'} className={tab === 'next' ? 'active' : ''} onClick={() => setTab('next')}>
+          <button role="tab" id="np-tab-next" aria-controls="np-panel" tabIndex={tab === 'next' ? 0 : -1} aria-selected={tab === 'next'} className={tab === 'next' ? 'active' : ''} onClick={() => setTab('next')}>
             <ListMusic size={15} />
             Up next
           </button>
@@ -181,48 +136,10 @@ export default function NowPlaying({
           )}
           {path && track && <SignalPath track={track} pb={pb} />}
         </section>
-        <section className="np-side">
+        <section className="np-side" role="tabpanel" id="np-panel" aria-labelledby={"np-tab-" + tab}>
           {tab === 'lyrics' ? (
-            <div
-              className={`np-lyrics ${lines.length ? 'synced' : ''}`}
-              ref={list}
-              onWheel={() => (userScrolled.current = Date.now())}
-            >
-              {loading && !lyrics ? (
-                <p className="np-empty">Looking for lyrics…</p>
-              ) : lines.length ? (
-                lines.map((line, i) => (
-                  <button
-                    key={i}
-                    data-line={i}
-                    className={`np-line ${i === active ? 'active' : i < active ? 'past' : ''}`}
-                    onClick={() => onSeek(line.time)}
-                  >
-                    {line.text || '♪'}
-                  </button>
-                ))
-              ) : lyrics?.plain ? (
-                <p className="np-plain">{lyrics.plain}</p>
-              ) : (
-                <div className="np-empty">
-                  <p>{lyrics?.instrumental ? 'This one is instrumental.' : 'No lyrics for this song yet.'}</p>
-                  {!lookupLyrics && !lyrics?.instrumental && (
-                    <small>
-                      Turn on “Find lyrics online” in Settings, or put an .lrc file beside the song.
-                    </small>
-                  )}
-                </div>
-              )}
-              {hasLyrics && lyrics?.source && (
-                <small className="np-source">
-                  {lyrics.source === 'lrclib'
-                    ? 'Lyrics from LRCLIB'
-                    : lyrics.source === 'file'
-                      ? 'Lyrics from the .lrc file beside this song'
-                      : 'Lyrics stored in this song'}
-                </small>
-              )}
-            </div>
+            <LyricsPanel key={(track?.id ?? "empty") + ":" + lookupLyrics}
+              trackId={track?.id ?? null} pb={pb} lookupLyrics={lookupLyrics} onSeek={onSeek} />
           ) : (
             <div className="np-next">
               {upNext.length ? (
@@ -248,6 +165,7 @@ export default function NowPlaying({
       </div>
       <footer className="np-controls">
         {transport}
+        <div className="np-volume">{volume}</div>
         {progress}
       </footer>
     </div>

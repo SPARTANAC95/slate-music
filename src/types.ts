@@ -30,6 +30,8 @@ export interface Playback {
   position: number;
   duration: number;
   playing: boolean;
+  /** False while the engine waits for a deck or an output-rate change. Recomputed on restore. */
+  clockRunning?: boolean;
   volume: number;
   shuffle: boolean;
   repeat: 'off' | 'all' | 'one';

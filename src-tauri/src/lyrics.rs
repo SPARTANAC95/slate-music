@@ -190,6 +190,16 @@ mod tests {
         assert!(!is_synced(""));
     }
     #[test]
+    fn enhanced_lrc_boundaries_survive_local_and_embedded_lyric_answers() {
+        let text = "[00:01]<00:01>Soft <00:02>light<00:03>\r\n[offset:-100]";
+        for source in ["file", "tag"] {
+            let result = answer(text.into(), source);
+            assert_eq!(result["synced"], text.replace("\r\n", "\n"));
+            assert_eq!(result["source"], source);
+            assert!(result["plain"].is_null());
+        }
+    }
+    #[test]
     fn only_treats_complete_supported_timestamps_as_synced() {
         for text in [
             "[1:2 people] sing",

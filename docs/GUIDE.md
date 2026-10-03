@@ -12,7 +12,7 @@ Windows 10/11 x64 with WebView2 and a working audio output are required. WebView
 
 - Home, Songs, Albums, Artists, Favorites, Recently Played, Playlists, saved virtual albums and Queue.
 - Settings → Playback holds the sound controls: output device, loudness levelling (Smart uses album gain while an album plays in order), smart crossfade and a 10-band equalizer that each output device remembers. Loudness is measured once per song in the background. Now Playing's **Signal path** shows exactly what happens between the file and your speakers or headphones.
-- Now Playing (click the song in the player bar or press Ctrl+L) shows a large cover and synced lyrics. Lyrics come from an .lrc file with the same name beside the song, lyrics stored in the file, or LRCLIB when **Find lyrics online** is on in Settings. Click a line to jump there.
+- Now Playing (click the song in the player bar or press Ctrl+L) shows a large cover and synced lyrics. Lyrics come from an .lrc file with the same name beside the song, lyrics stored in the file, or LRCLIB when **Find lyrics online** is on in Settings. Enhanced LRC word timestamps illuminate words as they are sung; sources with line timestamps follow each line. The caption shows which timing is available. Click a line to jump there, or scroll to read ahead and choose **Return to current line** to follow playback again. Volume and mute remain available below the lyrics, using the same level as the main player. Windows' reduced-motion preference disables the flowing transitions.
 - Hover over Slate Music's taskbar button for Previous, Play/Pause, Next and Favorite buttons in the preview.
 - Right-click a song or album for Play next, Add to queue, Add to playlist, Go to album or artist, Favorite and Show in File Explorer. The Queue page can save the queue as a playlist or clear everything after the current song. The moon button beside the volume sets a sleep timer.
 - Search titles, artists and albums; small typos are forgiven, and matching artists and albums appear above the songs. Sort and filter songs, including unavailable files and potential duplicates. Album order respects disc and track numbers.
@@ -136,5 +136,4 @@ GitHub Actions checks every push and pull request. Version tags run tests, build
 Tauri, React, TypeScript, SQLite/rusqlite, Rodio/Symphonia, Lofty, notify, Souvlaki, Inter and Lucide power the application. See their respective licenses in installed dependencies and [THIRD_PARTY.md](THIRD_PARTY.md). The original application icon and design study were generated for this project; the study is inspiration, not a screenshot of a working library. Slate was inspected as a design reference and was not modified.
 
 MIT license.
-
 
