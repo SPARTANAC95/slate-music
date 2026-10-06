@@ -15,15 +15,16 @@ use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator,
     MMDeviceEnumerator, AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_E_DEVICE_INVALIDATED,
     AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED, AUDCLNT_E_UNSUPPORTED_FORMAT,
-    AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, DEVICE_STATE_ACTIVE,
-    WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+    AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
 use windows::Win32::Media::KernelStreaming::{
     KSDATAFORMAT_SUBTYPE_PCM, SPEAKER_FRONT_LEFT, SPEAKER_FRONT_RIGHT, WAVE_FORMAT_EXTENSIBLE,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantToBSTR;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+    COINIT_MULTITHREADED, STGM_READ,
 };
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
@@ -134,6 +135,52 @@ pub fn probe(name: Option<String>) -> Result<Support, String> {
     })
     .join()
     .map_err(|_| "checking the device failed".to_string())?
+}
+
+/// Most output delay that is believed: beyond this a driver's answer is taken for a mistake.
+const MAX_LATENCY: f64 = 1.;
+/// Seconds from a sample leaving the mixer to being heard, from the delay Windows reports for
+/// the stream (in 100 ns units) and the seconds our own buffer holds a sample back on average.
+/// A shared stream's report covers Windows' mixer and the device, so the two add up; an
+/// exclusive stream's report is the device buffer itself, so the larger of the two counts.
+fn heard_after(stream_latency: i64, queued: f64, exclusive: bool) -> f64 {
+    let reported = stream_latency.max(0) as f64 / 10_000_000.;
+    let total = if exclusive {
+        reported.max(queued)
+    } else {
+        reported + queued
+    };
+    if total.is_finite() {
+        total.clamp(0., MAX_LATENCY)
+    } else {
+        0.
+    }
+}
+/// How long sound takes to leave a device played through Windows (shared mode), for keeping
+/// lyrics in step with what is heard. Opens no audible stream; 0 when Windows won't say.
+pub fn shared_latency(name: Option<String>) -> f64 {
+    std::thread::spawn(move || {
+        let _com = Com::init();
+        let measure = || -> windows::core::Result<f64> {
+            unsafe {
+                let (device, ..) = find(name.as_deref())?;
+                let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
+                let format = client.GetMixFormat()?;
+                let rate = (*format).nSamplesPerSec;
+                // The same request the shared output makes: Windows' own buffer size.
+                let opened = client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 0, 0, format, None);
+                CoTaskMemFree(Some(format as *const _));
+                opened?;
+                // The shared output keeps its buffer topped up one device period at a time, so
+                // about half of it is still queued ahead of any sample.
+                let buffer = client.GetBufferSize()? as f64 / rate.max(1) as f64;
+                Ok(heard_after(client.GetStreamLatency()?, buffer * 0.5, false))
+            }
+        };
+        measure().unwrap_or(0.)
+    })
+    .join()
+    .unwrap_or(0.)
 }
 
 /// A Windows event handle, closed when dropped (also when opening a stream fails half-way).
@@ -357,8 +404,44 @@ fn run(
             return Ok(());
         }
         let stream = Stream::open(&device, rate, layout).map_err(|e| describe(&e))?;
-        render.lock().unwrap().use_rate(rate);
+        // Two buffers take turns: a filled one waits for the one before it to play out, so a
+        // sample is heard about a buffer and a half after it is mixed.
+        let latency = heard_after(
+            unsafe { stream.client.GetStreamLatency() }.unwrap_or(0),
+            stream.frames as f64 / rate.max(1) as f64 * 1.5,
+            true,
+        );
+        {
+            let mut r = render.lock().unwrap();
+            r.use_rate(rate);
+            r.latency = latency;
+        }
         stream.play(render, stop, rate)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn output_delay_combines_the_reported_latency_with_the_queued_buffer() {
+        // Shared: 12 ms reported by Windows plus half of a 22 ms buffer.
+        assert!((heard_after(120_000, 0.011, false) - 0.023).abs() < 1e-9);
+        // Exclusive: the report describes the same buffer, so it is not counted twice.
+        assert!((heard_after(400_000, 0.06, true) - 0.06).abs() < 1e-9);
+        assert!((heard_after(900_000, 0.06, true) - 0.09).abs() < 1e-9);
+        // Nonsense from a driver never moves lyrics by more than a second, or backwards.
+        assert_eq!(heard_after(i64::MAX, 0.02, false), MAX_LATENCY);
+        assert_eq!(heard_after(-5, 0., false), 0.);
+        assert_eq!(heard_after(0, f64::NAN, true), 0.);
+    }
+    /// Asks the real default device. Run by hand: `cargo test shared_latency -- --ignored`.
+    #[test]
+    #[ignore]
+    fn shared_latency_of_this_computers_default_output_is_plausible() {
+        let latency = shared_latency(None);
+        println!("default output latency: {:.1} ms", latency * 1000.);
+        assert!((0. ..=MAX_LATENCY).contains(&latency));
+    }
 }

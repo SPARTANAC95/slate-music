@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Lyrics light up word by word on every synced song.** Each word fills from the left as it is sung, with a soft edge, and the line being sung is large and sharp while the others step back. Songs with word times in their lyrics (Enhanced LRC) use them exactly; songs whose lyrics only time each line, which is what LRCLIB provides, pace the words evenly inside the line's real start and end. The caption says which you are getting.
+- **Lyrics keep time with what you hear.** The lyric clock now runs smoothly between the engine's updates instead of restarting from each one (which made the fill wobble), allows for the time an update takes to arrive, and trails the engine by the delay Windows reports for your output device. Measured against a simulated engine with up to 80 ms of jitter: about 2 ms off on average, never a step backwards.
+- **Adjust the timing by ear.** − and + above the lyrics move this song's lyrics later or earlier in tenths of a second, and the adjustment is remembered for the song. Settings → Playback has a **Lyrics delay** for the device that is playing, for Bluetooth speakers and headphones that play late.
+- **Pauses in the singing** show three dots that fill as the pause passes, including a lead-in before a late first line.
+- The line being sung rests a little above the middle of the view and the list glides to it; seeking, reading ahead and **Return to current line** work as before. Lyrics are drawn straight to the page each frame, so nothing else in the app is redrawn while they move.
+- Fixed: after a seek or a pause, an update sent just before it could arrive late and flick the player back for a moment. Updates that arrive out of order are now ignored.
+- Fixed: seeking to a line while paused could leave the line before it highlighted.
+- Fixed: at small window sizes the lyrics list could stop following the window's height.
+- Fixed (development): the dev server watched the native build folder, tens of thousands of files, and could take most of a minute to answer. `npm run preview:lyrics` opens Now Playing in a browser with a stand-in for the audio engine.
+
 ## 1.1.0 — 2026-10-01
 
 - **Now Playing:** a full-window view with a large, sharp cover, a backdrop blurred from the artwork, and synced lyrics that follow the song (click a line to jump to it), or the queue. Open it by clicking the song in the player bar or the cover in the listening panel, with the new button beside the volume, or with Ctrl+L; Esc closes it.

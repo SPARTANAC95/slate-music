@@ -32,6 +32,10 @@ export interface Playback {
   playing: boolean;
   /** False while the engine waits for a deck or an output-rate change. Recomputed on restore. */
   clockRunning?: boolean;
+  /** Unix milliseconds at which `position` was read by the engine. */
+  at?: number;
+  /** Seconds between a sample being mixed and being heard, as far as Windows reports. */
+  outputLatency?: number;
   volume: number;
   shuffle: boolean;
   repeat: 'off' | 'all' | 'one';

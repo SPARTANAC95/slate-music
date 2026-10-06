@@ -16,6 +16,7 @@
     "test:browser": "node tools/check-now-playing.mjs && node tools/frontend-selection-check.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:ui": "node tools/qa.mjs",
+    "preview:lyrics": "node tools/preview-lyrics.mjs",
     "site:screenshots": "node tools/screenshots.mjs"
   },
   "dependencies": {

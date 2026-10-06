@@ -68,15 +68,149 @@ export function parseLrc(text: string): LyricLine[] {
   return lines.sort((a, b) => a.time - b.time);
 }
 
+/** A word (or syllable) as it is shown: `text` is lit between `time` and `end`. */
+export interface ShownWord {
+  time: number;
+  end: number;
+  text: string;
+  /** White space after the word, kept out of the lit part. */
+  space: string;
+}
+/** A row of the lyrics view: a sung line, or a pause in the singing when `gap` is set. */
+export interface ShownLine {
+  time: number;
+  end: number;
+  text: string;
+  words: ShownWord[];
+  gap: boolean;
+  /** Word times were worked out from the line's own start and end, not given by the source. */
+  estimated: boolean;
+}
+/** A song that starts with at least this much music before the first line shows a lead-in. */
+const LEAD_IN = 4;
+const VOWELS = /[aeiouyàáâãäåæèéêëìíîïòóôõöøœùúûüýÿаеёиоуыэюяіїєαεηιουω]+/gi;
+/** Scripts written without spaces, where each character is sung on its own. */
+const UNSPACED = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+const LETTER = /[\p{L}\p{N}]/u;
+/** Whether text is in a script sung one character at a time (and wrapped anywhere). */
+export const sungByCharacter = (text: string) => UNSPACED.test(text);
+
+/** Roughly how many beats a piece of text takes to sing. */
+function beats(text: string): number {
+  const letters = [...text].filter((c) => LETTER.test(c)).length;
+  if (!letters) return 0.25;
+  const vowels = text.match(VOWELS)?.length ?? 0;
+  // Unknown scripts: about one beat per three letters.
+  const count = vowels || Math.max(1, Math.round(letters / 3));
+  // A comma or a full stop is a breath.
+  return count + (/[,;:.!?…—–]["'”’)]*\s*$/.test(text) ? 0.5 : 0);
+}
+/** Splits a line into the pieces that light up one after another. */
+function pieces(text: string): { text: string; space: string }[] {
+  const out: { text: string; space: string }[] = [];
+  for (const [, word, space] of text.matchAll(/(\S+)(\s*)/g)) {
+    if (!UNSPACED.test(word)) {
+      out.push({ text: word, space });
+      continue;
+    }
+    // Each character on its own; punctuation and Latin letters stay with their neighbours.
+    let run = '';
+    const flush = () => {
+      if (run) out.push({ text: run, space: '' });
+      run = '';
+    };
+    for (const c of word) {
+      if (UNSPACED.test(c)) {
+        flush();
+        run = c;
+      } else if (run && UNSPACED.test(run[0]) && LETTER.test(c)) {
+        flush();
+        run = c;
+      } else run += c;
+    }
+    flush();
+    out[out.length - 1].space = space;
+  }
+  return out;
+}
+/** How long a line plausibly takes to sing when nothing follows it closely. */
+const unhurried = (total: number) => 0.5 + 0.4 * total;
+
+/** Lays lyrics out for display. Lines keep the source's times; every word gets a start and an
+ * end: the source's own where it has them (Enhanced LRC), otherwise spread across the line by
+ * the length of each word, ending before the next line. `duration` is the song's length. */
+export function showLyrics(lines: LyricLine[], duration = 0): ShownLine[] {
+  const rows: ShownLine[] = [];
+  const first = lines.find((line) => line.text);
+  if (first && first.time >= LEAD_IN && lines[0] === first)
+    rows.push({ time: 0, end: first.time, text: '', words: [], gap: true, estimated: false });
+  lines.forEach((line, i) => {
+    // The next line that starts later (lines sharing a time stamp are sung together).
+    const later = lines.slice(i + 1).find((next) => next.time > line.time)?.time;
+    const until = later ?? (duration > line.time ? duration : Infinity);
+    if (!line.text) {
+      rows.push({
+        time: line.time,
+        end: Number.isFinite(until) ? until : line.time,
+        text: '',
+        words: [],
+        gap: true,
+        estimated: false,
+      });
+      return;
+    }
+    if (line.words) {
+      const words: ShownWord[] = [];
+      for (const word of line.words) {
+        const text = word.text.trimEnd();
+        const space = word.text.slice(text.length);
+        const last = words.at(-1);
+        // White space with its own time stamp belongs to the word before it.
+        if (!text.trim()) {
+          if (last && !last.space) last.space = word.text;
+          continue;
+        }
+        const lead = text.length - text.trimStart().length;
+        if (lead && last && !last.space) last.space = text.slice(0, lead);
+        words.push({ time: word.time, end: word.end ?? NaN, text: text.slice(lead), space });
+      }
+      words.forEach((word, k) => {
+        if (!Number.isNaN(word.end)) return;
+        // The source left the last word open: it lasts as long as it plausibly takes to sing.
+        const next = words[k + 1]?.time ?? until;
+        word.end = Math.max(word.time, Math.min(next, word.time + unhurried(beats(word.text))));
+      });
+      if (words.length) words[words.length - 1].space = '';
+      const end = Math.max(line.time, ...words.map((word) => word.end));
+      rows.push({ time: line.time, end, text: line.text, words, gap: false, estimated: false });
+      return;
+    }
+    const parts = pieces(line.text);
+    const weights = parts.map((part) => beats(part.text + part.space));
+    // Held a little longer: lines usually end on a sustained note.
+    weights[weights.length - 1] += 0.5;
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    const span = Math.max(0, Math.min((until - line.time) * 0.96, unhurried(total) * 1.25));
+    let sung = 0;
+    const words = parts.map((part, k) => {
+      const time = line.time + (span * sung) / total;
+      sung += weights[k];
+      return { ...part, time, end: line.time + (span * sung) / total };
+    });
+    rows.push({ time: line.time, end: line.time + span, text: line.text, words, gap: false, estimated: true });
+  });
+  return rows;
+}
+
 /** Fill only between supplied boundaries; an open-ended word lights at its onset. */
-export function wordProgress(word: LyricWord, position: number): number {
+export function wordProgress(word: { time: number; end?: number }, position: number): number {
   if (position < word.time) return 0;
   if (word.end == null || word.end <= word.time) return 1;
   return Math.min(1, (position - word.time) / (word.end - word.time));
 }
 
 /** Index of the line being sung, or -1 before the first line. */
-export function currentLine(lines: LyricLine[], position: number): number {
+export function currentLine(lines: { time: number }[], position: number): number {
   let low = 0, high = lines.length - 1, found = -1;
   while (low <= high) {
     const mid = (low + high) >> 1;

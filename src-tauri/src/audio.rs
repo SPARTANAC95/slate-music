@@ -87,6 +87,13 @@ pub struct Playback {
     /// Whether samples can advance. A playing queue may be waiting for a deck or device.
     #[serde(skip_deserializing)]
     pub clock_running: bool,
+    /// Unix milliseconds at which `position` was read, so the window can allow for the time
+    /// this snapshot spent on its way there.
+    #[serde(skip_deserializing)]
+    pub at: i64,
+    /// Seconds between a sample leaving the mixer and being heard, as far as Windows reports.
+    #[serde(skip_deserializing)]
+    pub output_latency: f64,
     pub volume: f32,
     pub shuffle: bool,
     pub repeat: String,
@@ -136,6 +143,8 @@ impl Default for Playback {
             duration: 0.,
             playing: false,
             clock_running: false,
+            at: 0,
+            output_latency: 0.,
             volume: 0.7,
             shuffle: false,
             repeat: "off".into(),
@@ -186,6 +195,8 @@ pub struct RenderState {
     /// The song ended while the next one was still being prepared (for example after a queue
     /// edit in its last moments): playback stays on, silent, until the next song is ready.
     pub waiting: bool,
+    /// Seconds the open output takes to make a mixed sample audible (0 when not known).
+    pub latency: f64,
 }
 impl RenderState {
     /// The rate a song whose file is at `native` Hz is mixed at.
@@ -283,6 +294,8 @@ impl RenderState {
             && !self.waiting
             && !self.rate_pending
             && !self.wrong_rate();
+        s.at = crate::db::now();
+        s.output_latency = self.latency;
         if let Some(d) = &self.current {
             s.current_id = Some(d.id.clone());
             s.cursor = d.index;
@@ -623,6 +636,7 @@ impl Engine {
                 rate_pending: false,
                 pulled: 0,
                 waiting: false,
+                latency: 0.,
             })),
             db,
             command_lock: Mutex::new(()),
@@ -1472,6 +1486,10 @@ impl Engine {
                                 fallback,
                                 ..Default::default()
                             };
+                            #[cfg(windows)]
+                            let latency = crate::wasapi::shared_latency(Some(info.device.clone()));
+                            #[cfg(not(windows))]
+                            let latency = 0.;
                             // The new stream asks for a left sample first.
                             engine.render.lock().unwrap().channel = 0;
                             let sink = Sink::connect_new(stream.mixer());
@@ -1481,6 +1499,7 @@ impl Engine {
                             r.state.engine_ready = true;
                             r.state.error = notice.take();
                             r.state.output = Some(info);
+                            r.latency = latency;
                             last_pulled = r.pulled;
                             stalled = 0;
                         }
@@ -1639,6 +1658,7 @@ mod tests {
             rate_pending: false,
             pulled: 0,
             waiting: false,
+            latency: 0.,
         }
     }
     /// Writes a WAV of pseudo-random samples and returns them as whole numbers.

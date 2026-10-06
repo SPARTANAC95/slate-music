@@ -86,6 +86,7 @@ import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
 import { followsSpotify, updateAll } from './spotifySources';
 import NowPlaying from './NowPlaying';
+import { isStale } from './playbackClock';
 import VolumeControl from './VolumeControl';
 import CommandPalette, { type PaletteCommand } from './CommandPalette';
 import YourYear from './YourYear';
@@ -145,13 +146,17 @@ const defaults: Settings = {
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 const noQueueEntries: ReturnType<typeof queueEntries> = [];
 /** Playback updates arrive several times a second. Reusing the old queue array when nothing
- * changed keeps song lists from being filtered and sorted again on every update. */
+ * changed keeps song lists from being filtered and sorted again on every update. An update
+ * read before the one already shown (a command's answer can overtake the regular update sent
+ * just before it) is dropped, so a pause or a seek never flickers back for a moment. */
 const sameQueue = (previous: Playback | null, next: Playback): Playback =>
-  previous &&
-  previous.queue.length === next.queue.length &&
-  previous.queue.every((id, i) => id === next.queue[i])
-    ? { ...next, queue: previous.queue }
-    : next;
+  previous && isStale(previous, next)
+    ? previous
+    : previous &&
+        previous.queue.length === next.queue.length &&
+        previous.queue.every((id, i) => id === next.queue[i])
+      ? { ...next, queue: previous.queue }
+      : next;
 type View = { page: Page; album: string; artist: string; collection: string; scroll: number };
 type Menu = { x: number; y: number; items: MenuItem[]; above?: boolean };
 const nav = [

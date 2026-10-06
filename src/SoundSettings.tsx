@@ -4,6 +4,7 @@ import { SlidersHorizontal } from 'lucide-react';
 import type { EqSettings, Playback, Settings, Snapshot } from './types';
 import { Toggle } from './components';
 import { eqChanges } from './NowPlaying';
+import { deviceDelay, setDeviceDelay } from './lyricTiming';
 
 export const EQ_BANDS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
 /** Equalizer presets in dB per band, with a preamp that keeps boosts from clipping. */
@@ -49,6 +50,10 @@ export default function SoundSettings({
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const eq = draft ?? (pb.eq?.bands?.length === 10 ? pb.eq : flatEq());
   const deviceKey = pb.outputDevice ?? '';
+  // Kept for the device that is actually playing (the Windows default has its own name).
+  const playing = pb.output?.device;
+  const [delay, setDelay] = useState(() => deviceDelay(playing));
+  useEffect(() => setDelay(deviceDelay(playing)), [playing]);
   /** Applies an equalizer and remembers it for the current output device. */
   async function applyEq(next: EqSettings) {
     window.clearTimeout(timer.current);
@@ -93,6 +98,33 @@ export default function SoundSettings({
             <option value={pb.outputDevice}>{pb.outputDevice} (not connected)</option>
           )}
         </select>
+      </label>
+      <label className="setting-row">
+        <span>
+          <strong>Lyrics delay{playing ? ` on ${playing}` : ''}</strong>
+          <small>
+            Wireless speakers and headphones play a moment late. If lyrics light up before you
+            hear the words, move this right until they match. {delay
+              ? `Lyrics ${delay > 0 ? 'wait' : 'run ahead by'} ${Math.abs(Math.round(delay * 1000))} ms on this device.`
+              : 'Each device keeps its own setting.'}
+          </small>
+        </span>
+        <input
+          type="range"
+          aria-label="Lyrics delay"
+          aria-valuetext={`${Math.round(delay * 1000)} milliseconds`}
+          min={-0.3}
+          max={0.6}
+          step={0.01}
+          value={delay}
+          disabled={!playing}
+          style={{ '--fill': `${((delay + 0.3) / 0.9) * 100}%` } as React.CSSProperties}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            setDeviceDelay(playing, next);
+            setDelay(next);
+          }}
+        />
       </label>
       <Toggle
         label="Exclusive mode (bit-perfect)"

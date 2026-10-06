@@ -52,16 +52,21 @@ try {
   const player = page.getByRole('dialog', { name: 'Now playing', exact: true });
   await player.getByText('Word + line synced', { exact: true }).waitFor();
   const active = () => player.locator('.np-line.active').textContent();
-  const fill = () => player.locator('.np-line.active .np-word').nth(1).evaluate((el) => Number.parseFloat(el.style.getPropertyValue('--word-fill')));
-  await until(async () => Math.abs(await fill() - 50) < 0.1);
+  // How far the second word is lit, in percent. Lyrics follow what is heard, so they trail
+  // the engine's position by the output delay Windows reports for this device.
+  const fill = () => player.locator('.np-line.active .np-word').nth(1).evaluate((el) => Number(el.style.getPropertyValue('--p')) * 100);
+  const delay = (await snapshot()).playback.outputLatency ?? 0;
+  assert(delay >= 0 && delay < 0.3, 'Output delay of the QA device should be small, was ' + delay);
+  const half = 50 - delay * 100;
+  await until(async () => Math.abs(await fill() - half) < 0.25);
   assert.equal(await active(), 'We follow the light');
   await page.waitForTimeout(650);
-  assert(Math.abs(await fill() - 50) < 0.1);
+  assert(Math.abs(await fill() - half) < 0.25);
   pass('Native sidecar preserves word boundaries and applies negative offset while paused');
 
-  await command('seek', 5.4);
+  await command('seek', 5.4 + delay);
   await until(async () => await active() === 'When the city settles');
-  await command('seek', 5.5);
+  await command('seek', 5.5 + delay);
   await until(async () => await active() === 'We follow the light');
   pass('Native paused seeks switch at the exact offset line boundary without early highlighting');
 
@@ -86,8 +91,8 @@ try {
   await until(async () => (await snapshot()).playback.position > 7.2);
   const mapping = await page.evaluate(async () => {
     const state = await window.__TAURI_INTERNALS__.invoke('snapshot');
-    const word = document.querySelector('.np-line.active .np-word:nth-child(2)');
-    return { pb: state.playback, fill: Number.parseFloat(word.style.getPropertyValue('--word-fill')) };
+    const word = document.querySelectorAll('.np-line.active .np-word')[1];
+    return { pb: state.playback, fill: Number(word.style.getPropertyValue('--p')) * 100 };
   });
   assert(mapping.pb.clockRunning);
   // Supplied word range is 6.5..7.5 after the offset; normal IPC/sample buffering
@@ -108,22 +113,22 @@ try {
   await player.locator('.np-line.active').waitFor();
   await until(async () => player.locator('.np-line.active').evaluate((line) => {
     const box = line.closest('.np-lyrics').getBoundingClientRect(), rect = line.getBoundingClientRect();
-    return Math.abs(rect.top + rect.height / 2 - box.top - box.height / 2) < 6;
+    return Math.abs(rect.top + rect.height / 2 - box.top - box.height * 0.42) < 6;
   }));
   await command('next');
   await command('pause');
   await command('seek', 6);
   await player.getByText('Line synced', { exact: true }).waitFor();
   await until(async () => await active() === 'With a different line');
-  assert.equal(await player.locator('.np-word').count(), 0);
-  pass('Native tab return follows the current line and track changes replace timed words with line fallback');
+  assert((await player.locator('.np-line.active .np-word').count()) > 1);
+  pass('Native tab return follows the current line and track changes replace timed words with line timing');
 
   await command('previous');
   await command('previous');
   await command('pause');
   await command('seek', 7);
   await player.getByText('Word + line synced', { exact: true }).waitFor();
-  await until(async () => Math.abs(await fill() - 50) < 0.1);
+  await until(async () => Math.abs(await fill() - half) < 0.25);
   await player.getByRole('button', { name: 'Close Now Playing (Esc)', exact: true }).focus();
   await page.screenshot({ path: path.join(output, 'desktop.png') });
   await invoke('plugin:window|set_size', { label: 'main', value: { Logical: { width: 880, height: 620 } } });

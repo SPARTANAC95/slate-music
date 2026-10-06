@@ -1,5 +1,7 @@
 # Source-timed lyrics and playback timing review
 
+> Later changes (2026-10-06): lines with only a line time stamp now have their words paced within the line, the lyric clock runs steadily between snapshots instead of rebasing on each one (its silent-engine limit is one second, not 300 ms), and lyrics allow for the reported output delay plus per-song and per-device adjustments. `docs/ARCHITECTURE.md` and the changelog describe the current behaviour; the rest of this page records the review as it was made.
+
 Built on correctness-review commit `ee951f2a3674106c94bc1790a96af5b6f3fb8a67`, itself based on current main `5b951ec965c6e5d3a1fe73b1c9bc52c1468085b0`. The original local checkout was clean at `819c63e`, which is an ancestor of that main commit: no additional unpublished commits or uncommitted changes were found there. The installed executable reports 1.1.0; its version alone does not identify an exact source commit. The installed app was not replaced or controlled.
 
 ## Behavior

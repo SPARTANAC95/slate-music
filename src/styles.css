@@ -1686,6 +1686,10 @@ input[type='range']:disabled {
   font-size: 11px;
   min-width: 105px;
 }
+.setting-row input[type='range'] {
+  flex: none;
+  width: 130px;
+}
 .switch {
   width: 34px;
   min-width: 34px;
@@ -2739,12 +2743,37 @@ details.advanced[open] summary {
 .np-next::-webkit-scrollbar {
   display: none;
 }
+/* Synced lyrics. The line being sung is full size and sharp; the others step back, smaller
+   and softer the further away they are. LyricsPanel sets .active, .past and data-far. */
+.np-lyrics.synced {
+  position: relative;
+  padding-top: 0;
+  padding-bottom: 0;
+  /* The list is scrolled by the lyrics themselves, frame by frame. */
+  scroll-behavior: auto;
+  overflow-anchor: none;
+}
+/* Room for the first and last lines to reach the resting place. Spacers, not padding: a
+   scrolling box can't shrink below its padding, so it would stop following the window. */
+.np-lyrics.synced::before,
+.np-lyrics.synced::after {
+  content: '';
+  display: block;
+}
+.np-lyrics.synced::before {
+  height: calc(var(--np-above, 20vh) - 16px);
+}
+.np-lyrics.synced::after {
+  height: calc(var(--np-below, 24vh) - 16px);
+}
 .np-line {
+  --lit: #fff;
+  --unlit: #ffffff66;
   display: block;
   width: 100%;
   min-height: 0;
   margin: 0;
-  padding: 14px 0;
+  padding: 13px 0;
   border: 0;
   background: none;
   text-align: left;
@@ -2752,22 +2781,59 @@ details.advanced[open] summary {
   line-height: 1.28;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: #aaa5b2;
+  color: var(--unlit);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  transition: transform 0.38s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform: scale(0.94);
   transform-origin: left center;
+  filter: blur(var(--soft, 0px));
+  transition:
+    transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 0.45s ease,
+    color 0.3s ease;
 }
-.np-line:hover {
-  color: #e1dce9;
+.np-line[data-far='1'] { --soft: 0.5px; }
+.np-line[data-far='2'] { --soft: 1.1px; }
+.np-line[data-far='3'] { --soft: 1.8px; }
+.np-line[data-far='4'] { --soft: 2.4px; }
+/* Reading ahead, or pointing at a line: everything is sharp. */
+.np-lyrics.browsing .np-line,
+.np-line:hover,
+.np-line:focus-visible {
+  --soft: 0px;
 }
-.np-line.past {
-  color: #a19ca8;
+.np-line:hover,
+.np-lyrics.browsing .np-line:not(.active) {
+  color: #ffffffb8;
 }
 .np-line.active {
-  color: #fff;
-  transform: scale(1.025);
-  text-shadow: 0 0 32px color-mix(in srgb, var(--np-accent) 22%, transparent);
+  --soft: 0px;
+  transform: none;
+}
+/* Each word (or syllable) is lit from the left as it is sung: --p runs from 0 to 1, set every
+   frame from the song's position, so there is no transition here to lag behind it. */
+.np-word {
+  display: inline-block;
+  white-space: pre;
+  /* Room for letters that reach past their box (j, y, italics), which the fill would crop. */
+  margin: -0.14em -0.08em;
+  padding: 0.14em 0.08em;
+}
+.np-syllables {
+  display: inline-block;
+  white-space: nowrap;
+}
+.np-line.active .np-word {
+  --edge: 0.55em;
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--lit) calc(var(--p, 0) * (100% + var(--edge)) - var(--edge)),
+    var(--unlit) calc(var(--p, 0) * (100% + var(--edge)))
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  transform: translateY(calc(var(--p, 0) * -0.04em));
 }
 .np-plain {
   white-space: pre-line;
@@ -3745,23 +3811,22 @@ details.advanced[open] summary {
   opacity: 0.6;
 }
 
-/* Source-timed lyric illumination: color/fill follows the clock without CSS lag. */
 .np-lyrics-panel { position: relative; display: flex; flex-direction: column; min-width: 0; width: 100%; min-height: 0; }
-.np-lyrics-caption { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 0 8px 6px; color: #d4cedd; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+.np-lyrics-caption { display: flex; align-items: center; gap: 12px; min-height: 22px; padding: 0 8px 6px; color: #d4cedd; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
 .np-lyrics-caption small { color: #a8a2b1; font-size: 10px; letter-spacing: 0.04em; }
-.np-word { position: relative; }
-.np-line.active .np-word {
-  color: transparent;
-  background: linear-gradient(to right, #fff var(--word-fill), #b3acbf var(--word-fill));
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
-  text-shadow: none;
-}
-.np-line.active .np-word.singing { filter: drop-shadow(0 0 12px #ffffff40); }
-.np-instrumental { display: inline-flex; gap: 9px; padding: 12px 0; }
-.np-instrumental i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.np-timing { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+.np-timing button { display: inline-grid; place-items: center; min-width: 22px; min-height: 22px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent; color: #cfc9d8; font-size: 10px; letter-spacing: 0.04em; text-transform: none; }
+.np-timing button:hover:not(:disabled) { background: #ffffff1c; color: #fff; }
+.np-timing button:disabled { color: #a8a2b1; }
+.np-timing .np-timing-value:not(:disabled) { color: var(--np-accent); }
+/* A pause in the singing: three dots that fill as it passes and breathe while they wait. */
+.np-instrumental { display: inline-flex; gap: 0.3em; padding: 0.3em 0; transform-origin: left center; }
+.np-instrumental i { width: 0.3em; height: 0.3em; border-radius: 50%; background: var(--lit); opacity: 0.3; }
+.np-instrumental i:nth-child(2) { --i: 1; }
+.np-instrumental i:nth-child(3) { --i: 2; }
+.np-line.active .np-instrumental { animation: np-breathe 2.6s ease-in-out infinite; }
+.np-line.active .np-instrumental i { opacity: clamp(0.3, calc(var(--p, 0) * 3 - var(--i, 0) + 0.3), 1); }
+@keyframes np-breathe { 50% { transform: scale(1.14); } }
 .np-follow { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); white-space: nowrap; display: flex; align-items: center; gap: 8px; border: 1px solid #ffffff26; border-radius: 999px; padding: 9px 15px; background: #302a38ed; backdrop-filter: blur(16px); color: #f5f1fa; font-size: 12px; box-shadow: 0 6px 24px #0006; }
 .now-playing button:focus-visible, .now-playing input:focus-visible { outline: 2px solid var(--np-accent); outline-offset: 4px; }
 .volume-control { display: flex; align-items: center; gap: 5px; min-width: 0; }
@@ -3784,6 +3849,7 @@ details.advanced[open] summary {
 }
 @media (prefers-reduced-motion: reduce) {
   .now-playing, .np-backdrop .art, .np-cover .art { animation: none; }
-  .np-line, .np-line.active { transition: none; transform: none; }
-  .np-line.active .np-word.singing { filter: none; }
+  .np-line, .np-line.active { transition: none; transform: none; filter: none; }
+  .np-line.active .np-word { --edge: 0px; transform: none; }
+  .np-line.active .np-instrumental { animation: none; }
 }
