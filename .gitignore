@@ -21,3 +21,4 @@ output/
 private/
 release-artifacts/
 .playwright-cli/
+.claude/
