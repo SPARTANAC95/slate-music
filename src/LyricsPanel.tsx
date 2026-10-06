@@ -112,7 +112,7 @@ class Stage {
     if (!row) return;
     const lit = (this.lit[index] ??= []);
     const set = (el: HTMLElement | undefined, k: number, progress: number) => {
-      const p = Math.round(progress * 500) / 500;
+      const p = Math.round(progress * 1000) / 1000;
       if (lit[k] === p) return;
       lit[k] = p;
       el?.style.setProperty('--p', String(p));

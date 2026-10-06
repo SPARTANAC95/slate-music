@@ -9,6 +9,8 @@
 - The line being sung rests a little above the middle of the view and the list glides to it; seeking, reading ahead and **Return to current line** work as before. Lyrics are drawn straight to the page each frame, so nothing else in the app is redrawn while they move.
 - Fixed: after a seek or a pause, an update sent just before it could arrive late and flick the player back for a moment. Updates that arrive out of order are now ignored.
 - Fixed: seeking to a line while paused could leave the line before it highlighted.
+- Fixed: after clicking the seek bar, the Left and Right arrow keys moved the song a tenth of a second instead of skipping five seconds.
+- A lyric word longer than the whole line now wraps instead of running off the edge.
 - Fixed: at small window sizes the lyrics list could stop following the window's height.
 - Fixed (development): the dev server watched the native build folder, tens of thousands of files, and could take most of a minute to answer. `npm run preview:lyrics` opens Now Playing in a browser with a stand-in for the audio engine.
 

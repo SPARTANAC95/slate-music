@@ -374,8 +374,12 @@ export default function App() {
       if (typing || dialog || palette || el?.closest('[role="menu"]')) return;
       if (e.code === 'Space' && el?.closest('.np-line, [role="option"]')) return;
       // Sliders and the sort menu keep their own arrow keys (and Space for the menu); every
-      // other shortcut still works after using them.
-      const ownsKeys = type === 'range' || tag === 'SELECT';
+      // other shortcut still works after using them. The seek bar is the exception for Left
+      // and Right: its own step is a tenth of a second, so after clicking it the arrows would
+      // barely move the song instead of skipping five seconds like everywhere else.
+      const seekBar = type === 'range' && el?.getAttribute('aria-label') === 'Playback position';
+      const skips = seekBar && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+      const ownsKeys = (type === 'range' && !skips) || tag === 'SELECT';
       if (ownsKeys && !e.ctrlKey && !e.altKey && e.key.startsWith('Arrow')) return;
       if (tag === 'SELECT' && e.code === 'Space') return;
       if (e.key === 'Escape' && nowPlaying) {

@@ -2814,14 +2814,18 @@ details.advanced[open] summary {
    frame from the song's position, so there is no transition here to lag behind it. */
 .np-word {
   display: inline-block;
-  white-space: pre;
+  /* A word longer than the whole line breaks inside itself rather than running off the edge. */
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   /* Room for letters that reach past their box (j, y, italics), which the fill would crop. */
   margin: -0.14em -0.08em;
   padding: 0.14em 0.08em;
 }
+/* The syllables of one word stay together unless the word is longer than the line. */
 .np-syllables {
   display: inline-block;
-  white-space: nowrap;
+  max-width: 100%;
 }
 .np-line.active .np-word {
   --edge: 0.55em;

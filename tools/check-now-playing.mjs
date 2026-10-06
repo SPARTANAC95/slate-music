@@ -272,7 +272,8 @@ try {
  assert.equal(await page.locator('.np-line:not(.active)').first().evaluate((el) => getComputedStyle(el).filter), 'none');
  assert.equal(await page.locator('.now-playing').evaluate((el) => getComputedStyle(el).animationName), 'none');
  await update({ position: 22.5 });
- assert.equal(await page.locator('.np-line.active.gap').evaluate((el) => el.style.getPropertyValue('--p')), '0.334', 'the dots of a pause light one at a time');
+ const dots = Number(await page.locator('.np-line.active.gap').evaluate((el) => el.style.getPropertyValue('--p')));
+ assert.ok(Math.abs(dots - 1 / 3) < 0.002, 'the dots of a pause light one at a time');
  pass('reduced motion uses discrete word timing and no transforms');
  await page.emulateMedia({ reducedMotion: 'no-preference' });
  await page.waitForFunction(() => document.querySelector('.np-line.active.gap')?.style.getPropertyValue('--p') === '0.5');
