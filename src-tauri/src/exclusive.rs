@@ -53,7 +53,7 @@ impl Support {
         if rates.contains(&native) || rates.is_empty() {
             return native;
         }
-        let family = |r: u32| r % 11025 == 0;
+        let family = |r: u32| r.is_multiple_of(11025);
         let nearest = |list: Vec<u32>| {
             list.into_iter()
                 .min_by_key(|r| (*r as i64 - native as i64).abs())

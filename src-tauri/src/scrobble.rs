@@ -524,7 +524,7 @@ fn now_playing(db: &Database, t: &Track) {
 }
 
 pub enum Event {
-    NowPlaying(Track),
+    NowPlaying(Box<Track>),
     Scrobble(Value),
 }
 struct Play {
@@ -591,7 +591,7 @@ impl Tracker {
         }
         if !p.announced {
             p.announced = true;
-            events.push(Event::NowPlaying(p.track.clone()));
+            events.push(Event::NowPlaying(Box::new(p.track.clone())));
         }
         let needed = (p.track.duration / 2.).min(240.);
         if !p.scrobbled && p.track.duration >= 30. && p.listened >= needed {
@@ -649,7 +649,7 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
             for event in events {
                 match event {
                     Event::NowPlaying(t) => {
-                        let _ = jobs.send(Job::NowPlaying(Box::new(t)));
+                        let _ = jobs.send(Job::NowPlaying(t));
                     }
                     Event::Scrobble(v) => {
                         let _ = db.queue_scrobble(&v);

@@ -1,3 +1,21 @@
+# Validation — 1.1.1
+
+## October 6 lyrics, audit and release checks
+
+Version 1.1.1 was built and run as a native Windows application under a separate application identifier, with a disposable profile and six generated silent FLAC files with generated artwork. The owner's installed copy kept running and was not touched.
+
+| Check | Result |
+|---|---|
+| TypeScript and frontend | 80 tests passed (lyric layout, the playback clock, timing memory, matching, search, lists); TypeScript and Vite production build passed |
+| Browser components | 21 Now Playing checks and 5 selection and filter checks passed in headless Edge with the real components: word fill from source and line timing, a jittery engine (no backward step, within 60 ms), pauses, output delay, the per-song adjustment, lines that share a time stamp, reduced motion, focus and the 880x620 minimum window |
+| Native engine and services | 103 Rust tests passed on Windows; `cargo clippy --all-targets` reports no warnings; formatting checked |
+| Native interface | All 28 scenarios in `tools/qa.mjs` passed with no runtime errors |
+| Native lyrics | All 6 checks in `tools/check-native-lyrics.mjs` passed; lyrics stored under `UNSYNCEDLYRICS` in a FLAC file and a UTF-16 .lrc file were read correctly; the per-device delay, the per-song buttons and the seek bar's arrow keys were exercised in the running app |
+| Lyric timing against the real engine | Sampled every frame at 143 frames a second while playing: the word fill never stepped backwards, and at the moments the engine was asked for its position the lyrics were within 6 ms of it |
+| Restart | Queue, current song, position, volume, favorite and playlist were restored and playback stayed paused; the database was not written while the player sat paused |
+
+Limits. Word times inside line-timed lyrics are estimated from the length of each word, not measured from the recording. The output delay is the one Windows reports (11 ms for the wireless headset used here, which is certainly less than its real delay); wireless devices generally need the per-device Lyrics delay set by ear. Exclusive-mode output delay is calculated from the buffer size and the device's report and was not measured on a physical DAC. Live LRCLIB lookups were not exercised in the app; a manual query showed that its timed lyrics carry line times only. The audit read the lyric path, the playback clock, the engine's commands, the database layer, the scanner's cover handling and the main screens; the Spotify, Last.fm and Discord clients were not re-read after their October 3 review.
+
 # Validation — 1.1.0
 
 ## October 1 review, fixes and release checks

@@ -300,6 +300,23 @@ try {
  await page.getByText('This one is instrumental.', { exact: true }).waitFor();
  pass('plain and instrumental sources have appropriate states');
 
+ // A line and its translation share a time stamp: they are sung, lit and centred as one.
+ await page.evaluate(() => window.fixture.source({ synced: '[00:01]First\n[00:05]Hola mundo\n[00:05]Hello world\n[00:09]Last' }));
+ await page.getByText('Line synced', { exact: true }).waitFor();
+ await update({ position: 5.5 });
+ assert.deepEqual(await page.locator('.np-line.active').allTextContents(), ['Hola mundo', 'Hello world']);
+ assert.deepEqual(await page.locator('.np-line.past').allTextContents(), ['First']);
+ const pair = await page.locator('.np-line.active').evaluateAll((rows) => rows.map((row) => [...row.querySelectorAll('.np-word')].map((el) => Number(el.style.getPropertyValue('--p')))));
+ assert.ok(pair.every((words) => words[0] > 0), 'both lines are lit');
+ const together = await page.locator('.np-lyrics').evaluate((box) => {
+  const rows = [...box.querySelectorAll('.np-line.active')].map((row) => row.getBoundingClientRect()), b = box.getBoundingClientRect();
+  return Math.abs((rows[0].top + rows[1].bottom) / 2 - b.top - b.height * 0.42);
+ });
+ assert.ok(together < 4, 'the pair rests where a single line would');
+ await update({ position: 9.5 });
+ assert.deepEqual(await page.locator('.np-line.active').allTextContents(), ['Last']);
+ pass('lines that share a time stamp are sung together');
+
  for (let i = 0; i < 3; i++) {
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('.now-playing').count(), 0);

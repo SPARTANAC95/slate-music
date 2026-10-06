@@ -67,8 +67,14 @@ export default function CommandPalette({
       ),
     };
   }, [tracks, albums, collections]);
-  // Commands change with playback (Play/Pause and so on), so they are indexed on their own.
-  const commandIndex = useMemo(() => index(commands, (c) => `${c.label} ${c.keywords ?? ''}`), [commands]);
+  // The list of commands is made afresh each time the app redraws (several times a second
+  // while music plays), but it only really changes when a label does (Play becomes Pause).
+  // Results are found again only then, and a chosen command is run in its latest form.
+  const labels = commands.map((c) => c.label).join('\n');
+  const commandIndex = useMemo(
+    () => index(commands, (c) => `${c.label} ${c.keywords ?? ''}`),
+    [labels], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const indexes = { ...library, commands: commandIndex };
   const groups = useMemo(() => {
     if (!query.trim())
@@ -81,7 +87,7 @@ export default function CommandPalette({
       { title: 'Actions', items: search(query, indexes.commands, 5).map((command) => ({ kind: 'command' as const, key: command.label, command })) },
     ];
     return out.filter((g) => g.items.length);
-  }, [query, library, commandIndex, commands]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [query, library, commandIndex]); // eslint-disable-line react-hooks/exhaustive-deps
   const flat = groups.flatMap((g) => g.items);
   useEffect(() => setSelected(0), [query]);
   useEffect(() => {
@@ -92,7 +98,7 @@ export default function CommandPalette({
   function run(r: Result | undefined) {
     if (!r) return;
     onClose();
-    if (r.kind === 'command') r.command.run();
+    if (r.kind === 'command') (commands.find((c) => c.label === r.command.label) ?? r.command).run();
     else if (r.kind === 'artist') onArtist(r.name);
     else if (r.kind === 'album') onAlbum(r.album);
     else if (r.kind === 'song') onSong(r.track);
@@ -128,6 +134,9 @@ export default function CommandPalette({
                 e.preventDefault();
                 e.stopPropagation();
                 onClose();
+              } else if (e.key === 'Tab') {
+                // Results are chosen with the arrow keys; Tab would wander off behind the bar.
+                e.preventDefault();
               }
             }}
           />

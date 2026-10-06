@@ -412,7 +412,7 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
                     }
                 }
             }
-            if status.processed % 12 == 0 {
+            if status.processed.is_multiple_of(12) {
                 progress(status.clone());
             }
         }

@@ -50,23 +50,66 @@ fn answer(text: String, source: &str) -> Value {
     }
 }
 
+/// The text of a lyrics file: UTF-8, or UTF-16 when the file starts with that encoding's
+/// byte-order mark (what Notepad saves as "Unicode").
+fn decode(bytes: &[u8]) -> String {
+    let utf16 = |unit: fn([u8; 2]) -> u16| {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| unit([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xff, 0xfe, ..] => utf16(u16::from_le_bytes),
+        [0xfe, 0xff, ..] => utf16(u16::from_be_bytes),
+        _ => String::from_utf8_lossy(bytes)
+            .trim_start_matches('\u{feff}')
+            .to_string(),
+    }
+}
+/// Tag fields that hold lyrics besides the standard one: Mp3tag, foobar2000 and MusicBee write
+/// these to FLAC and Ogg files.
+const LYRIC_FIELDS: [&str; 4] = [
+    "UNSYNCEDLYRICS",
+    "UNSYNCED LYRICS",
+    "SYNCEDLYRICS",
+    "SYNCED LYRICS",
+];
+/// Of the lyrics a file holds, the ones to show: timed lyrics before plain text.
+fn best_text<'a>(found: &[&'a str]) -> Option<&'a str> {
+    let found: Vec<&str> = found
+        .iter()
+        .copied()
+        .filter(|text| !text.trim().is_empty())
+        .collect();
+    found
+        .iter()
+        .find(|text| is_synced(text))
+        .or(found.first())
+        .copied()
+}
 /// Lyrics already on this computer: an .lrc file beside the song, then the file's own tags.
 fn local(track: &Track) -> Option<Value> {
     let path = Path::new(&track.path);
     if let Ok(bytes) = std::fs::read(path.with_extension("lrc")) {
-        let text = String::from_utf8_lossy(&bytes)
-            .trim_start_matches('\u{feff}')
-            .to_string();
+        let text = decode(&bytes);
         if !text.trim().is_empty() {
             return Some(answer(text, "file"));
         }
     }
     let tagged = lofty::read_from_path(path).ok()?;
-    let text = tagged
-        .tags()
-        .iter()
-        .find_map(|tag| tag.get_string(&ItemKey::Lyrics).map(str::to_owned))?;
-    (!text.trim().is_empty()).then(|| answer(text, "tag"))
+    let mut found: Vec<&str> = vec![];
+    for tag in tagged.tags() {
+        found.extend(tag.get_string(&ItemKey::Lyrics));
+        found.extend(tag.items().filter_map(|item| match item.key() {
+            ItemKey::Unknown(name) if LYRIC_FIELDS.iter().any(|f| f.eq_ignore_ascii_case(name)) => {
+                item.value().text()
+            }
+            _ => None,
+        }));
+    }
+    best_text(&found).map(|text| answer(text.to_owned(), "tag"))
 }
 
 fn cache_key(track: &Track) -> String {
@@ -198,6 +241,29 @@ mod tests {
             assert_eq!(result["source"], source);
             assert!(result["plain"].is_null());
         }
+    }
+    #[test]
+    fn reads_lyric_files_saved_as_utf16_and_prefers_timed_lyrics_among_tags() {
+        let text = "[00:01.00]Caf\u{e9} \u{5149}\n[00:03.00]World";
+        let units = |unit: fn(u16) -> [u8; 2], mark: [u8; 2]| -> Vec<u8> {
+            mark.into_iter()
+                .chain(text.encode_utf16().flat_map(unit))
+                .collect()
+        };
+        assert_eq!(decode(&units(u16::to_le_bytes, [0xff, 0xfe])), text);
+        assert_eq!(decode(&units(u16::to_be_bytes, [0xfe, 0xff])), text);
+        assert_eq!(decode(format!("\u{feff}{text}").as_bytes()), text);
+        assert_eq!(decode(text.as_bytes()), text);
+        // A lone trailing byte or an empty file is not a reason to fail.
+        assert_eq!(decode(&[0xff, 0xfe, 0x41]), "");
+        assert_eq!(decode(&[]), "");
+
+        assert_eq!(
+            best_text(&["  ", "Plain words", "[00:01]Timed"]),
+            Some("[00:01]Timed")
+        );
+        assert_eq!(best_text(&["", "Plain words", "More"]), Some("Plain words"));
+        assert_eq!(best_text(&["", " \n"]), None);
     }
     #[test]
     fn only_treats_complete_supported_timestamps_as_synced() {

@@ -537,7 +537,7 @@ fn device_changed(
 }
 /// Whether the device playing (`shown`) is no longer among the devices Windows offers.
 fn device_gone(shown: Option<&OutputInfo>, names: &[String]) -> bool {
-    shown.is_some_and(|s| !names.iter().any(|n| *n == s.device))
+    shown.is_some_and(|s| !names.contains(&s.device))
 }
 /// Where sound goes: Windows' shared mixer, or the device to ourselves (exclusive mode).
 /// Holding one keeps it playing; dropping it stops it, so its parts are never read.
@@ -581,6 +581,8 @@ pub struct Engine {
     pub render: Arc<Mutex<RenderState>>,
     pub db: Arc<Database>,
     command_lock: Mutex<()>,
+    /// The session as last written to the database, so an unchanged one is not written again.
+    saved: Mutex<Option<serde_json::Value>>,
 }
 impl Engine {
     pub fn new(db: Arc<Database>) -> Arc<Self> {
@@ -640,6 +642,7 @@ impl Engine {
             })),
             db,
             command_lock: Mutex::new(()),
+            saved: Mutex::new(None),
         })
     }
     pub fn snapshot(&self) -> Playback {
@@ -659,10 +662,20 @@ impl Engine {
             transition: r.transition,
         }
     }
+    /// Remembers the session for the next start. Called every couple of seconds and after each
+    /// command; the database is only written when something changed, so a paused or idle
+    /// player leaves the disk alone.
     pub fn save(&self) {
         let mut s = self.snapshot();
         s.playing = false;
-        let _ = self.db.set("session", &serde_json::to_value(s).unwrap());
+        // When the snapshot was taken and what the output reports are not part of the session.
+        s.at = 0;
+        s.output_latency = 0.;
+        let session = serde_json::to_value(s).unwrap();
+        let mut saved = self.saved.lock().unwrap();
+        if saved.as_ref() != Some(&session) && self.db.set("session", &session).is_ok() {
+            *saved = Some(session);
+        }
     }
     /// Applies changed sound settings to the playing song and prepares the next one again.
     fn reshape(&self) {
@@ -1589,7 +1602,7 @@ impl Engine {
                         }
                     }
                 }
-                if tick % 3 == 0 {
+                if tick.is_multiple_of(3) {
                     let _ = app.emit("playback", &s);
                     if let Some(m) = media.as_mut() {
                         let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f64(
@@ -1602,7 +1615,7 @@ impl Engine {
                         });
                     }
                 }
-                if tick % 25 == 0 {
+                if tick.is_multiple_of(25) {
                     engine.save();
                 }
             }
@@ -1991,6 +2004,27 @@ mod tests {
         assert!(v[800] > 0.25 && v[800] < 0.5);
         assert_eq!(r.transition, 1);
         assert!(r.snapshot().position > 0.005);
+    }
+    #[test]
+    fn an_unchanged_session_is_not_written_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let engine = Engine::new(db.clone());
+        engine.save();
+        let first = db.get("session");
+        assert_eq!(
+            first["at"], 0,
+            "when a snapshot was taken is not part of the session"
+        );
+        // Something else overwrites the row; an unchanged session leaves it alone...
+        db.set("session", &serde_json::json!({"marker": true}))
+            .unwrap();
+        engine.save();
+        assert_eq!(db.get("session")["marker"], true);
+        // ...and a change is written.
+        engine.render.lock().unwrap().state.volume = 0.25;
+        engine.save();
+        assert_eq!(db.get("session")["volume"], 0.25);
     }
     #[test]
     fn pause_preserves_position_and_repeat() {

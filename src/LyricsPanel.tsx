@@ -47,6 +47,8 @@ class Stage {
   private words: (HTMLElement[] | undefined)[] = [];
   private lit: (number[] | undefined)[] = [];
   private active = -2;
+  /** The first row lit with the active one: lines sharing a time stamp are sung together. */
+  private first = -2;
   private glide: { from: number; to: number; start: number } | null = null;
   private frame = 0;
   private drawn = 0;
@@ -80,8 +82,8 @@ class Stage {
       this.activate(active);
       this.aim(now, glide);
     }
-    const line = this.lines[active];
-    if (line) this.light(active, line, time);
+    // A line and its translation carry the same time stamp: both are lit.
+    for (let i = Math.max(0, this.first); i <= active; i++) this.light(i, this.lines[i], time);
     if (this.glide) {
       const t = (now - this.glide.start) / GLIDE_MS;
       this.box.scrollTop = t >= 1 ? this.glide.to : this.glide.from + (this.glide.to - this.glide.from) * ease(Math.max(0, t));
@@ -98,13 +100,17 @@ class Stage {
     this.draw(now);
   };
   private activate(active: number) {
+    let first = active;
+    while (first > 0 && this.lines[first - 1].time === this.lines[first].time) first -= 1;
     this.active = active;
+    this.first = first;
     this.rows.forEach((row, i) => {
-      row.classList.toggle('active', i === active);
-      row.classList.toggle('past', i < active);
-      if (i === active) row.setAttribute('aria-current', 'true');
+      const sung = i >= first && i <= active;
+      row.classList.toggle('active', sung);
+      row.classList.toggle('past', i < first);
+      if (sung) row.setAttribute('aria-current', 'true');
       else row.removeAttribute('aria-current');
-      row.dataset.far = String(Math.min(FAR, Math.abs(i - active)));
+      row.dataset.far = String(Math.min(FAR, sung ? 0 : i < first ? first - i : i - active));
     });
   }
   private light(index: number, line: ShownLine, time: number) {
@@ -133,9 +139,11 @@ class Stage {
   aim(now: number, glide: boolean) {
     if (!this.follow) return;
     const row = this.rows[this.active];
+    const from = this.rows[this.first] ?? row;
+    // The middle of what is being sung (one line, or a line with its translation).
     const top = row
       ? Math.max(0, Math.min(this.box.scrollHeight - this.box.clientHeight,
-          row.offsetTop + row.offsetHeight / 2 - this.box.clientHeight * REST))
+          (from.offsetTop + row.offsetTop + row.offsetHeight) / 2 - this.box.clientHeight * REST))
       : 0;
     if (glide && !this.reduced && Math.abs(top - this.box.scrollTop) > 1) {
       this.glide = { from: this.box.scrollTop, to: top, start: now };

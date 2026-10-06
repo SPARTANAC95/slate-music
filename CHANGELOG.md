@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 — 2026-10-06
 
 - **Lyrics light up word by word on every synced song.** Each word fills from the left as it is sung, with a soft edge, and the line being sung is large and sharp while the others step back. Songs with word times in their lyrics (Enhanced LRC) use them exactly; songs whose lyrics only time each line, which is what LRCLIB provides, pace the words evenly inside the line's real start and end. The caption says which you are getting.
 - **Lyrics keep time with what you hear.** The lyric clock now runs smoothly between the engine's updates instead of restarting from each one (which made the fill wobble), allows for the time an update takes to arrive, and trails the engine by the delay Windows reports for your output device. Measured against a simulated engine with up to 80 ms of jitter: about 2 ms off on average, never a step backwards.
@@ -11,6 +11,11 @@
 - Fixed: seeking to a line while paused could leave the line before it highlighted.
 - Fixed: after clicking the seek bar, the Left and Right arrow keys moved the song a tenth of a second instead of skipping five seconds.
 - A lyric word longer than the whole line now wraps instead of running off the edge.
+- **More lyrics found on your PC:** lyrics that Mp3tag, foobar2000 and MusicBee store in FLAC and Ogg files (`UNSYNCEDLYRICS`, `SYNCEDLYRICS`) are read, timed lyrics are preferred when a file holds both, and .lrc files saved as UTF-16 ("Unicode" in Notepad) no longer show as garbled text.
+- **Lyrics with a translation:** two lines that share a time stamp are lit and centred together, instead of the first being dimmed as already sung.
+- Fixed: Shuffle from the command bar or an artist's page always started with the list's first song.
+- The command bar no longer searches the library again several times a second while music plays, and Tab stays inside it.
+- The listening session is written to disk only when it changes, not every two seconds while the player sits paused or idle.
 - Fixed: at small window sizes the lyrics list could stop following the window's height.
 - Fixed (development): the dev server watched the native build folder, tens of thousands of files, and could take most of a minute to answer. `npm run preview:lyrics` opens Now Playing in a browser with a stand-in for the audio engine.
 

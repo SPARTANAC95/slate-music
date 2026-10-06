@@ -454,6 +454,11 @@ export default function App() {
   const trackMap = useMemo(() => new Map(tracks.map((t) => [t.id, t])), [tracks]);
   const albums = useMemo(() => albumsFrom(tracks), [tracks]);
   const duplicateIds = useMemo(() => duplicates(tracks), [tracks]);
+  // The Albums page, in order. Worked out once, not on each of the engine's updates.
+  const albumsByArtist = useMemo(
+    () => [...albums].sort((a, b) => a.artist.localeCompare(b.artist) || a.year - b.year),
+    [albums],
+  );
   const current = pb?.currentId ? trackMap.get(pb.currentId) : null;
   const accent = useArtColor(current?.artwork);
   const album = albums.find((a) => a.key === selectedAlbum),
@@ -844,10 +849,7 @@ export default function App() {
       label: 'Shuffle your library',
       icon: <Shuffle size={16} />,
       keywords: 'random play all',
-      run: async () => {
-        await command('shuffle', true);
-        playList(tracks.filter((t) => !t.missing));
-      },
+      run: () => shuffleList(tracks),
     },
     { label: 'Open Now Playing', hint: 'Ctrl+L', icon: <Expand size={16} />, keywords: 'lyrics full screen', run: () => setNowPlaying(true) },
     ...nav.map(({ name, icon: Icon }) => ({
@@ -924,6 +926,13 @@ export default function App() {
       return;
     }
     await command('queue', { ids: list.map((t) => t.id), index });
+  }
+  /** Turns shuffle on and plays the list from a song picked at random. The chosen song plays
+   * first, so without this every shuffle would open with the list's first song. */
+  async function shuffleList(list: Track[]) {
+    const songs = list.filter((t) => !t.missing);
+    await command('shuffle', true);
+    await playList(songs, Math.floor(Math.random() * songs.length));
   }
   async function favorite(t: Track) {
     await task(async () => {
@@ -1634,13 +1643,7 @@ export default function App() {
                   </p>
                   <button
                     className="primary hero-button"
-                    onClick={async () => {
-                      const songs = tracks.filter((t) => !t.missing);
-                      await command('shuffle', true);
-                      // The chosen song plays first, so choose that at random too; otherwise
-                      // every shuffle would open with the library's first song.
-                      playList(songs, Math.floor(Math.random() * songs.length));
-                    }}
+                    onClick={() => shuffleList(tracks)}
                   >
                     <Shuffle size={16} />
                     Shuffle your library
@@ -1780,9 +1783,7 @@ export default function App() {
                 </>
               )}
               <div className="album-grid">
-                {[...albums]
-                  .sort((a, b) => a.artist.localeCompare(b.artist) || a.year - b.year)
-                  .map(albumCard)}
+                {albumsByArtist.map(albumCard)}
               </div>
             </>
           ) : page === 'Artists' ? (
@@ -1921,10 +1922,7 @@ export default function App() {
                 lookup={!!settings.lookupArtists}
                 fallbackArt={artistStats.get(selectedArtist)?.artwork}
                 onPlay={() => playList(shownTracks.filter((t) => !t.missing))}
-                onShuffle={async () => {
-                  await command('shuffle', true);
-                  playList(shownTracks.filter((t) => !t.missing));
-                }}
+                onShuffle={() => shuffleList(shownTracks)}
               />
               <div className="album-grid artist-albums">
                 {albums.filter((a) => a.artist === selectedArtist).map(albumCard)}
