@@ -13,6 +13,8 @@ const browser = await chromium.connectOverCDP(process.env.SLATE_CDP || 'http://1
 const page = browser.contexts()[0].pages().find((p) => p.url().includes('tauri.localhost') && !p.url().includes('mini'));
 assert(page, 'Native WebView2 must be running');
 page.setDefaultTimeout(10000);
+// These checks follow the fill of every line, estimated ones included.
+await page.evaluate(() => localStorage.setItem('slate-music.lyricTiming', JSON.stringify({ ...JSON.parse(localStorage.getItem('slate-music.lyricTiming') || '{}'), words: 'on' })));
 const invoke = (command, args = {}) => page.evaluate(({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args), { command, args });
 const command = (action, value = null) => invoke('playback', { action, value });
 const snapshot = () => invoke('snapshot');

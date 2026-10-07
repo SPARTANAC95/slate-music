@@ -12,7 +12,7 @@
 Slate Music gives your albums room to breathe. Browse the artwork, find the song you forgot you loved, and build a listening session that is still there when you return.
 
 - **Your collection, organized.** Albums, artists, songs, playlists, favorites, recently played and an editable queue. Sortable columns, multidisc ordering, and a command bar (Ctrl+K) whose search forgives typos.
-- **Now Playing.** A full-window view with a large, sharp cover, colours taken from it, and synced lyrics that light up word by word, from an .lrc file, the file's own tags or LRCLIB, a free lyrics database. Click a line to jump to it.
+- **Now Playing.** A full-window view with a large, sharp cover, colours taken from it, and synced lyrics, lit word by word where the lyrics carry word times, from an .lrc file, the file's own tags or LRCLIB, a free lyrics database. Click a line to jump to it.
 - **Sound you can trust.** Gapless playback, smart crossfades that skip silence and never fade within an album, loudness levelling (EBU R128 or ReplayGain) without clipping, a 10-band equalizer per output device, and an **exclusive mode** that sends each song bit-perfect at its own sample rate. The signal path shows every step.
 - **Follows your headphones.** Choose an output device or follow Windows' default; plug headphones in or reconnect them and the music goes with them.
 - **Your listening, looked after.** Home shelves (Jump back in, Recently added, On this day, Forgotten favourites), smart playlists built from rules, and **Your year**: plays, minutes, streaks and your top songs, artists and albums.

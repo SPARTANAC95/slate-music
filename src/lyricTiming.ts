@@ -11,6 +11,10 @@ export const MOST = 5;
  * where the lyric source timed the words itself ('exact'), or as a whole line ('off'). */
 export type WordMode = 'on' | 'exact' | 'off';
 export const WORD_MODES: readonly WordMode[] = ['on', 'exact', 'off'];
+/** Until you choose: word by word only where it is exact. Word times estimated inside a
+ * line-timed line land about a third of a second from the singing on average, which reads as
+ * slightly wrong; a line lit whole at the right moment does not. */
+const USUAL: WordMode = 'exact';
 interface Saved {
   songs: Record<string, number>;
   devices: Record<string, number>;
@@ -33,10 +37,10 @@ function load(): Saved {
     saved = {
       songs: numbers(stored.songs),
       devices: numbers(stored.devices),
-      words: WORD_MODES.includes(stored.words) ? stored.words : 'on',
+      words: WORD_MODES.includes(stored.words) ? stored.words : USUAL,
     };
   } catch {
-    saved = { songs: {}, devices: {}, words: 'on' };
+    saved = { songs: {}, devices: {}, words: USUAL };
   }
   return saved;
 }

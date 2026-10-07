@@ -61,7 +61,7 @@ function sweepAt(words: ShownWord[], placed: Placed[], time: number): number {
 }
 const MODE_NAMES: Record<WordMode, string> = { on: 'On', exact: 'Exact only', off: 'Off' };
 const MODE_HINTS: Record<WordMode, string> = {
-  on: 'Light every line word by word',
+  on: 'Light every line word by word, estimating word times where the lyric source has none',
   exact: 'Word by word only where the lyric source timed each word',
   off: 'Light each line as a whole',
 };
@@ -434,7 +434,8 @@ export default function LyricsPanel({ trackId, pb, lookupLyrics, onSeek }: {
           <small>
             {!estimated ? 'This source timed every word.'
               : sourced ? 'This source timed the words of some lines; in the others, word times are estimated from the song’s pace.'
-              : 'This source times each line. Word times inside a line are estimated from the song’s pace.'}
+              : mode === 'on' ? 'This source times each line. Word times inside a line are estimated from the song’s pace.'
+              : 'This source times each line, so each line lights as a whole. On estimates the words inside it.'}
           </small>
         </div>}
       </div>}

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Word by word only where it is exact, unless you ask.** Lyrics that only time each line now light the line being sung as a whole; lyrics with their own word times still light word by word. Estimated word timing inside line-timed lines remains available: **Lyrics options → Word by word → On**. If you had already chosen a setting there, it is kept.
+
 ## 1.1.3 — 2026-10-07
 
 - **Fixed: a question mark instead of the cover on Discord.** 1.1.2 took covers from the Cover Art Archive, whose pictures do not always load, and Discord shows a question mark for a picture it cannot fetch. Covers now come from Apple's iTunes catalogue first, then Deezer's, then the Cover Art Archive, and one is used only after its picture has actually loaded. Albums looked up by 1.1.2 are looked up again. Editions are recognised too ("Bad 25th Anniversary" finds the cover of "Bad").

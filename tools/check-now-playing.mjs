@@ -87,6 +87,18 @@ try {
  const active = () => page.locator('.np-line.active').textContent();
  const update = (next) => page.evaluate((value) => window.fixture.update(value), next);
  assert.equal(await active(), 'First');
+ // Until you choose, words light one by one only where the lyric source timed them: these
+ // lyrics time each line, so the line being sung is lit whole. The rest of the checks use On.
+ await update({ position: 2 });
+ assert.deepEqual(await page.locator('.np-line.active .np-word').evaluateAll((els) => els.map((el) => el.style.getPropertyValue('--p'))), ['1']);
+ await page.getByRole('button', { name: 'Lyrics options' }).click();
+ const wordByWord = page.getByRole('radiogroup', { name: 'Word by word' });
+ assert.equal(await wordByWord.getByRole('radio', { name: 'Exact only', exact: true }).getAttribute('aria-checked'), 'true');
+ await wordByWord.getByRole('radio', { name: 'On', exact: true }).click();
+ assert.notEqual(await page.locator('.np-line.active .np-word').first().evaluate((el) => el.style.getPropertyValue('--p')), '1');
+ await page.keyboard.press('Escape');
+ await update({ position: 1 });
+ pass('estimated word timing is off until asked for');
  await update({ position: 4.9 });
  assert.equal(await active(), 'First', 'never anticipate a line timestamp by 150 ms');
  pass('no premature line highlighting');
