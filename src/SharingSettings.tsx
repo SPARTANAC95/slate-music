@@ -7,6 +7,10 @@ import type { Settings } from './types';
 
 interface LastfmStatus {
   configured: boolean;
+  /** This build carries Slate Music's own Last.fm API account: nothing to set up. */
+  builtIn: boolean;
+  /** An API account of the user's own is in use instead. */
+  own: boolean;
   connected: boolean;
   user: string | null;
   waiting: boolean;
@@ -143,14 +147,17 @@ export default function SharingSettings({
                 <ExternalLink size={14} />
                 Create an API account
               </button>
-              {editing && <button onClick={() => setEditing(false)}>Cancel</button>}
+              {(editing || lastfm.builtIn) && lastfm.configured && (
+                <button onClick={() => setEditing(false)}>Cancel</button>
+              )}
             </div>
           </>
         ) : lastfm && !lastfm.connected ? (
           <>
             <p>
-              Your API account is saved. Now connect your profile: Last.fm opens in your browser;
-              choose <strong>Yes, allow access</strong> there, then come back here.
+              {lastfm.own && 'Your API account is saved. Now connect your profile: '}
+              Last.fm opens in your browser; choose <strong>Yes, allow access</strong> there, then
+              come back here.
             </p>
             <div className="button-row">
               <button
@@ -165,8 +172,16 @@ export default function SharingSettings({
               >
                 {lastfm.waiting ? 'Waiting for you to allow access on Last.fm…' : 'Connect Last.fm'}
               </button>
-              <button onClick={() => setEditing(true)}>Change API key</button>
-              <button onClick={() => run('lastfm', () => invoke('lastfm_forget'))}>Remove</button>
+              {lastfm.own ? (
+                <>
+                  <button onClick={() => setEditing(true)}>Change API key</button>
+                  <button onClick={() => run('lastfm', () => invoke('lastfm_forget'))}>
+                    {lastfm.builtIn ? 'Use Slate Music’s' : 'Remove'}
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => setEditing(true)}>Use my own API account</button>
+              )}
             </div>
           </>
         ) : (
@@ -201,7 +216,7 @@ export default function SharingSettings({
         {lastfm?.problem && <p className="inline-error">{lastfm.problem}</p>}
         {problem('lastfm')}
         <p className="fine-print">
-          The shared secret and sign-in are encrypted for your Windows account. Only the artist,
+          Your sign-in is encrypted for your Windows account. Only the artist,
           title, album, length and when you listened are sent to Last.fm.
         </p>
       </section>
@@ -237,7 +252,7 @@ export default function SharingSettings({
           description={
             settings.discordCovers === false
               ? 'Off. Discord shows the Slate Music icon beside the song.'
-              : 'Finds the cover on MusicBrainz and the Cover Art Archive; the album and artist name are sent. It can differ from the cover in your files.'
+              : 'Finds the cover in Apple’s iTunes catalogue, Deezer’s or the Cover Art Archive; the album and artist name are sent. It can differ from the cover in your files.'
           }
           checked={settings.discordCovers !== false}
           disabled={!settings.discordPresence}

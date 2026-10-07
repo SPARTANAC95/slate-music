@@ -1,7 +1,9 @@
-//! Last.fm scrobbling with the user's own Last.fm API account. A song is scrobbled once it has
-//! played for half its length or four minutes (Last.fm's rule; songs under 30 seconds never
-//! are), and "now playing" is sent when it starts. Scrobbles wait in the database while offline.
-//! The API secret and session key are kept with Windows DPAPI, like the Spotify sign-in.
+//! Last.fm scrobbling. Released builds carry Slate Music's own Last.fm API account, so all a
+//! listener does is allow Slate Music on Last.fm; an API account of their own can be used
+//! instead (and is needed in builds made without Slate Music's). A song is scrobbled once it
+//! has played for half its length or four minutes (Last.fm's rule; songs under 30 seconds
+//! never are), and "now playing" is sent when it starts. Scrobbles wait in the database while
+//! offline. The sign-in is kept with Windows DPAPI, like the Spotify sign-in.
 use crate::db::{err, now, Database, Result, Track};
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
@@ -47,25 +49,65 @@ static FILE_LOCK: Mutex<()> = Mutex::new(());
 fn problem(message: Option<String>) {
     *PROBLEM.lock().unwrap() = message;
 }
+/// Slate Music's own Last.fm API account (key, shared secret), given to release builds through
+/// SLATE_LASTFM_KEY and SLATE_LASTFM_SECRET. Like any desktop scrobbler's, they can be read out
+/// of the program; they identify the app to Last.fm and give no access to anyone's profile.
+fn built_in() -> Option<(String, String)> {
+    #[cfg(test)]
+    if let Some(pair) = tests::BUILT_IN.with(|b| b.borrow().clone()) {
+        return Some(pair);
+    }
+    match (
+        option_env!("SLATE_LASTFM_KEY"),
+        option_env!("SLATE_LASTFM_SECRET"),
+    ) {
+        (Some(key), Some(secret)) if looks_like_key(key) && looks_like_key(secret) => {
+            Some((key.into(), secret.into()))
+        }
+        _ => None,
+    }
+}
+/// The API key the user saved for an account of their own.
+fn own_key(db: &Database) -> Option<String> {
+    db.get("lastfm_api_key")
+        .as_str()
+        .filter(|k| !k.is_empty())
+        .map(str::to_owned)
+}
+/// The saved secret and sign-in. With Slate Music's own account the secret is not written to
+/// the file (it is left empty there), so a release that changes it changes it for everyone.
 fn load(db: &Database) -> Option<Secrets> {
-    let bytes = std::fs::read(db.directory.join(FILE)).ok()?;
+    let ours = || built_in().filter(|_| own_key(db).is_none());
+    let Ok(bytes) = std::fs::read(db.directory.join(FILE)) else {
+        // Nothing saved: Slate Music's account, not signed in yet.
+        return ours().map(|(_, secret)| Secrets {
+            secret,
+            ..Default::default()
+        });
+    };
     let plain = crate::spotify::protect(&bytes, true).ok()?;
-    serde_json::from_slice(&plain).ok()
+    let mut saved: Secrets = serde_json::from_slice(&plain).ok()?;
+    if saved.secret.is_empty() {
+        saved.secret = ours()?.1;
+    }
+    Some(saved)
 }
 /// Writes the sign-in to a temporary file first, so a crash never leaves half a file.
 fn save(db: &Database, s: &Secrets) -> Result<()> {
-    let plain = serde_json::to_string(s).map_err(err)?;
+    let mut s = s.clone();
+    if own_key(db).is_none() && built_in().is_some_and(|(_, secret)| secret == s.secret) {
+        s.secret.clear();
+    }
+    let plain = serde_json::to_string(&s).map_err(err)?;
     let data = crate::spotify::protect(plain.as_bytes(), false)?;
     let path = db.directory.join(FILE);
     let temporary = path.with_extension("dpapi.tmp");
     std::fs::write(&temporary, data).map_err(err)?;
     std::fs::rename(&temporary, &path).map_err(err)
 }
+/// The API key in use: the user's own, or else Slate Music's.
 fn api_key(db: &Database) -> Option<String> {
-    db.get("lastfm_api_key")
-        .as_str()
-        .filter(|k| !k.is_empty())
-        .map(str::to_owned)
+    own_key(db).or_else(|| built_in().map(|(key, _)| key))
 }
 fn enabled(db: &Database) -> bool {
     db.get("settings")["scrobble"].as_bool() == Some(true)
@@ -153,6 +195,10 @@ pub fn status(db: &Database) -> Value {
     let secrets = load(db);
     json!({
         "configured": api_key(db).is_some() && secrets.is_some(),
+        // Whether this build can scrobble with nothing set up, and whether the user's own
+        // API account is in use instead.
+        "builtIn": built_in().is_some(),
+        "own": own_key(db).is_some(),
         "connected": secrets.as_ref().is_some_and(|s| s.session.is_some()),
         "user": secrets.and_then(|s| s.user),
         "waiting": *WAITING.lock().unwrap(),
@@ -346,7 +392,8 @@ pub fn disconnect(db: &Database) -> Result<()> {
     problem(None);
     Ok(())
 }
-/// Removes the API key, secret and sign-in, and forgets scrobbles still waiting to be sent.
+/// Removes the user's API key, secret and sign-in, and forgets scrobbles still waiting to be
+/// sent. Where Slate Music has its own account, that is what is used afterwards.
 pub fn forget(db: &Database) -> Result<()> {
     let _file = FILE_LOCK.lock().unwrap();
     SIGN_IN.fetch_add(1, Ordering::SeqCst);
@@ -671,9 +718,75 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    thread_local! {
+        /// Stands in for Slate Music's own API account on the thread of the test that sets it.
+        pub static BUILT_IN: std::cell::RefCell<Option<(String, String)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    /// The sign-in state (waiting, the attempt counter) is shared by the whole program, so
+    /// tests that sign in or out take turns.
+    static SIGN_IN_TESTS: Mutex<()> = Mutex::new(());
+    fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        SIGN_IN_TESTS.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    #[cfg(windows)]
+    #[test]
+    fn slate_musics_own_account_needs_nothing_set_up() {
+        let _turn = one_at_a_time();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        // A build without it: the user's own API account is asked for.
+        assert_eq!(status(&db)["configured"], false);
+        assert_eq!(status(&db)["builtIn"], false);
+        BUILT_IN.with(|b| *b.borrow_mut() = Some(("1".repeat(32), "2".repeat(32))));
+        let s = status(&db);
+        assert_eq!(
+            (&s["configured"], &s["builtIn"], &s["own"], &s["connected"]),
+            (&json!(true), &json!(true), &json!(false), &json!(false))
+        );
+        assert_eq!(api_key(&db), Some("1".repeat(32)));
+        // Signing in keeps the session, and never writes Slate Music's secret to the file.
+        let mut signed_in = load(&db).unwrap();
+        assert_eq!(signed_in.secret, "2".repeat(32));
+        signed_in.session = Some("session".into());
+        signed_in.user = Some("listener".into());
+        save(&db, &signed_in).unwrap();
+        let file = std::fs::read(db.directory.join(FILE)).unwrap();
+        let plain = crate::spotify::protect(&file, true).unwrap();
+        assert!(!String::from_utf8_lossy(&plain).contains(&"2".repeat(32)));
+        assert_eq!(status(&db)["user"], "listener");
+        // A later release with another secret is used at once, signed in as before.
+        BUILT_IN.with(|b| *b.borrow_mut() = Some(("1".repeat(32), "3".repeat(32))));
+        assert_eq!(load(&db).unwrap().secret, "3".repeat(32));
+        assert_eq!(load(&db).unwrap().session.as_deref(), Some("session"));
+        // An API account of the user's own takes over, and Remove goes back to Slate Music's.
+        setup_with_validation(&db, &"a".repeat(32), &"b".repeat(32), |_, _| Ok(())).unwrap();
+        let s = status(&db);
+        assert_eq!((&s["own"], &s["connected"]), (&json!(true), &json!(false)));
+        assert_eq!(api_key(&db), Some("a".repeat(32)));
+        assert_eq!(load(&db).unwrap().secret, "b".repeat(32));
+        forget(&db).unwrap();
+        let s = status(&db);
+        assert_eq!(
+            (&s["configured"], &s["own"], &s["connected"]),
+            (&json!(true), &json!(false), &json!(false))
+        );
+        assert_eq!(api_key(&db), Some("1".repeat(32)));
+        // Signing out keeps Slate Music's account ready for the next sign-in.
+        signed_in.secret = load(&db).unwrap().secret;
+        save(&db, &signed_in).unwrap();
+        assert_eq!(status(&db)["connected"], true);
+        disconnect(&db).unwrap();
+        assert_eq!(status(&db)["connected"], false);
+        assert_eq!(status(&db)["configured"], true);
+        BUILT_IN.with(|b| *b.borrow_mut() = None);
+        // A saved sign-in without a secret is useless in a build without the account.
+        assert!(load(&db).is_none());
+    }
     #[cfg(windows)]
     #[test]
     fn token_retrieval_obeys_cancellation_and_newer_sign_ins() {
+        let _turn = one_at_a_time();
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path()).unwrap();
         let configure = || {

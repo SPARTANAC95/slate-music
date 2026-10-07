@@ -6,6 +6,7 @@ The application and release use the version in `package.json`, `src-tauri/Cargo.
 
 - `TAURI_SIGNING_PRIVATE_KEY`: new Slate Music updater private key, stored only in GitHub encrypted Actions secrets and a protected local backup.
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: only required for a password-protected key.
+- `LASTFM_API_KEY` and `LASTFM_SHARED_SECRET`: Slate Music's own Last.fm API account (create one at https://www.last.fm/api/account/create). With them the released app scrobbles after one "Connect Last.fm" click; without them it asks each user for an API account of their own. Like any desktop scrobbler's, they end up inside the installed program, so they are not secret from a determined reader; they identify the app to Last.fm and give no access to anyone's profile. If Last.fm ever suspends them, replace both and release again: installed copies pick up the new pair with the update.
 
 The public counterpart is embedded in `tauri.conf.json`. Never casually regenerate or replace it: installed versions must trust the key that signs future updates. This key does not establish a Windows Authenticode publisher identity. To eliminate unknown-publisher prompts, the owner must separately supply an appropriate code-signing certificate/service and configure the bundle signing step.
 

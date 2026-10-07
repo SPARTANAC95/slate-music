@@ -78,6 +78,7 @@ try {
           if (command === 'listening_history') return [];
           if (command === 'artist_photos') return {};
           if (command === 'plugin:app|version') return '9.8.7';
+          if (command === 'lastfm_status') return { configured: true, builtIn: true, own: false, connected: false, user: null, waiting: false, pending: 0, problem: null };
           if (command === 'plugin:event|listen') {
             listeners.set(args.event, [...(listeners.get(args.event) ?? []), args.handler]);
             return args.handler;
@@ -186,6 +187,18 @@ try {
     const covers = page.getByRole('switch', { name: 'Show the album cover' });
     assert.equal(await covers.getAttribute('aria-checked'), 'true');
     assert.equal(await covers.isDisabled(), true, 'nothing to show while the status is off');
+    await page.close();
+  });
+
+  await test('Last.fm needs no API account where Slate Music carries its own', async () => {
+    const page = await fixture();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Connect Last.fm', exact: true }).waitFor();
+    assert.equal(await page.getByLabel('API key').count(), 0, 'nothing to paste');
+    await page.getByRole('button', { name: 'Use my own API account' }).click();
+    await page.getByLabel('API key').waitFor();
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Connect Last.fm', exact: true }).waitFor();
     await page.close();
   });
   assert.deepEqual(errors, [], 'no browser errors');

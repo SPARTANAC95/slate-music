@@ -48,6 +48,9 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Slate Music's own Last.fm API account; without them scrobbling asks for the user's.
+          SLATE_LASTFM_KEY: ${{ secrets.LASTFM_API_KEY }}
+          SLATE_LASTFM_SECRET: ${{ secrets.LASTFM_SHARED_SECRET }}
         run: npm run tauri -- build --bundles nsis --ci -- --locked
       - name: Prepare verified update manifest
         env:

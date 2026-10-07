@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: a question mark instead of the cover on Discord.** 1.1.2 took covers from the Cover Art Archive, whose pictures do not always load, and Discord shows a question mark for a picture it cannot fetch. Covers now come from Apple's iTunes catalogue first, then Deezer's, then the Cover Art Archive, and one is used only after its picture has actually loaded. Albums looked up by 1.1.2 are looked up again. Editions are recognised too ("Bad 25th Anniversary" finds the cover of "Bad").
+- **Smoother word-by-word lyrics.** The line being sung is now lit by one light that travels through it, instead of each word filling by itself: its soft edge keeps its width across the gaps between words and from one row of a wrapped line to the next, its speed changes gently between words sung at different speeds, and the letters no longer shift as they light, which made them shimmer.
+- **Last.fm with nothing to set up.** Releases can carry Slate Music's own Last.fm API account: choose **Connect Last.fm**, allow it in the browser, done. An API account of your own still works under **Use my own API account**.
+
 ## 1.1.2 — 2026-10-07
 
 - **Closer word timing on line-timed lyrics.** Lyrics that only time each line (LRCLIB's) have the words inside a line estimated. The estimate now follows how fast each song is actually sung instead of one pace for every song, ends a line a little before the next one starts, and gives longer words and the held last word more time. Measured against 79 songs in four languages whose words were timed by hand, words land 0.33 s from where they are sung on average, down from 0.41 s, and 66% are within 0.3 s, up from 60%. It remains an estimate: only lyrics with their own word times are exact.

@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { invoke } from '@tauri-apps/api/core';
 import { ArrowDownToLine, Minus, Plus, SlidersHorizontal } from 'lucide-react';
 import type { Playback } from './types';
-import { currentLine, parseLrc, showLyrics, sungByCharacter, wordProgress, type ShownLine } from './lrc';
+import { currentLine, parseLrc, showLyrics, sungByCharacter, wordProgress, type ShownLine, type ShownWord } from './lrc';
 import { PlaybackClock } from './playbackClock';
 import { deviceDelay, MOST, setSongShift, setWordMode, songShift, wordMode, WORD_MODES, type WordMode } from './lyricTiming';
 
@@ -39,6 +39,26 @@ const EDGE = 0.002;
 const FRAME_MS = 1000 / 60;
 /** Seconds one press of the timing buttons moves the lyrics. */
 const STEP = 0.1;
+/** The soft leading edge of the light, in ems (--edge on .np-word in styles.css). */
+const SOFT = 0.55;
+/** A word wholly lit, or not lit at all, whatever its width. */
+const LIT = 100000, UNLIT = -1;
+/** Seconds over which the light's speed is evened out between words that are sung at different
+ * speeds. It looks this far ahead as well, so on average it is neither early nor late. Longer
+ * where the word times are an estimate anyway. */
+const EVEN = 0.08, EVEN_ESTIMATED = 0.14;
+
+/** Where a word lies along the path the light travels through its line, in pixels: the light's
+ * leading edge reaches the word at `from` and crosses it in `sweep` (the last word of a visual
+ * row also carries the soft edge off the end of the row). */
+interface Placed { from: number; width: number; sweep: number }
+/** How far along its line's path the light's leading edge is at `time`. */
+function sweepAt(words: ShownWord[], placed: Placed[], time: number): number {
+  let s = 0;
+  for (let k = 0; k < words.length && time >= words[k].time; k++)
+    s = placed[k].from + wordProgress(words[k], time) * placed[k].sweep;
+  return s;
+}
 const MODE_NAMES: Record<WordMode, string> = { on: 'On', exact: 'Exact only', off: 'Off' };
 const MODE_HINTS: Record<WordMode, string> = {
   on: 'Light every line word by word',
@@ -52,6 +72,10 @@ class Stage {
   private rows: HTMLElement[];
   private words: (HTMLElement[] | undefined)[] = [];
   private lit: (number[] | undefined)[] = [];
+  private placed: ({ words: Placed[]; edge: number } | undefined)[] = [];
+  private edges: (number[] | undefined)[] = [];
+  /** Where the light is in each line being sung, and when that was drawn. */
+  private fronts = new Map<number, { s: number; time: number; at: number }>();
   private active = -2;
   /** The first row lit with the active one: lines sharing a time stamp are sung together. */
   private first = -2;
@@ -90,7 +114,7 @@ class Stage {
       this.aim(now, glide);
     }
     // A line and its translation carry the same time stamp: both are lit.
-    for (let i = Math.max(0, this.first); i <= active; i++) this.light(i, this.lines[i], time);
+    for (let i = Math.max(0, this.first); i <= active; i++) this.light(i, this.lines[i], time, now);
     if (this.glide) {
       const t = (now - this.glide.start) / GLIDE_MS;
       this.box.scrollTop = t >= 1 ? this.glide.to : this.glide.from + (this.glide.to - this.glide.from) * ease(Math.max(0, t));
@@ -111,6 +135,7 @@ class Stage {
     while (first > 0 && this.lines[first - 1].time === this.lines[first].time) first -= 1;
     this.active = active;
     this.first = first;
+    this.fronts.clear();
     this.rows.forEach((row, i) => {
       const sung = i >= first && i <= active;
       row.classList.toggle('active', sung);
@@ -120,7 +145,7 @@ class Stage {
       row.dataset.far = String(Math.min(FAR, sung ? 0 : i < first ? first - i : i - active));
     });
   }
-  private light(index: number, line: ShownLine, time: number) {
+  private light(index: number, line: ShownLine, time: number, now: number) {
     const row = this.rows[index];
     if (!row) return;
     const lit = (this.lit[index] ??= []);
@@ -143,6 +168,60 @@ class Stage {
     line.words.forEach((word, k) =>
       set(words[k], k, whole ? 1 : this.reduced ? (time >= word.time ? 1 : 0) : wordProgress(word, time)),
     );
+    // What is seen is one light travelling through the line, not each word filling by itself:
+    // its soft edge keeps its width across the gaps between words and from one row of a
+    // wrapped line to the next, and its speed changes gently from word to word.
+    const edges = (this.edges[index] ??= []);
+    const reach = (k: number, x: number) => {
+      if (edges[k] === x) return;
+      edges[k] = x;
+      words[k]?.style.setProperty('--x', x + 'px');
+    };
+    if (whole || this.reduced) {
+      line.words.forEach((word, k) => reach(k, whole || time >= word.time ? LIT : UNLIT));
+      return;
+    }
+    const { words: placed, edge } = (this.placed[index] ??= this.place(words));
+    const running = this.clock.running;
+    const even = line.estimated ? EVEN_ESTIMATED : EVEN;
+    const before = this.fronts.get(index);
+    let s = sweepAt(line.words, placed, time);
+    if (running) {
+      const target = sweepAt(line.words, placed, time + even);
+      const waited = Math.max(0, now - (before?.at ?? now)) / 1000;
+      // Only while time simply passes: a seek, or a line opened part-way through, lands at once.
+      // (Drawn twice in one frame, when a snapshot arrives, it stays where it is.)
+      if (before && Math.abs(time - before.time - waited) < 0.25)
+        s = Math.max(before.s, before.s + (target - before.s) * (1 - Math.exp(-waited / even)));
+      else if (before || time - line.time > 0.3) s = target;
+    }
+    this.fronts.set(index, { s, time, at: now });
+    placed.forEach((word, k) => {
+      const x = s - word.from;
+      reach(k, x <= 0 ? UNLIT : x >= word.width + edge ? LIT : Math.round(x * 10) / 10);
+    });
+  }
+  /** Measures where the words of a line lie, row by row as the line is wrapped. */
+  private place(words: HTMLElement[]): { words: Placed[]; edge: number } {
+    const edge = words[0] ? parseFloat(getComputedStyle(words[0]).fontSize) * SOFT : 0;
+    const placed: Placed[] = [];
+    let start = 0, left = 0, top = NaN, last: Placed | undefined, right = 0;
+    for (const el of words) {
+      // A new row of a wrapped line: its path begins where the last row's soft edge ended.
+      if (!(Math.abs(el.offsetTop - top) < el.offsetHeight / 2)) {
+        if (last) {
+          last.sweep += edge;
+          start += right - left + edge;
+        }
+        left = el.offsetLeft;
+        top = el.offsetTop;
+      }
+      right = el.offsetLeft + el.offsetWidth;
+      last = { from: start + el.offsetLeft - left, width: el.offsetWidth, sweep: el.offsetWidth };
+      placed.push(last);
+    }
+    if (last) last.sweep += edge;
+    return { words: placed, edge };
   }
   /** Scrolls the line being sung to its resting place. */
   aim(now: number, glide: boolean) {
@@ -164,6 +243,9 @@ class Stage {
   /** Room above the first line and below the last for them to reach the resting place (the
    * list's spacers in styles.css). */
   measure() {
+    // The window changed size: lines wrap differently, so words are measured again.
+    this.placed = [];
+    this.fronts.clear();
     const height = this.box.clientHeight;
     this.box.style.setProperty('--np-above', Math.round(height * REST) + 'px');
     this.box.style.setProperty('--np-below', Math.round(height * (1 - REST)) + 'px');

@@ -159,6 +159,45 @@ try {
  assert.ok(steady.worst < 0.06, 'the fill stays within 60 ms of the real position, saw ' + steady.worst);
  pass('jittery engine updates give a smooth, accurate word fill');
 
+ // What is seen is one light crossing the line: it never steps back, its soft edge lies across
+ // the gap between two words rather than collapsing at each one, and it does not lurch when a
+ // short word follows a long one.
+ const light = await page.evaluate(async () => {
+  const start = performance.now(), from = 5.05, seen = [];
+  const truth = () => from + (performance.now() - start) / 1000;
+  window.fixture.update({ position: from, playing: true, clockRunning: true, at: Date.now() });
+  const report = setInterval(() => window.fixture.update({ position: truth(), at: Date.now() }), 240);
+  await new Promise((done) => {
+   const frame = (now) => {
+    const els = [...document.querySelectorAll('.np-line.active .np-word')];
+    if (els.length === 4) {
+     const x = els.map((el) => parseFloat(el.style.getPropertyValue('--x')));
+     seen.push({ now, x, lit: els.reduce((sum, el, k) => sum + Math.min(Math.max(x[k], 0), el.offsetWidth), 0) });
+    }
+    if (truth() < 8.7) requestAnimationFrame(frame); else done();
+   };
+   requestAnimationFrame(frame);
+  });
+  clearInterval(report);
+  const widths = [...document.querySelectorAll('.np-line.active .np-word')].map((el) => el.offsetWidth);
+  window.fixture.update({ position: 6.5, playing: false, at: undefined });
+  // Each of these words is sung for one second, so a word's width is its speed in pixels a second.
+  const fastest = Math.max(...widths);
+  let back = 0, lurch = 0;
+  for (let i = 1; i < seen.length; i++) {
+   const moved = seen[i].lit - seen[i - 1].lit, seconds = (seen[i].now - seen[i - 1].now) / 1000;
+   if (moved < -0.11) back++;
+   if (seconds > 0 && moved > 2 + 2 * fastest * Math.max(seconds, 1 / 240)) lurch++;
+  }
+  return { frames: seen.length, back, lurch,
+   across: seen.filter((s) => s.x[0] > widths[0] && s.x[0] < 1e4 && s.x[1] > 0).length };
+ });
+ assert.ok(light.frames > 60, 'the light is drawn every frame');
+ assert.equal(light.back, 0, 'the light never steps backwards');
+ assert.equal(light.lurch, 0, 'the light never lurches forward');
+ assert.ok(light.across > 0, 'the soft edge lies across the gap between two words');
+ pass('one light crosses the line smoothly, word to word');
+
  await update({ position: 6.5, clockRunning: true, playing: true });
  await page.waitForTimeout(1400);
  // 6.5 s plus the one second the clock runs on by itself: half-way through "the" (7 to 8 s).

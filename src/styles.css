@@ -2816,8 +2816,11 @@ details.advanced[open] summary {
   --soft: 0px;
   transform: none;
 }
-/* Each word (or syllable) is lit from the left as it is sung: --p runs from 0 to 1, set every
-   frame from the song's position, so there is no transition here to lag behind it. */
+/* The line being sung is lit from the left by one light that travels through its words. Every
+   frame LyricsPanel sets --x on each word: how far the light's leading edge has come, in pixels
+   from the word's left. There is no transition here to lag behind it, and nothing moves the
+   letters themselves, which would make them shimmer. (--p, each word's own share sung, is
+   kept for the pause dots and for the checks.) */
 .np-word {
   display: inline-block;
   /* A word longer than the whole line breaks inside itself rather than running off the edge. */
@@ -2838,12 +2841,11 @@ details.advanced[open] summary {
   color: transparent;
   background-image: linear-gradient(
     90deg,
-    var(--lit) calc(var(--p, 0) * (100% + var(--edge)) - var(--edge)),
-    var(--unlit) calc(var(--p, 0) * (100% + var(--edge)))
+    var(--lit) calc(var(--x, -1px) - var(--edge)),
+    var(--unlit) var(--x, -1px)
   );
   background-clip: text;
   -webkit-background-clip: text;
-  transform: translateY(calc(var(--p, 0) * -0.04em));
 }
 .np-plain {
   white-space: pre-line;
