@@ -169,7 +169,10 @@ try {
     assert(await page.getByRole('button', { name: 'Play artist', exact: true }).count());
   });
   await test('Spotify playlist import reports setup requirement honestly', async () => {
-    await page.getByRole('button', { name: 'Import Spotify playlist', exact: true }).click();
+    // Importing lives with the playlists, not in the sidebar: it needs a Spotify developer app.
+    assert.equal(await page.getByRole('button', { name: 'Import Spotify playlist', exact: true }).count(), 0);
+    await page.getByRole('button', { name: 'Playlists', exact: true }).click();
+    await page.getByRole('button', { name: 'Import from Spotify', exact: true }).click();
     const { spotify } = await snap();
     try {
       if (!spotify.connected) {

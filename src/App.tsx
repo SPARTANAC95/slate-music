@@ -1499,11 +1499,6 @@ export default function App() {
           )}
         </div>
         <div className="sidebar-bottom">
-          <button className="import-nav" onClick={() => setDialog('import')}>
-            <Link2 size={17} />
-            <span>Import Spotify playlist</span>
-            <Plus size={14} />
-          </button>
           <button className="nav-item" onClick={() => setDialog('settings')}>
             <SettingsIcon size={18} />
             <span>Settings</span>

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A welcome on first launch.** A new library opens on a welcome instead of a folder dialog: use your Windows Music folder with one click or choose another, and decide lyrics online, artist photos, the Discord status and Last.fm there. All of it stays in Settings.
+- **Spotify import moved out of the sidebar.** It needs a Spotify developer app of your own, which most listeners won't set up, so it no longer has a permanent button there. It is on the Playlists page (**Import from Spotify**) and in the command bar, as before.
 - **Word by word only where it is exact, unless you ask.** Lyrics that only time each line now light the line being sung as a whole; lyrics with their own word times still light word by word. Estimated word timing inside line-timed lines remains available: **Lyrics options → Word by word → On**. If you had already chosen a setting there, it is kept.
 
 ## 1.1.3 — 2026-10-07

@@ -396,19 +396,6 @@ kbd {
   margin-top: auto;
   padding-top: 18px;
 }
-.import-nav {
-  font-size: 10.5px;
-  width: 100%;
-  gap: 7px;
-  padding: 9px 8px;
-  border: 1px solid #29272e;
-  background: #151417;
-  margin-bottom: 10px;
-  color: #b1a6c3;
-}
-.import-nav > svg:last-child {
-  margin-left: auto;
-}
 .library-status {
   border-top: 1px solid var(--line);
   display: flex;
@@ -2445,10 +2432,6 @@ details.advanced[open] summary {
   .detail-hero h1 {
     font-size: 27px;
   }
-  .import-nav {
-    font-size: 9px;
-    gap: 5px;
-  }
   .library-status {
     margin-left: -10px;
     margin-right: -10px;
@@ -2518,9 +2501,6 @@ details.advanced[open] summary {
     padding-left: 8px;
     gap: 4px;
   }
-  .import-nav > svg:last-child {
-    display: none;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -2573,10 +2553,6 @@ details.advanced[open] summary {
   }
   .sidebar-bottom {
     padding-top: 6px;
-  }
-  .import-nav {
-    min-height: 30px;
-    margin-bottom: 5px;
   }
   .library-status {
     margin-top: 6px;

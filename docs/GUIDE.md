@@ -65,7 +65,7 @@ This feature reads a Spotify playlist's song list and matches it to music you al
 2. Register the exact redirect URI `http://127.0.0.1:43829/callback`.
 3. Add your account under Users Management if required by Development Mode.
 4. Paste the **Client ID** in Slate Music Settings and choose **Connect Spotify**. No client secret is used. Sign-in opens your browser and asks permission to read your playlists.
-5. Choose **Import Spotify playlist** and pick one of your playlists, or paste an `open.spotify.com/playlist/...` link.
+5. Open **Playlists**, choose **Import from Spotify** (or press Ctrl+K and type "Spotify") and pick one of your playlists, or paste an `open.spotify.com/playlist/...` link.
 6. Review available, uncertain and missing matches. Correct uncertain songs manually, then save the playlist.
 
 **Your top songs** (this month, last 6 months, last year) are listed next: Spotify's 50 most played songs for that period, saved as a playlist.
