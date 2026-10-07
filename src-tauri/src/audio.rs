@@ -15,6 +15,22 @@ use tauri::Emitter;
 
 const RATE: u32 = 48000;
 type StreamSource = Box<dyn Source<Item = f32> + Send>;
+/// Opens a song for decoding. Opus (in an .opus or an .ogg file) has its own reader; everything
+/// else goes through rodio.
+pub fn open(path: &str) -> Result<StreamSource> {
+    let ogg = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("opus") || e.eq_ignore_ascii_case("ogg"));
+    if ogg {
+        if let Some(opus) = crate::opus::OpusSource::open(path)? {
+            return Ok(Box::new(opus));
+        }
+    }
+    Ok(Box::new(
+        Decoder::try_from(File::open(path).map_err(err)?).map_err(err)?,
+    ))
+}
 pub struct Deck {
     pub id: String,
     pub index: usize,
@@ -39,7 +55,7 @@ pub struct Deck {
 impl Deck {
     /// Opens a song, mixed at the rate `rate_for` picks for the file's own rate.
     fn load(track: &Track, index: usize, rate_for: impl Fn(u32) -> u32) -> Result<Self> {
-        let decoder = Decoder::try_from(File::open(&track.path).map_err(err)?).map_err(err)?;
+        let decoder = open(&track.path)?;
         let duration = decoder
             .total_duration()
             .map(|d| d.as_secs_f64())

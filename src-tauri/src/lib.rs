@@ -9,6 +9,7 @@ mod exclusive;
 mod library;
 mod loudness;
 mod lyrics;
+mod opus;
 mod scrobble;
 mod spotify;
 #[cfg(windows)]

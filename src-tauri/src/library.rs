@@ -67,7 +67,7 @@ pub fn supported(path: &Path) -> bool {
             .unwrap_or("")
             .to_lowercase()
             .as_str(),
-        "flac" | "mp3" | "wav" | "ogg" | "m4a" | "aac" | "aif" | "aiff"
+        "flac" | "mp3" | "wav" | "ogg" | "opus" | "m4a" | "aac" | "aif" | "aiff"
     )
 }
 /// Stores an image with the artwork (both sizes) and returns its hash, as covers are.

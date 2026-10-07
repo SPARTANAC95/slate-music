@@ -3,11 +3,10 @@
 //! values already stored in a file are preferred for its gain. Files are only read.
 use crate::db::{err, Database, Result, Track};
 use lofty::{file::TaggedFileExt, tag::ItemKey};
-use rodio::{Decoder, Source};
+use rodio::Source;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fs::File,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -52,7 +51,7 @@ fn db_value(text: &str) -> Option<f64> {
 
 /// Measures a file: decodes it once, feeding EBU R128 and tracking silence and peak.
 pub fn measure(path: &str) -> Result<Loudness> {
-    let decoder = Decoder::try_from(File::open(path).map_err(err)?).map_err(err)?;
+    let decoder = crate::audio::open(path)?;
     let channels = decoder.channels() as u32;
     let rate = decoder.sample_rate();
     let mut meter = ebur128::EbuR128::new(

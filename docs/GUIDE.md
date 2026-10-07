@@ -47,7 +47,7 @@ Shortcuts do not intercept typing in form fields. Standard media keys are routed
 
 ### Audio support
 
-Tested decoding: FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis and AIFF. Seeking was tested for the container formats above; raw ADTS AAC seeking depends on its available seek index. Opus, WMA, APE, DSD and protected files are not supported in this version.
+Tested decoding: FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis, Opus (.opus, and .ogg files that hold Opus) and AIFF. Seeking was tested for the container formats above; raw ADTS AAC seeking depends on its available seek index. WMA, APE, DSD and protected files are not supported in this version, nor are Opus files with more than two channels. Opus is always decoded at 48 kHz, whatever it was recorded at.
 
 Normally the engine mixes decoded audio at 48 kHz in stereo and plays it through Windows' shared output, which allows gapless playback, crossfades and other apps' sounds at the same time.
 

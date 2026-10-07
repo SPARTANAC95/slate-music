@@ -14,6 +14,8 @@ The application is MIT licensed. Dependencies retain their own licenses; exact v
 | SQLite | Public domain |
 | rusqlite, Rodio | MIT |
 | Symphonia | MPL-2.0 |
+| ogg (RustAudio) | BSD-3-Clause |
+| unsafe-libopus: libopus (Xiph.Org, Skype, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo) translated to Rust | BSD-3-Clause |
 | Lofty | MIT / Apache-2.0 |
 | notify | CC0-1.0 |
 | Souvlaki | MIT |

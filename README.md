@@ -58,10 +58,10 @@ Choose one of your Spotify playlists (or paste its link), review the local match
 
 | Supported and tested | Output |
 |---|---|
-| FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis, AIFF | Shared: through Windows at 48 kHz stereo, on the device you choose or Windows' default |
+| FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis, Opus, AIFF | Shared: through Windows at 48 kHz stereo, on the device you choose or Windows' default |
 | | Exclusive (bit-perfect): each song at its own sample rate as 16- or 24-bit samples, with no Windows mixing or resampling |
 
-Raw AAC has limited seeking support. Opus, WMA, APE, DSD and protected files are unsupported. Surround files are folded down to stereo. [Read the audio notes](docs/GUIDE.md#audio-support).
+Raw AAC has limited seeking support. WMA, APE, DSD and protected files are unsupported, and so are Opus files with more than two channels. Surround files are folded down to stereo. [Read the audio notes](docs/GUIDE.md#audio-support).
 
 ## Built, run, and checked on Windows
 
