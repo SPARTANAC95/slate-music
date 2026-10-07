@@ -1,3 +1,23 @@
+# Validation — 1.1.4
+
+## October 7 Opus, welcome and release checks
+
+Version 1.1.4 was built and run as a native Windows application under a separate application identifier, on disposable profiles with generated songs. The owner's installed copy kept running and was not touched.
+
+| Check | Result |
+|---|---|
+| TypeScript and frontend | 81 tests passed; TypeScript and Vite production build passed |
+| Browser components | 24 Now Playing checks and 10 selection, filter, Settings and first-launch checks passed in headless Edge |
+| Native engine and services | 111 Rust tests passed on Windows; `cargo clippy --all-targets` reports no warnings; formatting checked |
+| Opus decoder choice | `unsafe-libopus` (libopus translated to Rust) and `opus-decoder` were each compared with ffmpeg's libopus on five files: 16 kbit/s mono speech, 32 kbit/s hybrid, and 48, 128 and 256 kbit/s music with 10, 20 and 60 ms frames. `unsafe-libopus` differed by at most 0.000015 on every file; `opus-decoder` refused the 60 ms file and was 34 dB and 48 dB from the reference on two others, and a hundred times slower |
+| Opus in the app's own reader | The ignored test `matches_the_reference_decoder_on_real_files` gave the same number of samples as the reference for all five files (run-in and padding trimmed) and at most 0.000015 difference. A generated nine-second song decoded to exactly its length with the right pitch in each channel, and seeking to four places landed on the very samples straight playback reaches |
+| Opus in the native app | A tagged 95-second Opus song was scanned with its title, artist and length, played, sought to 60 s (found at 60.00, and at 62.01 two seconds later), repeated with repeat-one, and with repeat off handed over to the next song at its end |
+| First launch | With no music folder the welcome appeared, no folder was added or asked for, the Windows Music folder was offered, switches saved, and the sidebar had no Spotify button |
+| Native interface | All 28 scenarios in `tools/qa.mjs` passed (Spotify import is now reached from Playlists) |
+| Native lyrics | All 6 checks in `tools/check-native-lyrics.mjs` passed with Word by word set to On, which they need |
+
+Limits. Opus files with more than two channels are refused. Chained Ogg streams play their first stream only. The Windows Music folder button was not pressed in the QA run, so as not to scan the owner's own music into a test profile; the browser check covers what it sends. The native run was a debug build; the released installer is built by GitHub Actions.
+
 # Validation — 1.1.3
 
 ## October 7 Discord cover fix, lyric animation and release checks

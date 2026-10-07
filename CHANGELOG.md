@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.4 — 2026-10-07
 
 - **Opus files play.** .opus files, and .ogg files that hold Opus, are scanned, played, sought, levelled and played gaplessly like any other song. They are decoded by libopus itself (translated to Rust): against the reference decoder, five test files at 16 to 256 kbit/s came out the same length and within 0.00002 of every sample. Opus files with more than two channels are not supported yet.
 - **A welcome on first launch.** A new library opens on a welcome instead of a folder dialog: use your Windows Music folder with one click or choose another, and decide lyrics online, artist photos, the Discord status and Last.fm there. All of it stays in Settings.
