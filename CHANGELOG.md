@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **See which version you have:** Settings → Updates now shows the installed version, for example "Slate Music 1.1.1".
+
 ## 1.1.1 — 2026-10-06
 
 - **Lyrics light up word by word on every synced song.** Each word fills from the left as it is sung, with a soft edge, and the line being sung is large and sharp while the others step back. Songs with word times in their lyrics (Enhanced LRC) use them exactly; songs whose lyrics only time each line, which is what LRCLIB provides, pace the words evenly inside the line's real start and end. The caption says which you are getting.

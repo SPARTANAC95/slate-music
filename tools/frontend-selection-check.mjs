@@ -77,6 +77,7 @@ try {
           if (command === 'snapshot') return structuredClone(state);
           if (command === 'listening_history') return [];
           if (command === 'artist_photos') return {};
+          if (command === 'plugin:app|version') return '9.8.7';
           if (command === 'plugin:event|listen') {
             listeners.set(args.event, [...(listeners.get(args.event) ?? []), args.handler]);
             return args.handler;
@@ -169,6 +170,13 @@ try {
     await page.getByRole('button', { name: 'Songs', exact: true }).click();
     await page.getByRole('button', { name: 'Lossless', exact: true }).click();
     assert.deepEqual(await page.locator('main .song-title').allTextContents(), ['Song A', 'Song B', 'Song C']);
+    await page.close();
+  });
+
+  await test('Settings shows the version of the installed app', async () => {
+    const page = await fixture();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByText('Slate Music 9.8.7', { exact: true }).waitFor();
     await page.close();
   });
   assert.deepEqual(errors, [], 'no browser errors');

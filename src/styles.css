@@ -1641,6 +1641,12 @@ input[type='range']:disabled {
   margin: 10px 0 14px;
   color: #7c7786;
 }
+.settings-content section > .app-version {
+  font-size: 12px;
+  margin-top: 0;
+  color: var(--text);
+  user-select: text;
+}
 .folder-row {
   display: flex;
   align-items: center;

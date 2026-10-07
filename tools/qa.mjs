@@ -434,6 +434,8 @@ try {
         .getByRole('switch', { name: 'Check for updates automatically' })
         .getAttribute('aria-checked')) === 'true',
     );
+    const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url)));
+    await page.getByText(`Slate Music ${version}`, { exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, 'settings.png') });
     await page.getByRole('button', { name: 'Close dialog' }).click();
     assert.deepEqual(errors, []);

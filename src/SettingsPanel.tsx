@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   FolderPlus,
   RefreshCw,
@@ -37,6 +38,11 @@ export default function SettingsPanel({
   const [clientId, setClientId] = useState(data.spotify.clientId || '');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  // Asked of the installed app itself, so it is the version the updater compares against.
+  const [version, setVersion] = useState('');
+  useEffect(() => {
+    getVersion().then(setVersion, () => {});
+  }, []);
   const missing = data.tracks.filter((t) => t.missing).length;
   const [confirmRemove, setConfirmRemove] = useState(false),
     [removed, setRemoved] = useState<number | null>(null);
@@ -299,6 +305,7 @@ export default function SettingsPanel({
           <Download size={16} />
           Updates
         </h3>
+        {version && <p className="app-version">Slate Music {version}</p>}
         <Toggle
           label="Check for updates automatically"
           checked={settings.autoCheck}
