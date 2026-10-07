@@ -2862,12 +2862,6 @@ details.advanced[open] summary {
   font-size: 12px;
   color: #ffffff70;
 }
-.np-source {
-  display: block;
-  margin-top: 26px;
-  font-size: 11px;
-  color: #b2aeb9;
-}
 .np-next {
   padding-top: 8vh;
 }
@@ -3822,10 +3816,21 @@ details.advanced[open] summary {
 }
 
 .np-lyrics-panel { position: relative; display: flex; flex-direction: column; min-width: 0; width: 100%; min-height: 0; }
-.np-lyrics-caption { display: flex; align-items: center; gap: 12px; min-height: 22px; padding: 0 8px 6px; color: #d4cedd; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
-.np-lyrics-caption small { color: #a8a2b1; font-size: 10px; letter-spacing: 0.04em; }
+/* The lyrics view shows only lyrics: what can be adjusted is behind one quiet button. */
+.np-options-anchor { position: absolute; top: 0; right: 8px; z-index: 3; }
+.np-options-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #ffffff70; }
+.np-options-button:hover, .np-options-button.open { background: #ffffff1c; color: #fff; }
+.np-options { position: absolute; top: 38px; right: 0; display: grid; gap: 12px; width: min(290px, calc(100vw - 48px)); padding: 14px 14px 12px; border: 1px solid #ffffff26; border-radius: 14px; background: #302a38f2; backdrop-filter: blur(16px); box-shadow: 0 12px 36px #0008; color: #e9e4f0; font-size: 12px; }
+.np-options-source { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0; }
+.np-options-source strong { font-weight: 600; }
+.np-options-source span, .np-options small { color: #a8a2b1; font-size: 11px; line-height: 1.5; }
+.np-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 26px; }
+.np-choice { display: inline-flex; padding: 2px; border-radius: 999px; background: #ffffff14; }
+.np-choice button { min-height: 22px; padding: 0 9px; border: 0; border-radius: 999px; background: transparent; color: #cfc9d8; font-size: 11px; white-space: nowrap; }
+.np-choice button:hover { color: #fff; }
+.np-choice button.active { background: #ffffff2e; color: #fff; }
 .np-timing { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
-.np-timing button { display: inline-grid; place-items: center; min-width: 22px; min-height: 22px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent; color: #cfc9d8; font-size: 10px; letter-spacing: 0.04em; text-transform: none; }
+.np-timing button { display: inline-grid; place-items: center; min-width: 22px; min-height: 22px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent; color: #cfc9d8; font-size: 11px; white-space: nowrap; }
 .np-timing button:hover:not(:disabled) { background: #ffffff1c; color: #fff; }
 .np-timing button:disabled { color: #a8a2b1; }
 .np-timing .np-timing-value:not(:disabled) { color: var(--np-accent); }

@@ -50,7 +50,7 @@ try {
   await command('seek', 7);
   await page.getByRole('button', { name: 'Now Playing (Ctrl+L)', exact: true }).click();
   const player = page.getByRole('dialog', { name: 'Now playing', exact: true });
-  await player.getByText('Word + line synced', { exact: true }).waitFor();
+  await player.locator('.np-lyrics-panel[data-timing="Word + line synced"]').waitFor();
   const active = () => player.locator('.np-line.active').textContent();
   // How far the second word is lit, in percent. Lyrics follow what is heard, so they trail
   // the engine's position by the output delay Windows reports for this device.
@@ -118,7 +118,7 @@ try {
   await command('next');
   await command('pause');
   await command('seek', 6);
-  await player.getByText('Line synced', { exact: true }).waitFor();
+  await player.locator('.np-lyrics-panel[data-timing="Line synced"]').waitFor();
   await until(async () => await active() === 'With a different line');
   assert((await player.locator('.np-line.active .np-word').count()) > 1);
   pass('Native tab return follows the current line and track changes replace timed words with line timing');
@@ -127,7 +127,7 @@ try {
   await command('previous');
   await command('pause');
   await command('seek', 7);
-  await player.getByText('Word + line synced', { exact: true }).waitFor();
+  await player.locator('.np-lyrics-panel[data-timing="Word + line synced"]').waitFor();
   await until(async () => Math.abs(await fill() - half) < 0.25);
   await player.getByRole('button', { name: 'Close Now Playing (Esc)', exact: true }).focus();
   await page.screenshot({ path: path.join(output, 'desktop.png') });

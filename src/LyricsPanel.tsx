@@ -1,10 +1,10 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ArrowDownToLine, Minus, Plus } from 'lucide-react';
+import { ArrowDownToLine, Minus, Plus, SlidersHorizontal } from 'lucide-react';
 import type { Playback } from './types';
 import { currentLine, parseLrc, showLyrics, sungByCharacter, wordProgress, type ShownLine } from './lrc';
 import { PlaybackClock } from './playbackClock';
-import { deviceDelay, MOST, setSongShift, songShift } from './lyricTiming';
+import { deviceDelay, MOST, setSongShift, setWordMode, songShift, wordMode, WORD_MODES, type WordMode } from './lyricTiming';
 
 interface Lyrics {
   synced: string | null;
@@ -39,6 +39,12 @@ const EDGE = 0.002;
 const FRAME_MS = 1000 / 60;
 /** Seconds one press of the timing buttons moves the lyrics. */
 const STEP = 0.1;
+const MODE_NAMES: Record<WordMode, string> = { on: 'On', exact: 'Exact only', off: 'Off' };
+const MODE_HINTS: Record<WordMode, string> = {
+  on: 'Light every line word by word',
+  exact: 'Word by word only where the lyric source timed each word',
+  off: 'Light each line as a whole',
+};
 
 /** Draws the lyrics every frame, straight to the page: which line is sung, how far each of its
  * words is lit, and where the list is scrolled. React renders the rows once and leaves them. */
@@ -57,6 +63,7 @@ class Stage {
   /** Seconds added to the song's position: output delay and your own adjustments. */
   offset = 0;
   reduced = false;
+  mode: WordMode = 'on';
   /** Keep the line being sung in view (off while you read ahead). */
   follow = true;
 
@@ -130,9 +137,11 @@ class Stage {
       return;
     }
     const words = (this.words[index] ??= [...row.querySelectorAll<HTMLElement>('.np-word')]);
-    // With motion reduced, whole words switch on at their start.
+    // Word by word switched off, or kept for lines whose words the source timed: the line
+    // being sung is lit whole. With motion reduced, whole words switch on at their start.
+    const whole = this.mode === 'off' || (this.mode === 'exact' && line.estimated);
     line.words.forEach((word, k) =>
-      set(words[k], k, this.reduced ? (time >= word.time ? 1 : 0) : wordProgress(word, time)),
+      set(words[k], k, whole ? 1 : this.reduced ? (time >= word.time ? 1 : 0) : wordProgress(word, time)),
     );
   }
   /** Scrolls the line being sung to its resting place. */
@@ -210,6 +219,10 @@ export default function LyricsPanel({ trackId, pb, lookupLyrics, onSeek }: {
   const [lyrics, setLyrics] = useState<Lyrics | null | undefined>(trackId ? undefined : null);
   const [browsing, setBrowsing] = useState(false);
   const [shift, setShift] = useState(() => songShift(trackId));
+  const [mode, setMode] = useState(wordMode);
+  // Everything that can be adjusted sits behind one button, so the view is only lyrics.
+  const [options, setOptions] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
   const lines = useMemo(
     () => (lyrics?.synced ? showLyrics(parseLrc(lyrics.synced), pb.duration) : []),
@@ -262,11 +275,21 @@ export default function LyricsPanel({ trackId, pb, lookupLyrics, onSeek }: {
     const returning = !browsing && !made.follow;
     made.offset = offset;
     made.reduced = reduced;
+    made.mode = mode;
     if (browsing) made.release();
     else made.follow = true;
     if (returning) made.aim(performance.now(), true);
     made.draw();
-  }, [lines, offset, reduced, browsing]);
+  }, [lines, offset, reduced, browsing, mode]);
+  // The options close when you click anywhere else.
+  useEffect(() => {
+    if (!options) return;
+    const away = (e: PointerEvent) => {
+      if (!menu.current?.contains(e.target as Node)) setOptions(false);
+    };
+    document.addEventListener('pointerdown', away);
+    return () => document.removeEventListener('pointerdown', away);
+  }, [options]);
 
   const seek = useCallback((seconds: number) => {
     setBrowsing(false);
@@ -282,21 +305,57 @@ export default function LyricsPanel({ trackId, pb, lookupLyrics, onSeek }: {
   const estimated = lines.some((line) => line.estimated);
   const timing = sourced ? (estimated ? 'Word + line synced' : 'Word synced')
     : lines.length ? 'Line synced' : lyrics?.plain ? 'Text lyrics' : null;
+  const choose = (next: WordMode) => {
+    setWordMode(next);
+    setMode(next);
+  };
   return (
-    <div className="np-lyrics-panel">
-      <div className="np-lyrics-caption">
-        <span>{timing || 'Lyrics'}</span>
-        {lines.length > 0 && <span className="np-timing" role="group" aria-label="Lyrics timing">
-          <button aria-label="Show lyrics later" title="Lyrics later" disabled={shift <= -MOST} onClick={() => nudge(-STEP)}><Minus size={12} /></button>
-          <button className="np-timing-value" disabled={!shift} onClick={() => nudge(0)}
-            aria-label={shift ? `Lyrics ${Math.abs(shift).toFixed(1)} seconds ${shift > 0 ? 'earlier' : 'later'}. Reset timing` : 'Lyrics timing not adjusted'}
-            title={shift ? 'Reset timing for this song' : 'Lyrics early or late? Adjust this song with − and +'}>
-            {shift ? `${Math.abs(shift).toFixed(1)}s ${shift > 0 ? 'earlier' : 'later'}` : 'Timing'}
-          </button>
-          <button aria-label="Show lyrics earlier" title="Lyrics earlier" disabled={shift >= MOST} onClick={() => nudge(STEP)}><Plus size={12} /></button>
-        </span>}
-        {timing && <small>{lyrics?.source === 'lrclib' ? 'LRCLIB' : lyrics?.source === 'file' ? 'Local LRC' : 'Embedded lyrics'}</small>}
-      </div>
+    <div className="np-lyrics-panel" data-timing={timing ?? undefined}>
+      {lines.length > 0 && <div className="np-options-anchor" ref={menu}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || !options) return;
+          // Esc closes the options first, not the whole view.
+          e.stopPropagation();
+          setOptions(false);
+          menu.current?.querySelector<HTMLElement>('.np-options-button')?.focus();
+        }}>
+        <button className={'np-options-button' + (options ? ' open' : '')} aria-label="Lyrics options" title="Lyrics options"
+          aria-haspopup="dialog" aria-expanded={options} onClick={() => setOptions((open) => !open)}>
+          <SlidersHorizontal size={15} />
+        </button>
+        {options && <div className="np-options" role="dialog" aria-label="Lyrics options">
+          <p className="np-options-source">
+            <strong>{timing}</strong>
+            <span>{lyrics?.source === 'lrclib' ? 'LRCLIB' : lyrics?.source === 'file' ? 'Local LRC' : 'Embedded lyrics'}</span>
+          </p>
+          <div className="np-option">
+            <span>Timing</span>
+            <span className="np-timing" role="group" aria-label="Lyrics timing">
+              <button aria-label="Show lyrics later" title="Lyrics later" disabled={shift <= -MOST} onClick={() => nudge(-STEP)}><Minus size={12} /></button>
+              <button className="np-timing-value" disabled={!shift} onClick={() => nudge(0)}
+                aria-label={shift ? `Lyrics ${Math.abs(shift).toFixed(1)} seconds ${shift > 0 ? 'earlier' : 'later'}. Reset timing` : 'Lyrics timing not adjusted'}
+                title={shift ? 'Reset timing for this song' : 'Lyrics early or late? Adjust this song with − and +'}>
+                {shift ? `${Math.abs(shift).toFixed(1)}s ${shift > 0 ? 'earlier' : 'later'}` : 'As timed'}
+              </button>
+              <button aria-label="Show lyrics earlier" title="Lyrics earlier" disabled={shift >= MOST} onClick={() => nudge(STEP)}><Plus size={12} /></button>
+            </span>
+          </div>
+          <div className="np-option">
+            <span>Word by word</span>
+            <span className="np-choice" role="radiogroup" aria-label="Word by word">
+              {WORD_MODES.map((each) => (
+                <button key={each} role="radio" aria-checked={mode === each} title={MODE_HINTS[each]}
+                  className={mode === each ? 'active' : ''} onClick={() => choose(each)}>{MODE_NAMES[each]}</button>
+              ))}
+            </span>
+          </div>
+          <small>
+            {!estimated ? 'This source timed every word.'
+              : sourced ? 'This source timed the words of some lines; in the others, word times are estimated from the song’s pace.'
+              : 'This source times each line. Word times inside a line are estimated from the song’s pace.'}
+          </small>
+        </div>}
+      </div>}
       <div className={'np-lyrics' + (lines.length ? ' synced' : '') + (browsing ? ' browsing' : '')} ref={list}
         onWheel={() => setBrowsing(true)} onTouchMove={() => setBrowsing(true)}
         onKeyDown={(e) => {
@@ -316,12 +375,6 @@ export default function LyricsPanel({ trackId, pb, lookupLyrics, onSeek }: {
             <p>{lyrics?.instrumental ? 'This one is instrumental.' : 'No lyrics for this song yet.'}</p>
             {!lookupLyrics && !lyrics?.instrumental && <small>Turn on “Find lyrics online” in Settings, or put an .lrc file beside the song.</small>}
           </div>}
-        {timing && <small className="np-source">
-          {!lines.length ? 'This source has no timing.'
-            : !estimated ? 'Word timing from the lyric source. Select a line to seek.'
-            : sourced ? 'Word timing from the lyric source where it has it; other lines are timed by the line. Select a line to seek.'
-            : 'This source times each line; words follow at an even pace within it. Select a line to seek.'}
-        </small>}
       </div>
       {browsing && lines.length > 0 && <button className="np-follow" onClick={() => setBrowsing(false)}>
         <ArrowDownToLine size={14} />Return to current line</button>}

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Closer word timing on line-timed lyrics.** Lyrics that only time each line (LRCLIB's) have the words inside a line estimated. The estimate now follows how fast each song is actually sung instead of one pace for every song, ends a line a little before the next one starts, and gives longer words and the held last word more time. Measured against 79 songs in four languages whose words were timed by hand, words land 0.33 s from where they are sung on average, down from 0.41 s, and 66% are within 0.3 s, up from 60%. It remains an estimate: only lyrics with their own word times are exact.
+- **Word by word is your choice.** Lyrics options has **Word by word: On, Exact only, Off**. Exact only lights word by word where the lyric source timed each word and lights other lines as a whole; Off lights every line as a whole. Remembered on this PC.
+- **A lyrics view with only lyrics.** The caption, the timing buttons and the note under the lyrics are gone from the view. One small button at the top right opens **Lyrics options** with the song's timing and source, the timing adjustment and the word-by-word choice.
 - **Album covers on Discord.** The Discord status now shows the album's cover beside the song, with the title, the artist and the album on lines of their own, the way Discord shows other music apps. Discord can only show pictures that are on the web, so the cover is found on MusicBrainz and the Cover Art Archive (the album and artist name are sent) rather than taken from your files; it can differ from yours, and albums that aren't found show the Slate Music icon. **Show the album cover** in Settings → Discord status switches the lookup off.
 - **See which version you have:** Settings → Updates now shows the installed version, for example "Slate Music 1.1.1".
 

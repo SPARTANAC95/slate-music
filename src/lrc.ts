@@ -133,8 +133,38 @@ function pieces(text: string): { text: string; space: string }[] {
   }
   return out;
 }
-/** How long a line plausibly takes to sing when nothing follows it closely. */
+/** How long a word plausibly takes to sing when nothing follows it closely. */
 const unhurried = (total: number) => 0.5 + 0.4 * total;
+
+// Line-timed lyrics say when each line starts, not when its words are sung. The numbers below
+// were fitted to 79 songs in four languages whose words were timed by hand (the JamendoLyrics
+// set) and checked on songs left out of the fitting: words land a fifth closer to where they
+// are sung than with one fixed pace for every song. The words of such lines remain an estimate.
+/** How long a piece of text takes to sing, compared with others in the same song: its
+ * syllables, with longer words a little longer. */
+function weight(text: string): number {
+  return beats(text) + 0.2 * [...text].filter((c) => LETTER.test(c)).length;
+}
+/** Added to a line's last word: lines end on a held note. */
+const HELD = 1.5;
+/** A line is usually over a little before the next one starts. */
+const SHARE = 0.92;
+/** Seconds a line takes beyond its words at the song's pace. */
+const BREATH = 0.6;
+/** Seconds per unit of weight when a song has too few lines to show its own pace. */
+const USUAL_PACE = 0.19;
+/** A song's pace is read from its quicker lines: slower ones are followed by a pause. */
+const QUICKER = 0.25;
+/** How fast this song is sung: seconds per unit of weight. `rates` are each line's time to
+ * the next line over its weight, which is the pace wherever no pause follows. */
+function songPace(rates: number[]): number {
+  if (rates.length < 4) return USUAL_PACE;
+  const sorted = [...rates].sort((a, b) => a - b);
+  const at = (sorted.length - 1) * QUICKER;
+  const low = Math.floor(at);
+  const high = Math.min(sorted.length - 1, low + 1);
+  return sorted[low] + (sorted[high] - sorted[low]) * (at - low);
+}
 
 /** Lays lyrics out for display. Lines keep the source's times; every word gets a start and an
  * end: the source's own where it has them (Enhanced LRC), otherwise spread across the line by
@@ -144,9 +174,21 @@ export function showLyrics(lines: LyricLine[], duration = 0): ShownLine[] {
   const first = lines.find((line) => line.text);
   if (first && first.time >= LEAD_IN && lines[0] === first)
     rows.push({ time: 0, end: first.time, text: '', words: [], gap: true, estimated: false });
+  // The next line that starts later (lines sharing a time stamp are sung together).
+  const following = lines.map((line, i) => lines.slice(i + 1).find((next) => next.time > line.time));
+  // Lines whose words the source did not time: their pieces, and how long each takes to sing.
+  const drafts = lines.map((line) => {
+    if (!line.text || line.words) return null;
+    const parts = pieces(line.text);
+    const weights = parts.map((part) => weight(part.text + part.space));
+    weights[weights.length - 1] += HELD;
+    return { parts, weights, total: weights.reduce((sum, w) => sum + w, 0) };
+  });
+  const pace = songPace(
+    drafts.flatMap((draft, i) => (draft && following[i] ? [(following[i]!.time - lines[i].time) / draft.total] : [])),
+  );
   lines.forEach((line, i) => {
-    // The next line that starts later (lines sharing a time stamp are sung together).
-    const later = lines.slice(i + 1).find((next) => next.time > line.time)?.time;
+    const later = following[i]?.time;
     const until = later ?? (duration > line.time ? duration : Infinity);
     if (!line.text) {
       rows.push({
@@ -185,12 +227,12 @@ export function showLyrics(lines: LyricLine[], duration = 0): ShownLine[] {
       rows.push({ time: line.time, end, text: line.text, words, gap: false, estimated: false });
       return;
     }
-    const parts = pieces(line.text);
-    const weights = parts.map((part) => beats(part.text + part.space));
-    // Held a little longer: lines usually end on a sustained note.
-    weights[weights.length - 1] += 0.5;
-    const total = weights.reduce((sum, w) => sum + w, 0);
-    const span = Math.max(0, Math.min((until - line.time) * 0.96, unhurried(total) * 1.25));
+    const { parts, weights, total } = drafts[i]!;
+    // A blank time stamp after the line is the source saying where the singing stops; otherwise
+    // the line ends a little before the next one. Either way it lasts no longer than its words
+    // take at this song's pace, so it is not stretched across a pause.
+    const share = following[i] && !following[i]!.text ? 1 : SHARE;
+    const span = Math.max(0, Math.min((until - line.time) * share, pace * total + BREATH));
     let sung = 0;
     const words = parts.map((part, k) => {
       const time = line.time + (span * sung) / total;

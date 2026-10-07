@@ -117,6 +117,21 @@ describe('lyrics laid out for display', () => {
     expect(last.end).toBeLessThanOrEqual(52);
     expect(sung('[00:10]No length known')[0].end).toBeLessThan(15);
   });
+  it('paces estimated words by how fast the song itself is sung', () => {
+    const song = (seconds: number) =>
+      sung(Array.from({ length: 6 }, (_, i) => `[00:${String(10 + i * seconds).padStart(2, '0')}]Paper lanterns on the water`).join('\n')
+        + '\n[00:50]Paper lanterns on the water\n[00:59]End', 70);
+    // The same line, followed by a long pause, in a quick song and in a slow one.
+    const [quick, slow] = [song(2), song(5)].map((rows) => rows[6]);
+    expect(quick.end - quick.time).toBeLessThan(3);
+    expect(slow.end - slow.time).toBeGreaterThan(4);
+    expect(slow.end - slow.time).toBeLessThan(6.5);
+    // A line is over a little before the next one starts, unless the source marks its end.
+    const [first] = song(5);
+    expect(first.end).toBeLessThan(15);
+    expect(first.end).toBeGreaterThan(14);
+    expect(sung('[00:10]Paper lanterns on the water\n[00:12]\n[00:20]Home', 30)[0].end).toBe(12);
+  });
   it('keeps the source’s own word times and never marks them as estimated', () => {
     const [line] = sung('[00:05]<00:05>Drift<00:05.5>ing <00:06>out <00:07>beyond\n[00:20]Next', 60);
     expect(line.estimated).toBe(false);

@@ -112,7 +112,7 @@ try {
   + '[00:15]Finds a place to stay\n[00:20]\n'
   + Array.from({ length: 8 }, (_, i) => '[00:' + (25 + i * 5) + ']A new horizon, softly').join('\n');
  await page.evaluate((synced) => window.fixture.source({ synced }), enhanced);
- await page.getByText('Word + line synced', { exact: true }).waitFor();
+ await page.locator('.np-lyrics-panel[data-timing="Word + line synced"]').waitFor();
  await update({ position: 6.5 });
  // How far each word of the line being sung is lit, 0 to 1 (set by LyricsPanel every frame).
  const fills = () => page.locator('.np-line.active .np-word').evaluateAll((els) => els.map((el) => Number(el.style.getPropertyValue('--p'))));
@@ -194,7 +194,11 @@ try {
  assert.equal(await active(), 'We follow the light');
  await update({ position: 4.85 });
  assert.equal(await active(), 'When the city settles');
+ // Nothing but lyrics until the options are opened.
  const timing = page.getByRole('group', { name: 'Lyrics timing' });
+ const options = page.getByRole('button', { name: 'Lyrics options' });
+ assert.equal(await timing.count(), 0);
+ await options.click();
  await timing.getByRole('button', { name: 'Show lyrics earlier' }).click();
  await timing.getByRole('button', { name: 'Show lyrics earlier' }).click();
  await timing.getByText('0.2s earlier', { exact: true }).waitFor();
@@ -204,11 +208,43 @@ try {
  assert.ok(Math.abs(await page.evaluate(() => window.fixture.state().position) - 14.8) < 1e-9, 'seeking lands where the adjusted line starts');
  await page.getByRole('tab', { name: 'Up next' }).click();
  await page.getByRole('tab', { name: 'Lyrics', exact: true }).click();
+ await options.click();
  await timing.getByText('0.2s earlier', { exact: true }).waitFor();
  await timing.getByRole('button', { name: /Reset timing/ }).click();
- await timing.getByText('Timing', { exact: true }).waitFor();
+ await timing.getByText('As timed', { exact: true }).waitFor();
  assert.equal(await active(), 'Every quiet moment');
  pass('output delay and a remembered per-song adjustment move the lyrics');
+
+ // Word by word can be kept for lines whose words the source timed, or switched off: the
+ // line being sung is then lit whole. The choice is remembered.
+ const lit = () => page.locator('.np-line.active .np-word').evaluateAll((els) => els.map((el) => Number(el.style.getPropertyValue('--p'))));
+ const mode = (name) => page.getByRole('radiogroup', { name: 'Word by word' }).getByRole('radio', { name, exact: true });
+ await update({ position: 6.5 });
+ assert.deepEqual(await lit(), [1, 0.5, 0, 0]);
+ await mode('Exact only').click();
+ assert.deepEqual(await lit(), [1, 0.5, 0, 0], 'source-timed words still light one by one');
+ await update({ position: 15.2 });
+ assert.equal(await active(), 'Finds a place to stay');
+ assert.deepEqual(await lit(), [1, 1, 1, 1, 1], 'an estimated line is lit whole');
+ await mode('Off').click();
+ await update({ position: 6.5 });
+ assert.deepEqual(await lit(), [1, 1, 1, 1]);
+ await page.getByRole('tab', { name: 'Up next' }).click();
+ await page.getByRole('tab', { name: 'Lyrics', exact: true }).click();
+ assert.deepEqual(await lit(), [1, 1, 1, 1], 'remembered');
+ await options.click();
+ assert.equal(await mode('Off').getAttribute('aria-checked'), 'true');
+ await mode('On').click();
+ assert.deepEqual(await lit(), [1, 0.5, 0, 0]);
+ // Esc closes the options and leaves Now Playing open; so does a click elsewhere.
+ await page.keyboard.press('Escape');
+ assert.equal(await page.getByRole('dialog', { name: 'Lyrics options' }).count(), 0);
+ assert.equal(await page.getByRole('dialog', { name: 'Now playing' }).count(), 1);
+ await options.click();
+ await page.locator('.np-cover').click();
+ assert.equal(await page.getByRole('dialog', { name: 'Lyrics options' }).count(), 0);
+ await update({ position: 10.5 });
+ pass('lyric options stay out of the way, and word by word can be limited or switched off');
 
  await update({ position: 46 });
  await page.getByRole('tab', { name: 'Up next' }).click();
@@ -289,11 +325,11 @@ try {
  await page.getByText('No lyrics for this song yet.', { exact: true }).waitFor();
  pass('late requests and cleared tracks cannot show stale lyrics');
  await page.evaluate(() => window.fixture.source({ plain: 'Words without timing' }));
- await page.getByText('Text lyrics', { exact: true }).waitFor();
+ await page.locator('.np-lyrics-panel[data-timing="Text lyrics"]').waitFor();
  assert.equal(await page.locator('.np-word').count(), 0);
- assert.equal(await page.getByRole('group', { name: 'Lyrics timing' }).count(), 0);
+ assert.equal(await page.getByRole('button', { name: 'Lyrics options' }).count(), 0);
  await page.evaluate(() => window.fixture.source({ synced: '[00:10]Late first line\n[00:14]Second line' }));
- await page.getByText('Line synced', { exact: true }).waitFor();
+ await page.locator('.np-lyrics-panel[data-timing="Line synced"]').waitFor();
  await update({ position: 2.5 });
  assert.equal(await page.locator('.np-line.active.gap').evaluate((el) => el.style.getPropertyValue('--p')), '0.25');
  await page.evaluate(() => window.fixture.source({ instrumental: true }));
@@ -302,7 +338,7 @@ try {
 
  // A line and its translation share a time stamp: they are sung, lit and centred as one.
  await page.evaluate(() => window.fixture.source({ synced: '[00:01]First\n[00:05]Hola mundo\n[00:05]Hello world\n[00:09]Last' }));
- await page.getByText('Line synced', { exact: true }).waitFor();
+ await page.locator('.np-lyrics-panel[data-timing="Line synced"]').waitFor();
  await update({ position: 5.5 });
  assert.deepEqual(await page.locator('.np-line.active').allTextContents(), ['Hola mundo', 'Hello world']);
  assert.deepEqual(await page.locator('.np-line.past').allTextContents(), ['First']);
