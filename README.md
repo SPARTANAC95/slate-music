@@ -17,7 +17,7 @@ Slate Music gives your albums room to breathe. Browse the artwork, find the song
 - **Follows your headphones.** Choose an output device or follow Windows' default; plug headphones in or reconnect them and the music goes with them.
 - **Your listening, looked after.** Home shelves (Jump back in, Recently added, On this day, Forgotten favourites), smart playlists built from rules, and **Your year**: plays, minutes, streaks and your top songs, artists and albums.
 - **Hands on.** Pick several songs, drag them onto playlists or the queue, play next, a sleep timer, right-click menus, keyboard shortcuts, a mini-player, taskbar buttons and Windows media controls.
-- **Share it, if you like.** Scrobble to Last.fm with your own API account, and show "Listening to Slate Music" on Discord with nothing to set up. Both are off until you switch them on.
+- **Share it, if you like.** Scrobble to Last.fm with your own API account, and show "Listening to Slate Music" on Discord, album cover included, with nothing to set up. Both are off until you switch them on.
 - **Your files stay yours.** Read-only indexing, watched folders and cached artwork. Moved songs keep their favorites, plays and playlist places. No retagging, renaming, moving or deleting your music.
 - **Offline by design.** Playback and library management work offline. No Slate account, subscription or analytics. Online extras (lyrics, original years, artist photos and bios, Spotify import, Last.fm) stay off until you turn them on.
 - **Spotify playlists, matched locally.** Pick one of your Spotify playlists, Liked Songs or top songs and match them to recordings you already own. Review uncertain versions, save, and let it update itself.

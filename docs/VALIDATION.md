@@ -1,3 +1,22 @@
+# Validation — 1.1.2
+
+## October 7 Discord covers, lyric timing and release checks
+
+Version 1.1.2 was built and run as a native Windows application under a separate application identifier, with a disposable profile and generated silent FLAC files with generated artwork. The owner's installed copy kept running and was not touched, and nothing was sent to the owner's Discord.
+
+| Check | Result |
+|---|---|
+| TypeScript and frontend | 81 tests passed; TypeScript and Vite production build passed |
+| Browser components | 22 Now Playing checks and 8 selection, filter and Settings checks passed in headless Edge with the real components, including the lyrics options, the word-by-word choice and the version line |
+| Native engine and services | 106 Rust tests passed on Windows; `cargo clippy --all-targets` reports no warnings; formatting checked. The cover lookup's ignored online test found a known album's cover and reported a made-up album as missing |
+| Native interface | All 28 scenarios in `tools/qa.mjs` passed with no runtime errors; Settings showed "Slate Music 1.1.2" |
+| Native lyrics | All 6 checks in `tools/check-native-lyrics.mjs` passed; with Word by word off, every word of the line being sung was lit at once |
+| Discord status | Followed against a stand-in for Discord's local pipe (`SLATE_DISCORD_PIPE`): nothing sent while off; a song tagged as a known album was shown at once with the icon and again with its Cover Art Archive address once found; an album not online kept the icon; pausing cleared the status; with covers off no cover address was sent |
+| Lyric word timing | Against the 79 hand-timed songs of the JamendoLyrics set (English, German, French, Spanish): mean word error 0.41 s before, 0.33 s now; words within 0.3 s 60% before, 66% now; better in each language and on songs left out of the fitting. With the true line ends known the same spread gives 0.25 s |
+| Restart | The library and the paused session were restored and playback stayed paused |
+
+Limits. Word times inside line-timed lyrics remain an estimate. How a real Discord client draws the cover (it fetches the Cover Art Archive address itself, through a redirect) was not observed before release. The native run was a debug build; the released installer is built by GitHub Actions.
+
 # Validation — 1.1.1
 
 ## October 6 lyrics, audit and release checks
