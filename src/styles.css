@@ -3552,6 +3552,17 @@ details.advanced[open] summary {
   font-size: 11px;
   color: var(--muted);
 }
+/* How many songs a rule matches by itself; a rule that matches none is the one to look at. */
+.smart-count {
+  min-width: 34px;
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.smart-count.none {
+  color: #f4b0b0;
+}
 .smart-rules > .quiet {
   align-self: flex-start;
   font-size: 12px;

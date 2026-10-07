@@ -77,6 +77,44 @@ export function matches(t: Track, rule: SmartRule, now: number): boolean {
   }
   return false;
 }
+/** Whether a rule has its value yet. One still being typed (an empty text or number) is left
+ * out: it neither narrows the list to nothing nor, with "any", lets every song in. */
+export function filled(rule: SmartRule): boolean {
+  const kind = FIELDS[rule.field]?.kind;
+  if (kind === 'bool') return true;
+  if (kind === 'text') return normalize(String(rule.value)) !== '';
+  return rule.value !== '' && Number.isFinite(Number(rule.value));
+}
+/** A rule in words: "Favorite is yes", "Last played not in the last 90 days". */
+export function ruleText(rule: SmartRule): string {
+  const info = FIELDS[rule.field];
+  const op = OPS[info.kind].find((o) => o.op === rule.op)?.label ?? '';
+  if (info.kind === 'bool') return `${info.label} ${op}`;
+  if (info.kind === 'date')
+    return `${info.label} ${rule.op === 'withinDays' ? 'in' : 'not in'} the last ${rule.value} days`;
+  if (info.kind === 'text') return `${info.label} ${op} “${rule.value}”`;
+  return `${info.label} ${op} ${rule.value}${info.unit ? ' ' + info.unit : ''}`;
+}
+/** How many available songs each rule matches by itself: which rule is keeping songs out. */
+export function ruleCounts(rules: SmartRules, tracks: Track[], now: number): number[] {
+  const available = tracks.filter((t) => !t.missing);
+  return rules.rules.map((rule) =>
+    filled(rule) ? available.filter((t) => matches(t, rule, now)).length : available.length,
+  );
+}
+/** Why a smart playlist has no songs right now, in a sentence or two. */
+export function whyEmpty(rules: SmartRules, tracks: Track[], now: number): string {
+  const counts = ruleCounts(rules, tracks, now);
+  const each = rules.rules
+    .map((rule, i) => (filled(rule) ? `${ruleText(rule)}: ${counts[i] === 0 ? 'no songs' : counts[i] === 1 ? '1 song' : counts[i] + ' songs'}` : null))
+    .filter(Boolean);
+  const needsFavorites = rules.rules.some((rule, i) => rule.field === 'favorite' && rule.op === 'is' && counts[i] === 0);
+  const hint = needsFavorites ? ' You have no favorites yet: tap the heart beside a song to make it one.' : '';
+  if (!each.length) return 'There are no songs in your library yet.';
+  if (each.length === 1) return `${each[0]}.${hint}`;
+  const how = rules.match === 'all' ? 'A song has to match every rule, and none does.' : 'No song matches any of the rules.';
+  return `${how} ${each.join(' · ')}.${hint}`;
+}
 /** A shuffle that stays the same for a playlist through the day, so lists don't jump around. */
 function seeded(seed: string) {
   let h = 2166136261;
@@ -89,11 +127,10 @@ function seeded(seed: string) {
 }
 /** The songs a smart playlist holds right now. */
 export function evaluateSmart(rules: SmartRules, tracks: Track[], now: number, seed = ''): Track[] {
+  const set = rules.rules.filter(filled);
   const test = (t: Track) =>
-    !rules.rules.length ||
-    (rules.match === 'all'
-      ? rules.rules.every((r) => matches(t, r, now))
-      : rules.rules.some((r) => matches(t, r, now)));
+    !set.length ||
+    (rules.match === 'all' ? set.every((r) => matches(t, r, now)) : set.some((r) => matches(t, r, now)));
   let list = tracks.filter((t) => !t.missing && test(t));
   const by: Record<Exclude<SmartRules['sort'], 'random'>, (a: Track, b: Track) => number> = {
     plays: (a, b) => b.playCount - a.playCount,

@@ -93,7 +93,7 @@ import CommandPalette, { type PaletteCommand } from './CommandPalette';
 import YourYear from './YourYear';
 import ArtistHero from './ArtistHero';
 import SmartPlaylistEditor from './SmartPlaylistEditor';
-import { evaluateSmart } from './smart';
+import { evaluateSmart, whyEmpty } from './smart';
 import {
   columnSort,
   moveRows,
@@ -1988,11 +1988,16 @@ export default function App() {
                 table(shownTracks)
               ) : (
                 <Empty
-                  title="Ready for your first song."
+                  title={
+                    collection.kind === 'smart' ? 'No songs match right now.' : 'Ready for your first song.'
+                  }
                   description={
-                    collection.entries.length
-                      ? 'None of these songs are matched to your files yet. Choose Review tracks to match them.'
-                      : 'Add songs with the folder button beside any track, or right-click a song.'
+                    // A smart playlist fills itself: say which rule is keeping songs out.
+                    collection.kind === 'smart' && collection.rules
+                      ? whyEmpty(collection.rules, tracks, Date.now())
+                      : collection.entries.length
+                        ? 'None of these songs are matched to your files yet. Choose Review tracks to match them.'
+                        : 'Add songs with the folder button beside any track, or right-click a song.'
                   }
                 />
               )}

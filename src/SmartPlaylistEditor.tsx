@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { Collection, SmartField, SmartRule, SmartRules, Track } from './types';
 import { IconButton } from './components';
-import { evaluateSmart, FIELDS, OPS, SMART_PRESETS } from './smart';
+import { evaluateSmart, FIELDS, filled, OPS, ruleCounts, SMART_PRESETS } from './smart';
 
 const blank: SmartRules = { match: 'all', rules: [{ field: 'favorite', op: 'is', value: true }], sort: 'random', limit: 0 };
 const defaultValue = (field: SmartField): SmartRule['value'] =>
@@ -22,6 +22,8 @@ export default function SmartPlaylistEditor({
   const [rules, setRules] = useState<SmartRules>(existing?.rules ?? blank);
   const [error, setError] = useState('');
   const count = useMemo(() => evaluateSmart(rules, tracks, Date.now()).length, [rules, tracks]);
+  // How many songs each rule matches by itself, so a rule that keeps everything out shows.
+  const counts = useMemo(() => ruleCounts(rules, tracks, Date.now()), [rules, tracks]);
   const setRule = (i: number, next: SmartRule) =>
     setRules({ ...rules, rules: rules.rules.map((r, n) => (n === i ? next : r)) });
   return (
@@ -104,6 +106,10 @@ export default function SmartPlaylistEditor({
                 />
               )}
               {FIELDS[rule.field].unit && <span className="smart-unit">{FIELDS[rule.field].unit}</span>}
+              <span className={'smart-count' + (filled(rule) && counts[i] === 0 ? ' none' : '')}
+                title="Songs this rule matches by itself">
+                {filled(rule) ? counts[i] : '–'}
+              </span>
               <IconButton
                 label={`Remove rule ${i + 1}`}
                 disabled={rules.rules.length === 1}

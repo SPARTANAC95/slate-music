@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **An empty smart playlist says why.** It used to say "Ready for your first song. Add songs with the folder button…", as if it were an ordinary playlist. It now lists each rule with how many songs it matches by itself ("Favorite is yes: no songs · Last played not in the last 90 days: 825 songs"), and says so when you simply have no favorites yet. The rule editor shows the same count beside every rule, so the one keeping songs out stands out.
+- Fixed: a rule still being typed changed the whole list. With "any", an empty text rule let every song in; with "all", an empty number kept every song out. A rule without a value is now left out until it has one.
+
 ## 1.1.4 — 2026-10-07
 
 - **Opus files play.** .opus files, and .ogg files that hold Opus, are scanned, played, sought, levelled and played gaplessly like any other song. They are decoded by libopus itself (translated to Rust): against the reference decoder, five test files at 16 to 256 kbit/s came out the same length and within 0.00002 of every sample. Opus files with more than two channels are not supported yet.

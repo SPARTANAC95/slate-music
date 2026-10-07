@@ -55,6 +55,8 @@ try {
           outputDevice: null, output: null, gainDb: null, gainKind: 'off',
         },
       };
+      state.collections.push({ id: 'fixture-smart', name: 'Forgotten favourites', kind: 'smart', created: 0, entries: [],
+        rules: { match: 'all', rules: [{ field: 'favorite', op: 'is', value: true }, { field: 'lastPlayed', op: 'olderThanDays', value: 90 }], sort: 'random', limit: 0 } });
       // A first launch: no folders, no songs.
       if (empty) Object.assign(state, { tracks: [], collections: [], folders: [] });
       const callbacks = new Map();
@@ -218,6 +220,18 @@ try {
     await page.getByRole('button', { name: 'Use my Music folder' }).click();
     await page.waitForFunction(() => window.__selectionFixture.added === 'C:\Users\Listener\Music');
     await page.getByRole('heading', { name: 'Finding your music…' }).waitFor();
+    await page.close();
+  });
+
+  await test('An empty smart playlist says which rule keeps songs out', async () => {
+    const page = await fixture();
+    await page.getByRole('button', { name: 'Forgotten favourites', exact: true }).click();
+    await page.getByRole('heading', { name: 'No songs match right now.' }).waitFor();
+    await page.getByText('Favorite is yes: no songs · Last played not in the last 90 days: 4 songs.', { exact: false }).waitFor();
+    await page.getByText('tap the heart beside a song', { exact: false }).waitFor();
+    await page.getByRole('button', { name: /Edit rules/ }).click();
+    assert.deepEqual(await page.locator('.smart-count').allTextContents(), ['0', '4']);
+    assert.equal(await page.locator('.smart-count.none').count(), 1, 'the rule that matches nothing stands out');
     await page.close();
   });
   assert.deepEqual(errors, [], 'no browser errors');
