@@ -140,7 +140,7 @@ const defaults: Settings = {
   autoDownload: true,
   showListening: true,
   lookupYears: false,
-  lookupLyrics: false,
+  lookupLyrics: true,
   lookupArtists: false,
 };
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });

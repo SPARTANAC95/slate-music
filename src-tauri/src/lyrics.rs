@@ -1,5 +1,5 @@
 //! Song lyrics, synced where possible. Looks in order at an .lrc file beside the song, lyrics
-//! stored in the file's tags, and (only when enabled in Settings) LRCLIB, a free public
+//! stored in the file's tags, and (unless switched off in Settings) LRCLIB, a free public
 //! lyrics database. Online results are remembered; files are never changed.
 use crate::db::{err, now, Database, Result, Track};
 use lofty::{file::TaggedFileExt, tag::ItemKey};
@@ -16,6 +16,21 @@ const RETRY_MS: i64 = 30 * 24 * 3600 * 1000;
 
 pub fn enabled(db: &Database) -> bool {
     db.get("settings")["lookupLyrics"].as_bool() == Some(true)
+}
+/// Finding lyrics online is on unless switched off. It used to be off until switched on, so
+/// the first start of a version that knows this switches it on once, for people already using
+/// Slate Music as well; after that the setting is theirs.
+pub fn on_by_default(db: &Database) -> Result<()> {
+    let mut settings = db.get("settings");
+    if settings["lyricsOnByDefault"] == true {
+        return Ok(());
+    }
+    if !settings.is_object() {
+        settings = json!({});
+    }
+    settings["lookupLyrics"] = json!(true);
+    settings["lyricsOnByDefault"] = json!(true);
+    db.set("settings", &settings)
 }
 
 /// Whether text contains LRC time stamps such as "[01:23.45]".
@@ -223,6 +238,33 @@ fn with_source(mut entry: Value, source: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finding_lyrics_online_is_switched_on_once_and_then_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        // A new profile, and one saved by a version in which it was off until switched on.
+        assert!(!enabled(&db));
+        on_by_default(&db).unwrap();
+        assert!(enabled(&db));
+        db.set(
+            "settings",
+            &json!({"lookupLyrics": false, "autoCheck": false}),
+        )
+        .unwrap();
+        on_by_default(&db).unwrap();
+        assert!(enabled(&db));
+        assert_eq!(
+            db.get("settings")["autoCheck"],
+            false,
+            "nothing else changes"
+        );
+        // Switched off after that: it stays off.
+        let mut settings = db.get("settings");
+        settings["lookupLyrics"] = json!(false);
+        db.set("settings", &settings).unwrap();
+        on_by_default(&db).unwrap();
+        assert!(!enabled(&db));
+    }
     #[test]
     fn recognizes_synced_lyrics() {
         assert!(is_synced(

@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.1.3 — 2026-10-07
 
 - **Fixed: a question mark instead of the cover on Discord.** 1.1.2 took covers from the Cover Art Archive, whose pictures do not always load, and Discord shows a question mark for a picture it cannot fetch. Covers now come from Apple's iTunes catalogue first, then Deezer's, then the Cover Art Archive, and one is used only after its picture has actually loaded. Albums looked up by 1.1.2 are looked up again. Editions are recognised too ("Bad 25th Anniversary" finds the cover of "Bad").
 - **Smoother word-by-word lyrics.** The line being sung is now lit by one light that travels through it, instead of each word filling by itself: its soft edge keeps its width across the gaps between words and from one row of a wrapped line to the next, its speed changes gently between words sung at different speeds, and the letters no longer shift as they light, which made them shimmer.
+- **Lyrics found online without switching anything on.** **Find lyrics online** is now on unless you switch it off, and this update switches it on once for everyone already using Slate Music: songs without lyrics of their own are looked up on LRCLIB when you open Now Playing (the artist, title, album and length are sent). Settings → Library switches it off.
 - **Last.fm with nothing to set up.** Releases can carry Slate Music's own Last.fm API account: choose **Connect Last.fm**, allow it in the browser, done. An API account of your own still works under **Use my own API account**.
 
 ## 1.1.2 — 2026-10-07

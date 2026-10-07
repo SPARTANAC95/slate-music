@@ -1,3 +1,23 @@
+# Validation — 1.1.3
+
+## October 7 Discord cover fix, lyric animation and release checks
+
+1.1.2 was released without its covers having been seen in a Discord client, and the owner then saw a question mark in place of a cover. The cause: the Cover Art Archive listed a cover (a redirect), but the Internet Archive, which serves its pictures, answered 503 for that file; 1.1.2 had only checked the listing. 1.1.3 was checked inside Discord before release, with the owner's permission.
+
+| Check | Result |
+|---|---|
+| TypeScript and frontend | 81 tests passed; TypeScript and Vite production build passed |
+| Browser components | 23 Now Playing checks and 9 selection, filter and Settings checks passed in headless Edge. The new check follows the light every frame: no step back, no jump, and the soft edge lying across the gap between two words |
+| Native engine and services | 109 Rust tests passed on Windows; `cargo clippy --all-targets` reports no warnings; formatting checked. The cover lookup's ignored online test found covers that load for "The Highlights", "Bad 25th Anniversary" and "Abbey Road (Remastered)", reported a made-up album as missing, and rejected an address that answers with an error page |
+| Discord client | One status with each of three pictures was sent to a running Discord and Discord's image service asked for each: iTunes cover 200 (JPEG), Slate Music icon 200 (PNG), the Cover Art Archive address used by 1.1.2 502 |
+| Native interface | All 28 scenarios in `tools/qa.mjs` passed on a new profile, twice |
+| Native lyrics | All 6 checks in `tools/check-native-lyrics.mjs` passed |
+| Lyric animation in the native app | 2,878 frames in 20 seconds at 144 frames a second: median 7.0 ms, worst 7.2 ms, none late; the light never stepped back or jumped |
+| Upgrade from 1.1.2 | On the profile left by 1.1.2, Find lyrics online was switched on once and the other settings left alone; the cover address 1.1.2 had saved was not reused, the album was looked up again and the new cover loaded; an album in no catalogue showed the icon; pausing cleared the status |
+| The lyrics default | A new profile starts with it on; switched off after the update, it was still off after a restart |
+
+Limits. Covers depend on Apple's and Deezer's catalogues continuing to answer without a key; if one stops, the next is used, and with none the icon is shown. The Last.fm account built into releases could not be exercised: the repository secrets were not set when this was written, in which case this release asks for an API account of the user's own as before. The native run was a debug build; the released installer is built by GitHub Actions.
+
 # Validation — 1.1.2
 
 ## October 7 Discord covers, lyric timing and release checks

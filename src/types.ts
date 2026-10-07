@@ -136,8 +136,10 @@ export interface Settings {
   showListening: boolean;
   /** Look up original release years on MusicBrainz. */
   lookupYears: boolean;
-  /** Look up lyrics on LRCLIB when a song has none of its own. */
+  /** Look up lyrics on LRCLIB when a song has none of its own (on unless switched off). */
   lookupLyrics: boolean;
+  /** Set once the lookup has been switched on by default (see lyrics.rs). */
+  lyricsOnByDefault?: boolean;
   /** Look up artist photos and bios (MusicBrainz, Wikidata, Wikipedia). */
   lookupArtists?: boolean;
   /** Send songs you listen to to Last.fm. */

@@ -499,6 +499,7 @@ pub fn run() {
                 .map(PathBuf::from)
                 .unwrap_or(app.path().app_data_dir()?);
             let db = Arc::new(Database::open(&directory).map_err(std::io::Error::other)?);
+            lyrics::on_by_default(&db).map_err(std::io::Error::other)?;
             if db.folders().is_empty() {
                 if let Some(path) = std::env::var_os("SLATE_MUSIC_LIBRARY") {
                     let path = PathBuf::from(path);
