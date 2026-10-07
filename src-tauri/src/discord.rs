@@ -1,7 +1,8 @@
 //! Discord Rich Presence: while a song plays, Discord shows "Listening to Slate Music" with the
-//! title, artist and a progress bar. It talks to the Discord app on this PC through its local
-//! pipe (nothing is sent over the internet by Slate Music), as Slate Music's own Discord
-//! application unless the user sets their own. Paused or stopped clears the status.
+//! album cover, title, artist, album and a progress bar. It talks to the Discord app on this PC
+//! through its local pipe, as Slate Music's own Discord application unless the user sets their
+//! own. Discord fetches the cover itself from the web address covers.rs finds for the album.
+//! Paused or stopped clears the status.
 use crate::db::{now, Database, Track};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -76,21 +77,25 @@ fn fit(s: &str) -> String {
         s
     }
 }
-/// The activity for a song that started `start_ms` ago.
-pub fn activity(t: &Track, start_ms: i64) -> Value {
-    let by = if t.album.is_empty() {
-        t.artist.clone()
-    } else {
-        format!("{} · {}", t.artist, t.album)
-    };
+/// Shown in place of a cover for albums that have none online. Discord fetches pictures by
+/// web address, so this is the icon on Slate Music's website.
+const LOGO: &str = "https://spartanac95.github.io/slate-music/assets/icon.png";
+/// The activity for a song that started `start_ms` ago, laid out as Discord lays out music:
+/// the cover beside the title, the artist under it, then the album.
+pub fn activity(t: &Track, start_ms: i64, cover: Option<&str>) -> Value {
+    let mut assets = json!({ "large_image": cover.unwrap_or(LOGO) });
+    if !t.album.is_empty() {
+        assets["large_text"] = json!(fit(&t.album));
+    }
     json!({
         "type": 2,
         "details": fit(&t.title),
-        "state": fit(&by),
+        "state": fit(&t.artist),
         "timestamps": {
             "start": start_ms,
             "end": start_ms + (t.duration * 1000.) as i64,
         },
+        "assets": assets,
     })
 }
 
@@ -147,28 +152,39 @@ fn send(
         }
     }
 }
-/// Sets the activity; if Discord rejects the listening type, falls back to a plain one.
-/// Returns why Discord refused it, or None when it is shown.
+/// Sets the activity; if Discord rejects it, falls back to one without the cover, then to a
+/// plain one without the listening type. Returns why Discord refused it, or None when it is
+/// shown.
 fn set(
     pipe: &mut (impl Read + Write),
     nonce: &mut u64,
     activity: &Value,
 ) -> std::io::Result<Option<String>> {
-    let reply = send(pipe, nonce, activity)?;
-    if reply["evt"] == "ERROR" && !activity.is_null() {
-        let mut plain = activity.clone();
-        plain.as_object_mut().map(|a| a.remove("type"));
-        let again = send(pipe, nonce, &plain)?;
-        if again["evt"] == "ERROR" {
-            return Ok(Some(format!(
-                "Discord refused the status: {}",
-                again["data"]["message"]
-                    .as_str()
-                    .unwrap_or("unknown reason")
-            )));
+    let mut reply = send(pipe, nonce, activity)?;
+    if activity.is_null() {
+        return Ok(None);
+    }
+    let mut simpler = activity.clone();
+    for part in ["assets", "type"] {
+        if reply["evt"] != "ERROR" {
+            break;
+        }
+        if simpler
+            .as_object_mut()
+            .and_then(|a| a.remove(part))
+            .is_some()
+        {
+            reply = send(pipe, nonce, &simpler)?;
         }
     }
-    Ok(None)
+    Ok((reply["evt"] == "ERROR").then(|| {
+        format!(
+            "Discord refused the status: {}",
+            reply["data"]["message"]
+                .as_str()
+                .unwrap_or("unknown reason")
+        )
+    }))
 }
 /// A connection to Discord. The pipe is used from a thread of its own, because reading a
 /// Windows pipe can't time out: a Discord that stops answering is given up on after a few
@@ -229,8 +245,10 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
         // The application ID Discord should be used with (None while switched off).
         let mut last_wanted: Option<String> = None;
         let mut retry_at = Instant::now();
-        // What Discord shows: the song and when it started (Unix ms), or nothing.
-        let mut shown: Option<(String, i64)> = None;
+        // What Discord shows: the song, when it started (Unix ms) and its cover, or nothing.
+        let mut shown: Option<(String, i64, Option<String>)> = None;
+        // The song that is playing, read once when it starts.
+        let mut song: Option<Track> = None;
         let mut last_sent = Instant::now();
         loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -275,13 +293,22 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
                 }
             }
             let s = engine.listening();
-            let wanted =
-                s.id.filter(|_| s.playing)
-                    .map(|id| (id, now() - (s.position * 1000.) as i64));
+            let playing = s.id.filter(|_| s.playing);
+            if playing.as_deref() != song.as_ref().map(|t| t.id.as_str()) {
+                song = playing.and_then(|id| db.track(&id).ok());
+            }
+            // The cover is looked up in the background, so it can arrive after the song starts.
+            let wanted = song.as_ref().map(|t| {
+                (
+                    t.id.clone(),
+                    now() - (s.position * 1000.) as i64,
+                    crate::covers::cover(&db, t),
+                )
+            });
             // Seeking moves the start time; small drifts are left alone.
             let changed = match (&shown, &wanted) {
                 (None, None) => false,
-                (Some(a), Some(b)) => a.0 != b.0 || (a.1 - b.1).abs() > 2000,
+                (Some(a), Some(b)) => a.0 != b.0 || (a.1 - b.1).abs() > 2000 || a.2 != b.2,
                 _ => true,
             };
             // Sent again about once a minute anyway, so a restarted Discord shows the song
@@ -289,10 +316,14 @@ pub fn start(db: Arc<Database>, engine: Arc<crate::audio::Engine>) {
             if !changed && last_sent.elapsed() < Duration::from_secs(60) {
                 continue;
             }
-            let activity = wanted
-                .as_ref()
-                .and_then(|(id, start)| db.track(id).ok().map(|t| activity(&t, *start)))
-                .unwrap_or(Value::Null);
+            // Read again, so tags corrected while the song plays show up.
+            if let Some(fresh) = song.as_ref().and_then(|t| db.track(&t.id).ok()) {
+                song = Some(fresh);
+            }
+            let activity = match (&song, &wanted) {
+                (Some(t), Some((_, start, cover))) => activity(t, *start, cover.as_deref()),
+                _ => Value::Null,
+            };
             let Some(c) = client.as_ref() else {
                 continue;
             };
@@ -371,6 +402,18 @@ mod tests {
             read_frame(&mut sent).unwrap()
         };
         assert!(second["args"]["activity"].get("type").is_none());
+        // The cover refused: the song is still shown as listening, without a picture.
+        let with_cover =
+            json!({"type": 2, "details": "Song", "assets": {"large_image": "https://x"}});
+        let mut nonce = 0;
+        let mut pipe = Fake::new(&[refused("1"), ok("2")]);
+        assert_eq!(set(&mut pipe, &mut nonce, &with_cover).unwrap(), None);
+        let (_, second) = {
+            let mut sent = std::io::Cursor::new(pipe.sent.clone());
+            read_frame(&mut sent).unwrap();
+            read_frame(&mut sent).unwrap()
+        };
+        assert_eq!(second["args"]["activity"], song);
         // Both refused: the reason is reported, the connection stays.
         let mut nonce = 0;
         let problem = set(
@@ -420,13 +463,22 @@ mod tests {
             size: 1,
             original_year: 1981,
         };
-        let a = activity(&t, 1_000);
+        let a = activity(&t, 1_000, Some("https://example.org/cover.jpg"));
         assert_eq!(a["type"], 2);
         assert_eq!(a["details"], "X ♪");
-        assert_eq!(a["state"], "Cliff Richard · The Collection");
+        assert_eq!(a["state"], "Cliff Richard");
         assert_eq!(a["timestamps"]["end"], 220_000);
+        assert_eq!(a["assets"]["large_image"], "https://example.org/cover.jpg");
+        assert_eq!(a["assets"]["large_text"], "The Collection");
+        // No cover online: Slate Music's icon. No album: no caption for it.
+        assert_eq!(activity(&t, 0, None)["assets"]["large_image"], LOGO);
+        t.album.clear();
+        assert!(activity(&t, 0, None)["assets"].get("large_text").is_none());
         t.title = "y".repeat(300);
-        assert_eq!(activity(&t, 0)["details"].as_str().unwrap().len(), 128);
+        assert_eq!(
+            activity(&t, 0, None)["details"].as_str().unwrap().len(),
+            128
+        );
         assert!(setup(&db, "123").is_err());
         assert!(setup(&db, "12345678901234567a").is_err());
         assert_eq!(

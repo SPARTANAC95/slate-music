@@ -99,13 +99,15 @@ A song is scrobbled once you have heard half of it or four minutes, whichever co
 
 To show a different name, create an application in the Discord Developer Portal and save its **Application ID** under **Use your own Discord application**; **Use Slate Music's** switches back.
 
-While a song plays, Discord shows its title, artist and album with a progress bar; paused music shows nothing.
+While a song plays, Discord shows the album cover, title, artist and album with a progress bar; paused music shows nothing.
+
+Discord can only show a picture that is on the web, so the cover is not taken from your files: with **Show the album cover** on, Slate Music looks the album up on MusicBrainz (the album and artist name are sent) and Discord shows its cover from the Cover Art Archive. Each album is looked up once and the cover can appear a few seconds into its first song. It can differ from the cover in your files, and albums that aren't found show the Slate Music icon. Switch it off to always show the icon and look nothing up.
 
 ## Privacy and persistence
 
 The SQLite database and artwork cache live in `%APPDATA%\com.spartanac95.slate-music`. The database stores library paths, metadata, favorites, playlists, play counts, history, settings and the paused listening session. SQLite migrations and WAL journaling protect normal restarts. Settings includes a JSON export of favorites and playlists; to back up the full profile, close the app and copy its data directory. Do not publish that directory.
 
-Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup, optional LRCLIB lyrics, optional artist photos and bios (MusicBrainz, Wikidata, Wikipedia and Wikimedia Commons), optional Last.fm scrobbling (artist, title, album, length and when you listened) and update checks/downloads. The optional Discord status is passed only to the Discord app on this PC. Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
+Spotify tokens are encrypted with Windows DPAPI for your Windows account. The app has no analytics. Network access is used only for optional Spotify requests, the optional MusicBrainz year lookup, optional LRCLIB lyrics, optional artist photos and bios (MusicBrainz, Wikidata, Wikipedia and Wikimedia Commons), optional Last.fm scrobbling (artist, title, album, length and when you listened) and update checks/downloads. The optional Discord status is passed only to the Discord app on this PC; its optional album covers are looked up on MusicBrainz and the Cover Art Archive (album and artist name). Disable automatic updates in Settings for a fully offline setup. Music and private library data are not part of this repository or releases.
 
 Updates are checked and downloaded automatically by default. The updater verifies both the artifact signature and signed version. It only installs after you confirm while paused or choose the install option on exit. Installation keeps your database, artwork and settings.
 

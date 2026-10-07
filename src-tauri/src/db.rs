@@ -73,6 +73,7 @@ impl Database {
    CREATE TABLE IF NOT EXISTS lyrics(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS loudness(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS artist_info(key TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS album_covers(key TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS scrobbles(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT NOT NULL);
    INSERT OR IGNORE INTO migrations VALUES(1,strftime('%s','now'));
    PRAGMA user_version=1;").map_err(err)?;
@@ -331,6 +332,28 @@ impl Database {
             .unwrap()
             .execute(
                 "INSERT INTO artist_info VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                params![key, data.to_string()],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+    /// Where an album's cover is on the web (see covers.rs), by album.
+    pub fn album_cover(&self, key: &str) -> Result<Option<Value>> {
+        let c = self.conn.lock().unwrap();
+        match c.query_row("SELECT data FROM album_covers WHERE key=?", [key], |r| {
+            r.get::<_, String>(0)
+        }) {
+            Ok(data) => Ok(serde_json::from_str(&data).ok()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(err(e)),
+        }
+    }
+    pub fn set_album_cover(&self, key: &str, data: &Value) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO album_covers VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
                 params![key, data.to_string()],
             )
             .map_err(err)?;

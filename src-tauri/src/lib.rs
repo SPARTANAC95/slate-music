@@ -1,5 +1,6 @@
 mod artists;
 mod audio;
+mod covers;
 mod db;
 mod desktop;
 mod discord;

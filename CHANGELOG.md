@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Album covers on Discord.** The Discord status now shows the album's cover beside the song, with the title, the artist and the album on lines of their own, the way Discord shows other music apps. Discord can only show pictures that are on the web, so the cover is found on MusicBrainz and the Cover Art Archive (the album and artist name are sent) rather than taken from your files; it can differ from yours, and albums that aren't found show the Slate Music icon. **Show the album cover** in Settings → Discord status switches the lookup off.
 - **See which version you have:** Settings → Updates now shows the installed version, for example "Slate Music 1.1.1".
 
 ## 1.1.1 — 2026-10-06

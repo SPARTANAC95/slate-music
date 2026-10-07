@@ -216,9 +216,9 @@ export default function SharingSettings({
           )}
         </div>
         <p>
-          Show friends on Discord what you are listening to, with the song, artist and a progress
-          bar. Nothing shows while music is paused. Just switch it on; Discord needs to be open on
-          this PC.
+          Show friends on Discord what you are listening to, with the album cover, song, artist
+          and a progress bar. Nothing shows while music is paused. Just switch it on; Discord needs
+          to be open on this PC.
         </p>
         <Toggle
           label="Show what I’m listening to on Discord"
@@ -231,6 +231,17 @@ export default function SharingSettings({
           }
           checked={!!settings.discordPresence}
           onChange={(v) => onSettings({ ...settings, discordPresence: v })}
+        />
+        <Toggle
+          label="Show the album cover"
+          description={
+            settings.discordCovers === false
+              ? 'Off. Discord shows the Slate Music icon beside the song.'
+              : 'Finds the cover on MusicBrainz and the Cover Art Archive; the album and artist name are sent. It can differ from the cover in your files.'
+          }
+          checked={settings.discordCovers !== false}
+          disabled={!settings.discordPresence}
+          onChange={(v) => onSettings({ ...settings, discordCovers: v })}
         />
         <details className="advanced">
           <summary>Use your own Discord application (optional)</summary>
@@ -284,8 +295,8 @@ export default function SharingSettings({
         </details>
         {problem('discord')}
         <p className="fine-print">
-          Slate Music talks only to the Discord app on this PC; it sends nothing over the internet
-          itself. Discord must be open, with Activity Privacy allowing your activity to show.
+          The status itself goes only to the Discord app on this PC. Discord must be open, with
+          Activity Privacy allowing your activity to show.
         </p>
       </section>
     </>

@@ -144,6 +144,8 @@ export interface Settings {
   scrobble?: boolean;
   /** Show the playing song as your Discord status. */
   discordPresence?: boolean;
+  /** Find album covers online for the Discord status (on unless switched off). */
+  discordCovers?: boolean;
   /** Equalizer per output device name ("" = Windows default). */
   eqByDevice?: Record<string, EqSettings>;
 }

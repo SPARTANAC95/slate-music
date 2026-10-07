@@ -179,6 +179,15 @@ try {
     await page.getByText('Slate Music 9.8.7', { exact: true }).waitFor();
     await page.close();
   });
+
+  await test('Discord covers are on unless switched off, and wait for the status itself', async () => {
+    const page = await fixture();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const covers = page.getByRole('switch', { name: 'Show the album cover' });
+    assert.equal(await covers.getAttribute('aria-checked'), 'true');
+    assert.equal(await covers.isDisabled(), true, 'nothing to show while the status is off');
+    await page.close();
+  });
   assert.deepEqual(errors, [], 'no browser errors');
   assert.deepEqual(failures, [], 'all selection regression checks passed');
 } finally {
