@@ -1103,6 +1103,54 @@ kbd {
   margin-bottom: 4px;
   color: #93819e;
 }
+/* First launch: where the music is, and a few extras to decide once. */
+.welcome {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  text-align: center;
+  gap: 15px;
+  padding: 48px 35px 40px;
+  flex: 1;
+}
+.welcome > svg {
+  margin-bottom: 4px;
+  color: #93819e;
+}
+.welcome h2 {
+  font-size: 24px;
+  font-weight: 470;
+  color: #d5cfdd;
+  letter-spacing: -0.8px;
+}
+.welcome > p {
+  max-width: 400px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #777380;
+}
+.welcome > .button-row {
+  justify-content: center;
+  margin-top: 4px;
+}
+.welcome section {
+  width: min(100%, 470px);
+  margin-top: 26px;
+  padding: 18px 22px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  text-align: left;
+}
+.welcome h3 {
+  font-size: 12px;
+  font-weight: 470;
+  color: #92929d;
+  margin-bottom: 6px;
+}
+.welcome .fine-print {
+  margin-top: 8px;
+}
 .listening-panel {
   border-left: 1px solid var(--line);
   background: #0e0e10;

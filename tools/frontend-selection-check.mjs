@@ -21,11 +21,11 @@ try {
       console.error(`FAIL ${name}: ${error.message}`);
     }
   }
-  async function fixture(queue = ['a', 'b', 'c']) {
+  async function fixture(queue = ['a', 'b', 'c'], empty = false) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 940 } });
     page.setDefaultTimeout(5000);
     page.on('pageerror', (error) => errors.push(error.message));
-    await page.addInitScript(({ queue }) => {
+    await page.addInitScript(({ queue, empty }) => {
       const track = (id, format = 'FLAC', bitDepth = 16) => ({
         id, path: `fixture/${id}`, folder: 'fixture', title: `Song ${id.toUpperCase()}`,
         artist: 'Fixture Artist', album: 'Fixture Album', albumArtist: 'Fixture Artist',
@@ -55,6 +55,8 @@ try {
           outputDevice: null, output: null, gainDb: null, gainKind: 'off',
         },
       };
+      // A first launch: no folders, no songs.
+      if (empty) Object.assign(state, { tracks: [], collections: [], folders: [] });
       const callbacks = new Map();
       const listeners = new Map();
       let callbackId = 0;
@@ -78,6 +80,9 @@ try {
           if (command === 'listening_history') return [];
           if (command === 'artist_photos') return {};
           if (command === 'plugin:app|version') return '9.8.7';
+          if (command === 'music_folder') return 'C:\Users\Listener\Music';
+          if (command === 'add_folder') { test.added = args.path ?? 'chosen in a dialog'; state.folders = [test.added]; state.scan.scanning = true; return test.added; }
+          if (command === 'settings') { state.settings = structuredClone(args.value); test.settings = state.settings; return; }
           if (command === 'lastfm_status') return { configured: true, builtIn: true, own: false, connected: false, user: null, waiting: false, pending: 0, problem: null };
           if (command === 'plugin:event|listen') {
             listeners.set(args.event, [...(listeners.get(args.event) ?? []), args.handler]);
@@ -105,7 +110,7 @@ try {
           throw new Error(`Unexpected fixture IPC: ${command} ${args.action ?? ''}`);
         },
       };
-    }, { queue });
+    }, { queue, empty });
     await page.goto(url);
     await page.getByRole('button', { name: 'Songs', exact: true }).waitFor();
     return page;
@@ -199,6 +204,20 @@ try {
     await page.getByLabel('API key').waitFor();
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'Connect Last.fm', exact: true }).waitFor();
+    await page.close();
+  });
+
+  await test('First launch offers the Music folder and a few switches, with no dialog unasked', async () => {
+    const page = await fixture([], true);
+    await page.getByRole('heading', { name: 'A home for your music.' }).waitFor();
+    assert.equal(await page.evaluate(() => window.__selectionFixture.added), undefined, 'nothing is added or asked before a choice');
+    assert.equal(await page.getByRole('switch', { name: 'Find lyrics online' }).getAttribute('aria-checked'), 'false', 'the fixture has it off');
+    await page.getByRole('switch', { name: 'Show artist photos and bios' }).click();
+    await page.waitForFunction(() => window.__selectionFixture.settings?.lookupArtists === true);
+    assert.equal(await page.getByRole('button', { name: 'Connect Last.fm' }).count(), 1, 'offered where Slate Music carries its own account');
+    await page.getByRole('button', { name: 'Use my Music folder' }).click();
+    await page.waitForFunction(() => window.__selectionFixture.added === 'C:\Users\Listener\Music');
+    await page.getByRole('heading', { name: 'Finding your music…' }).waitFor();
     await page.close();
   });
   assert.deepEqual(errors, [], 'no browser errors');

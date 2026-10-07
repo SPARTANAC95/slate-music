@@ -150,18 +150,32 @@ async fn settings(
 fn rescan(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
     library::start_scan(state.db.clone(), state.library.clone(), app);
 }
+/// Windows' own Music folder, offered on first launch (None when there isn't one).
+#[tauri::command]
+fn music_folder(app: tauri::AppHandle) -> Option<String> {
+    app.path()
+        .audio_dir()
+        .ok()
+        .filter(|path| path.is_dir())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+/// Adds a folder to the library: the one given, or one chosen in a dialog.
 #[tauri::command]
 async fn add_folder(
+    path: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<String>> {
-    let selected = tauri::async_runtime::spawn_blocking(|| {
-        rfd::FileDialog::new()
-            .set_title("Choose your music folder")
-            .pick_folder()
-    })
-    .await
-    .map_err(err)?;
+    let selected = match path {
+        Some(path) => Some(PathBuf::from(path)).filter(|path| path.is_dir()),
+        None => tauri::async_runtime::spawn_blocking(|| {
+            rfd::FileDialog::new()
+                .set_title("Choose your music folder")
+                .pick_folder()
+        })
+        .await
+        .map_err(err)?,
+    };
     if let Some(path) = selected {
         let path = path
             .canonicalize()
@@ -543,6 +557,7 @@ pub fn run() {
             settings,
             rescan,
             add_folder,
+            music_folder,
             remove_folder,
             spotify_connect,
             spotify_disconnect,

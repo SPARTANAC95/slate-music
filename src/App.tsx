@@ -82,6 +82,7 @@ import {
   type MenuItem,
 } from './components';
 import SettingsPanel from './SettingsPanel';
+import Welcome from './Welcome';
 import ImportPanel from './ImportPanel';
 import { useUpdater } from './updater';
 import { followsSpotify, updateAll } from './spotifySources';
@@ -224,8 +225,6 @@ export default function App() {
     history = useRef<View[]>([]),
     restoreScroll = useRef<number | null>(null),
     unmuteVolume = useRef(0.7),
-    initialPicker = useRef(false),
-    initialized = useRef(false),
     spotifyChecked = useRef(false),
     editingRef = useRef<string | null>(null),
     exitAllowed = useRef(false),
@@ -303,17 +302,6 @@ export default function App() {
       for (const p of promises) p.then((fn) => fn());
     };
   }, [refresh]);
-  useEffect(() => {
-    if (!data || initialized.current || mini) return;
-    initialized.current = true;
-    if (data.folders.length === 0 && !initialPicker.current) {
-      initialPicker.current = true;
-      task(async () => {
-        await invoke('add_folder');
-        await refresh();
-      });
-    }
-  }, [data, mini, refresh, task]);
   useEffect(() => {
     // Once per launch, after the first scan, bring imported Spotify playlists up to date.
     if (!data || mini || spotifyChecked.current || data.scan.scanning || !data.spotify.connected)
@@ -1600,7 +1588,18 @@ export default function App() {
           </IconButton>
         </div>
         <div className="page-content" key={page}>
-          {tracks.length === 0 ? (
+          {tracks.length === 0 && data.folders.length === 0 && !data.scan.scanning ? (
+            <Welcome
+              settings={settings}
+              onSettings={changeSettings}
+              onAdd={(path) =>
+                task(async () => {
+                  await invoke('add_folder', { path });
+                  await refresh();
+                })
+              }
+            />
+          ) : tracks.length === 0 ? (
             <Empty
               title={data.scan.scanning ? 'Finding your music…' : 'A home for your music.'}
               description={
