@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.1.5 — 2026-10-07
 
+- **Hearts can be taken back.** Removing a favorite, or many at once from the selection bar, now shows **Undo**. Removed hearts are also remembered for 30 days, and when three or more are gone the Favorites page offers **Restore them**. Before, picking every song on the Favorites page and pressing Unfavorite removed every heart at once with no way back.
+- **New defaults for a new library:** a 4-second crossfade between songs (albums played in order stay gapless) and loudness levelling off. Libraries that already exist keep the settings they have.
 - **An empty smart playlist says why.** It used to say "Ready for your first song. Add songs with the folder button…", as if it were an ordinary playlist. It now lists each rule with how many songs it matches by itself ("Favorite is yes: no songs · Last played not in the last 90 days: 825 songs"), and says so when you simply have no favorites yet. The rule editor shows the same count beside every rule, so the one keeping songs out stands out.
 - Fixed: a rule still being typed changed the whole list. With "any", an empty text rule let every song in; with "all", an empty number kept every song out. A rule without a value is now left out until it has one.
 

@@ -82,6 +82,12 @@ try {
           if (command === 'listening_history') return [];
           if (command === 'artist_photos') return {};
           if (command === 'plugin:app|version') return '9.8.7';
+          if (command === 'favorite' || command === 'favorite_many') {
+            const ids = new Set(args.ids ?? [args.id]);
+            for (const t of state.tracks) if (ids.has(t.id)) t.favorite = args.value ?? true;
+            (test.hearts ??= []).push(command + ':' + [...ids].join(',') + ':' + (args.value ?? true));
+            return;
+          }
           if (command === 'music_folder') return 'C:\Users\Listener\Music';
           if (command === 'add_folder') { test.added = args.path ?? 'chosen in a dialog'; state.folders = [test.added]; state.scan.scanning = true; return test.added; }
           if (command === 'settings') { state.settings = structuredClone(args.value); test.settings = state.settings; return; }
@@ -232,6 +238,35 @@ try {
     await page.getByRole('button', { name: /Edit rules/ }).click();
     assert.deepEqual(await page.locator('.smart-count').allTextContents(), ['0', '4']);
     assert.equal(await page.locator('.smart-count.none').count(), 1, 'the rule that matches nothing stands out');
+    await page.close();
+  });
+
+  await test('Removing every heart at once can be undone, and restored later', async () => {
+    const page = await fixture();
+    const hearted = () => page.evaluate(() => window.__selectionFixture.state.tracks.filter((t) => t.favorite).map((t) => t.id).join(''));
+    await page.getByRole('button', { name: 'Songs', exact: true }).click();
+    await page.locator('main .track-row .album-cell').first().click();
+    await page.keyboard.press('Control+a');
+    await page.locator('.selection-bar').getByRole('button', { name: 'Favorite', exact: true }).click();
+    await page.waitForFunction(() => window.__selectionFixture.state.tracks.every((t) => t.favorite));
+    // The slip: everything on the Favorites page picked, and Unfavorite pressed.
+    await page.getByRole('button', { name: 'Favorites', exact: true }).click();
+    await page.locator('main .track-row .album-cell').first().click();
+    await page.keyboard.press('Control+a');
+    await page.locator('.selection-bar').getByRole('button', { name: 'Unfavorite', exact: true }).click();
+    await page.getByText('4 songs removed from Favorites', { exact: true }).waitFor();
+    assert.equal(await hearted(), '');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await page.waitForFunction(() => window.__selectionFixture.state.tracks.every((t) => t.favorite));
+    assert.equal(await page.locator('.notice', { hasText: 'lost their hearts' }).count(), 0, 'nothing left to restore');
+    // The same slip with the message missed: the Favorites page still offers them back.
+    await page.locator('main .track-row .album-cell').first().click();
+    await page.keyboard.press('Control+a');
+    await page.locator('.selection-bar').getByRole('button', { name: 'Unfavorite', exact: true }).click();
+    await page.getByRole('button', { name: 'Dismiss message' }).click();
+    await page.locator('.notice', { hasText: '4 songs lost their hearts' }).getByRole('button', { name: 'Restore them' }).click();
+    await page.waitForFunction(() => window.__selectionFixture.state.tracks.every((t) => t.favorite));
+    assert.equal(await hearted(), 'abcd');
     await page.close();
   });
   assert.deepEqual(errors, [], 'no browser errors');

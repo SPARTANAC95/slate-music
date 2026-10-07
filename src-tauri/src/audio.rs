@@ -164,13 +164,16 @@ impl Default for Playback {
             volume: 0.7,
             shuffle: false,
             repeat: "off".into(),
-            crossfade: 0.,
+            // What a new listener starts with: songs blend into each other over four seconds
+            // (albums played in order stay gapless, see smart_crossfade) and nothing changes
+            // their volume.
+            crossfade: 4.,
             error: None,
             engine_ready: false,
             system_controls: false,
             sleep_at: None,
             sleep_end_of_track: false,
-            levelling: "smart".into(),
+            levelling: "off".into(),
             smart_crossfade: true,
             eq: crate::dsp::EqSettings::default(),
             output_device: None,
@@ -1669,6 +1672,9 @@ mod tests {
                 playing: true,
                 volume: 1.,
                 queue: vec!["a".into(), "b".into()],
+                // These tests say what they need themselves, whatever a new listener starts with.
+                crossfade: 0.,
+                levelling: "smart".into(),
                 ..Default::default()
             },
             current: Some(deck("a", 0, 0.25, 480)),
@@ -2003,6 +2009,19 @@ mod tests {
         );
     }
     #[test]
+    fn a_new_listener_starts_with_a_four_second_crossfade_and_no_levelling() {
+        let fresh = Playback::default();
+        assert_eq!(fresh.crossfade, 4.);
+        assert_eq!(fresh.levelling, "off");
+        assert!(fresh.smart_crossfade, "albums played in order stay gapless");
+        assert!(!fresh.exclusive && !fresh.shuffle && fresh.repeat == "off");
+        // A session saved before keeps what it chose.
+        let saved: Playback =
+            serde_json::from_value(serde_json::json!({"crossfade": 0.0, "levelling": "smart"}))
+                .unwrap();
+        assert_eq!((saved.crossfade, saved.levelling.as_str()), (0., "smart"));
+    }
+    #[test]
     fn sample_exact_gapless_boundary() {
         let mut r = render();
         let samples: Vec<_> = (0..1920).map(|_| r.sample()).collect();
@@ -2147,7 +2166,13 @@ mod tests {
             .unwrap();
         }
         let engine = Engine::new(db);
-        engine.render.lock().unwrap().state.engine_ready = true;
+        {
+            // These tests say what they need themselves, whatever a new listener starts with.
+            let mut r = engine.render.lock().unwrap();
+            r.state.engine_ready = true;
+            r.state.crossfade = 0.;
+            r.state.levelling = "smart".into();
+        }
         (dir, engine)
     }
     #[test]

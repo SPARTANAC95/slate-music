@@ -1035,11 +1035,27 @@ kbd {
   gap: 10px;
   margin-bottom: 22px;
 }
-.notice > button {
+.notice > button,
+.notice .button-row button {
   font-size: 10px;
   white-space: nowrap;
   background: transparent;
   border-color: #594a32;
+}
+.notice .button-row {
+  flex-wrap: nowrap;
+}
+/* Takes back what the message says was just done. */
+.toast-undo {
+  font-size: 12px;
+  font-weight: 590;
+  color: var(--accent);
+  background: transparent;
+  border-color: transparent;
+  padding: 4px 8px;
+}
+.toast-undo:hover {
+  background: #ffffff14;
 }
 .page-footer {
   display: flex;

@@ -94,6 +94,7 @@ import YourYear from './YourYear';
 import ArtistHero from './ArtistHero';
 import SmartPlaylistEditor from './SmartPlaylistEditor';
 import { evaluateSmart, whyEmpty } from './smart';
+import { forgetRemoved, KEEP_DAYS, rememberRemoved, removedFavorites } from './removedFavorites';
 import {
   columnSort,
   moveRows,
@@ -214,6 +215,10 @@ export default function App() {
     [adding, setAdding] = useState<Track[]>([]),
     [playlistName, setPlaylistName] = useState(''),
     [toast, setToast] = useState(''),
+    // What the message shown can take back (removing hearts), and a count that rises whenever
+    // the hearts remembered as removed change, so the Favorites page looks again.
+    [undo, setUndo] = useState<(() => void) | null>(null),
+    [removals, setRemovals] = useState(0),
     [settings, setSettings] = useState<Settings>(defaults),
     [seek, setSeek] = useState<number | null>(null),
     [menu, setMenu] = useState<Menu | null>(null),
@@ -327,10 +332,14 @@ export default function App() {
     };
   }, [!!data, mini, settings.autoCheck, settings.autoDownload]);
   useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(''), 6500);
+    if (!toast) {
+      setUndo(null);
+      return;
+    }
+    // A message that can be undone stays a little longer.
+    const t = setTimeout(() => setToast(''), undo ? 10000 : 6500);
     return () => clearTimeout(t);
-  }, [toast]);
+  }, [toast, undo]);
   useEffect(() => {
     if (mini) return;
     const pending = getCurrentWindow().onCloseRequested((e) => {
@@ -933,7 +942,33 @@ export default function App() {
             }
           : d,
       );
+      hearts([t.id], !t.favorite);
     });
+  }
+  /** Keeps track of hearts removed, so they can be undone now or restored later. */
+  function hearts(ids: string[], value: boolean) {
+    if (value) forgetRemoved(ids);
+    else {
+      rememberRemoved(ids);
+      setUndo(() => () => restoreFavorites(ids));
+      notify(ids.length === 1 ? 'Removed from Favorites' : `${ids.length} songs removed from Favorites`);
+    }
+    setRemovals((n) => n + 1);
+  }
+  /** Gives songs their hearts back. */
+  async function restoreFavorites(ids: string[]) {
+    await task(
+      async () => {
+        await invoke('favorite_many', { ids });
+        const back = new Set(ids);
+        setData((d) =>
+          d ? { ...d, tracks: d.tracks.map((x) => (back.has(x.id) ? { ...x, favorite: true } : x)) } : d,
+        );
+        forgetRemoved(ids);
+        setRemovals((n) => n + 1);
+      },
+      ids.length === 1 ? 'Back in Favorites' : `${ids.length} songs back in Favorites`,
+    );
   }
   function addTo(list: Track[]) {
     setAdding(list);
@@ -1002,8 +1037,9 @@ export default function App() {
               }
             : d,
         );
+        hearts(ids, value);
       },
-      `${plural(ids.length, 'song')} ${value ? 'added to' : 'removed from'} Favorites`,
+      value ? `${plural(ids.length, 'song')} added to Favorites` : undefined,
     );
   }
   /** Removes the picked songs from the queue or the playlist shown. */
@@ -1173,6 +1209,12 @@ export default function App() {
     </button>
   );
   const allPickedFavorite = pickedTracks.every((t) => t.favorite);
+  // Songs still in the library whose hearts were removed lately and have not come back.
+  const lostHearts = useMemo(
+    () => removedFavorites().filter((id) => trackMap.get(id)?.favorite === false),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [trackMap, removals],
+  );
   const smartCounts = useMemo(() => {
     const now = Date.now();
     return new Map(
@@ -2098,6 +2140,25 @@ export default function App() {
                   </select>
                 </div>
               )}
+              {page === 'Favorites' && lostHearts.length >= 3 && (
+                <div className="notice">
+                  <span>
+                    {lostHearts.length} songs lost their hearts in the last {KEEP_DAYS} days. If that
+                    wasn’t meant, they can have them back.
+                  </span>
+                  <span className="button-row">
+                    <button onClick={() => restoreFavorites(lostHearts)}>Restore them</button>
+                    <button
+                      onClick={() => {
+                        forgetRemoved(lostHearts);
+                        setRemovals((n) => n + 1);
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </span>
+                </div>
+              )}
               {shownTracks.length ? (
                 table(shownTracks, false, page === 'Queue')
               ) : (
@@ -2300,6 +2361,17 @@ export default function App() {
       {toast && (
         <div className="toast" role="status">
           <span>{toast}</span>
+          {undo && (
+            <button
+              className="toast-undo"
+              onClick={() => {
+                undo();
+                setUndo(null);
+              }}
+            >
+              Undo
+            </button>
+          )}
           <IconButton label="Dismiss message" onClick={() => setToast('')}>
             <X size={16} />
           </IconButton>

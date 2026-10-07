@@ -1,3 +1,22 @@
+# Validation — 1.1.5
+
+## October 7 favorites, smart playlists, defaults and release checks
+
+The owner asked whether smart playlists work, and said hearts they had given were gone. Both were looked into on the owner's real library, read-only, before anything was changed.
+
+| Check | Result |
+|---|---|
+| Smart playlists on a real library | The app's own rule engine was run over the owner's 825 songs for each ready-made playlist. Most played: 50 songs in descending order of plays; Never played: 100 songs, all with no plays; Songs from the 80s: 74 songs dated 1983 to 1989, the same as a direct count; Recently added and Lossless only: all 825 (the library is under 30 days old and all FLAC). The owner's own playlist, Forgotten favourites, held nothing because no song was a favorite, and the page said "Ready for your first song. Add songs with the folder button", which is what made it look broken |
+| Where the hearts went | No song had been deleted (no play in the history pointed at a missing song), copies of the library from September 26 and 27 held no favorites either, and hearts set through the interface survived the app being killed, restarted and rescanned. The one way found to lose every heart at once without a trace: every song picked on the Favorites page and Unfavorite pressed. That it happened this way is an inference, not a record |
+| TypeScript and frontend | 85 tests passed; TypeScript and Vite production build passed |
+| Browser components | 24 Now Playing checks and 11 selection, filter, Settings, first-launch, smart playlist and favorites checks passed in headless Edge |
+| Native engine and services | 112 Rust tests passed on Windows, including one that a new listener starts with a 4-second crossfade and no levelling while a saved session keeps its own; `cargo clippy --all-targets` reports no warnings; formatting checked |
+| Native defaults | A new profile started with crossfade 4, levelling off, smart crossfade on |
+| Native favorites | All songs hearted, all hearts removed at once from the Favorites page, Undo restored all; removed again with the message dismissed, **Restore them** on the Favorites page restored all |
+| Native interface and lyrics | All 28 scenarios in `tools/qa.mjs` and all 6 checks in `tools/check-native-lyrics.mjs` passed with the new defaults |
+
+Limits. Hearts removed before 1.1.5 were not recorded anywhere and cannot be restored. Removed hearts are remembered in this PC's WebView storage, not in the library database, so they do not travel with a copied profile. The empty smart playlist message was checked in the browser components, not in the native run. The native run was a debug build; the released installer is built by GitHub Actions.
+
 # Validation — 1.1.4
 
 ## October 7 Opus, welcome and release checks
@@ -7,7 +26,7 @@ Version 1.1.4 was built and run as a native Windows application under a separate
 | Check | Result |
 |---|---|
 | TypeScript and frontend | 81 tests passed; TypeScript and Vite production build passed |
-| Browser components | 24 Now Playing checks and 10 selection, filter, Settings and first-launch checks passed in headless Edge |
+| Browser components | 24 Now Playing checks and 9 selection, filter, Settings and first-launch checks passed in headless Edge |
 | Native engine and services | 111 Rust tests passed on Windows; `cargo clippy --all-targets` reports no warnings; formatting checked |
 | Opus decoder choice | `unsafe-libopus` (libopus translated to Rust) and `opus-decoder` were each compared with ffmpeg's libopus on five files: 16 kbit/s mono speech, 32 kbit/s hybrid, and 48, 128 and 256 kbit/s music with 10, 20 and 60 ms frames. `unsafe-libopus` differed by at most 0.000015 on every file; `opus-decoder` refused the 60 ms file and was 34 dB and 48 dB from the reference on two others, and a hundred times slower |
 | Opus in the app's own reader | The ignored test `matches_the_reference_decoder_on_real_files` gave the same number of samples as the reference for all five files (run-in and padding trimmed) and at most 0.000015 difference. A generated nine-second song decoded to exactly its length with the right pitch in each channel, and seeking to four places landed on the very samples straight playback reaches |
@@ -27,7 +46,7 @@ Limits. Opus files with more than two channels are refused. Chained Ogg streams 
 | Check | Result |
 |---|---|
 | TypeScript and frontend | 81 tests passed; TypeScript and Vite production build passed |
-| Browser components | 23 Now Playing checks and 9 selection, filter and Settings checks passed in headless Edge. The new check follows the light every frame: no step back, no jump, and the soft edge lying across the gap between two words |
+| Browser components | 23 Now Playing checks and 8 selection, filter and Settings checks passed in headless Edge. The new check follows the light every frame: no step back, no jump, and the soft edge lying across the gap between two words |
 | Native engine and services | 109 Rust tests passed on Windows; `cargo clippy --all-targets` reports no warnings; formatting checked. The cover lookup's ignored online test found covers that load for "The Highlights", "Bad 25th Anniversary" and "Abbey Road (Remastered)", reported a made-up album as missing, and rejected an address that answers with an error page |
 | Discord client | One status with each of three pictures was sent to a running Discord and Discord's image service asked for each: iTunes cover 200 (JPEG), Slate Music icon 200 (PNG), the Cover Art Archive address used by 1.1.2 502 |
 | Native interface | All 28 scenarios in `tools/qa.mjs` passed on a new profile, twice |
@@ -47,7 +66,7 @@ Version 1.1.2 was built and run as a native Windows application under a separate
 | Check | Result |
 |---|---|
 | TypeScript and frontend | 81 tests passed; TypeScript and Vite production build passed |
-| Browser components | 22 Now Playing checks and 8 selection, filter and Settings checks passed in headless Edge with the real components, including the lyrics options, the word-by-word choice and the version line |
+| Browser components | 22 Now Playing checks and 7 selection, filter and Settings checks passed in headless Edge with the real components, including the lyrics options, the word-by-word choice and the version line |
 | Native engine and services | 106 Rust tests passed on Windows; `cargo clippy --all-targets` reports no warnings; formatting checked. The cover lookup's ignored online test found a known album's cover and reported a made-up album as missing |
 | Native interface | All 28 scenarios in `tools/qa.mjs` passed with no runtime errors; Settings showed "Slate Music 1.1.2" |
 | Native lyrics | All 6 checks in `tools/check-native-lyrics.mjs` passed; with Word by word off, every word of the line being sung was lit at once |
