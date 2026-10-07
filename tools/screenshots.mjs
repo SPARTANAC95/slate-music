@@ -162,7 +162,7 @@ const lyrics = `[00:12.00]Morning finds the window first
 [00:44.20]Hold on to the quiet hour
 [00:50.80]Before the city wakes
 [00:57.30]Hold on to the blue that's leaving
-[01:03.90]Every colour that it takes
+[01:03.90]<01:03.90>Every <01:04.90>colour <01:06.00>that <01:07.40>it <01:08.20>takes<01:10.00>
 [01:10.50]First light, first light
 [01:16.80]Carry me across the line
 [01:23.20]First light, first light
@@ -239,7 +239,12 @@ await shot('year');
 await nav('Home');
 await page.keyboard.press('Control+l');
 await page.locator('.now-playing, [aria-label="Now Playing"]').first().waitFor();
+// The line being sung carries its own word times, so it is lit word by word; with motion
+// allowed, the light has its soft edge (playback is paused, so nothing moves).
+await page.emulateMedia({ reducedMotion: 'no-preference' });
+await page.waitForTimeout(900);
 await shot('now-playing');
+await page.emulateMedia({ reducedMotion: 'reduce' });
 await page.getByRole('button', { name: /signal path/i }).first().click().catch(() => {});
 await shot('signal-path');
 await page.keyboard.press('Escape');
