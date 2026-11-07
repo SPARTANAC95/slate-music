@@ -51,10 +51,22 @@ pub struct Deck {
     pub rate: u32,
     /// The file's own sample rate.
     pub native: u32,
+    /// Studio mode's mastering-grade rate converter, when the song is converted. Without it,
+    /// `source` already delivers the song at `rate`.
+    pub resampler: Option<crate::resample::Resampler>,
+    /// Studio mode: the highest volume (linear) at which the song's loudest peak still fits
+    /// below full scale. Infinite when nothing needs guarding.
+    pub headroom: f32,
 }
 impl Deck {
-    /// Opens a song, mixed at the rate `rate_for` picks for the file's own rate.
-    fn load(track: &Track, index: usize, rate_for: impl Fn(u32) -> u32) -> Result<Self> {
+    /// Opens a song, mixed at the rate `rate_for` picks for the file's own rate. In Studio mode
+    /// a rate conversion uses the mastering-grade converter instead of rodio's.
+    fn load(
+        track: &Track,
+        index: usize,
+        rate_for: impl Fn(u32) -> u32,
+        studio: bool,
+    ) -> Result<Self> {
         let decoder = open(&track.path)?;
         let duration = decoder
             .total_duration()
@@ -62,10 +74,20 @@ impl Deck {
             .unwrap_or(track.duration);
         let native = decoder.sample_rate();
         let rate = rate_for(native);
+        let resampler = if studio {
+            crate::resample::Resampler::new(native, rate)
+        } else {
+            None
+        };
+        let source: StreamSource = if resampler.is_some() {
+            Box::new(UniformSourceIterator::new(decoder, 2, native))
+        } else {
+            Box::new(UniformSourceIterator::new(decoder, 2, rate))
+        };
         Ok(Self {
             id: track.id.clone(),
             index,
-            source: Box::new(UniformSourceIterator::new(decoder, 2, rate)),
+            source,
             samples: 0,
             duration,
             gain: 1.,
@@ -76,7 +98,31 @@ impl Deck {
             continues_album: false,
             rate,
             native,
+            resampler,
+            headroom: f32::INFINITY,
         })
+    }
+    /// The next sample at the mixing rate, alternating left and right.
+    fn next_sample(&mut self) -> Option<f32> {
+        match self.resampler.as_mut() {
+            Some(r) => r.next(&mut self.source),
+            None => self.source.next(),
+        }
+    }
+    /// The song's input has ended but its converter holds the last few milliseconds until it
+    /// knows whether the next song carries them on.
+    fn holding(&self) -> bool {
+        self.resampler.as_ref().is_some_and(|r| r.holding())
+    }
+    /// Whether this song, not yet started, can carry on `previous`'s held end seamlessly.
+    fn can_continue(&self, previous: &Deck) -> bool {
+        self.samples == 0
+            && self.rate == previous.rate
+            && self.native == previous.native
+            && match (&self.resampler, &previous.resampler) {
+                (Some(this), Some(before)) => this.can_adopt(before),
+                _ => false,
+            }
     }
     /// Jumps forward, keeping the position count in whole stereo frames.
     fn skip_to(&mut self, seconds: f64) -> Result<()> {
@@ -84,6 +130,9 @@ impl Deck {
         self.source
             .try_seek(Duration::from_secs_f64(target))
             .map_err(err)?;
+        if let Some(r) = self.resampler.as_mut() {
+            r.reset();
+        }
         self.samples = (target * self.rate as f64) as u64 * 2;
         Ok(())
     }
@@ -135,6 +184,13 @@ pub struct Playback {
     /// Levelling applied to the current song, in dB, and whether by song or album.
     pub gain_db: Option<f64>,
     pub gain_kind: String,
+    /// Studio mode: every song as it was mastered. The equalizer, levelling and crossfades
+    /// step aside (and come back when it ends), rate conversion uses mastering-grade filters,
+    /// and the volume never pushes a song's peaks past full scale.
+    pub studio: bool,
+    /// Studio mode is lowering the volume this many dB (negative) so the song's peaks fit.
+    #[serde(skip_deserializing)]
+    pub guard_db: Option<f64>,
 }
 #[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -181,6 +237,8 @@ impl Default for Playback {
             output: None,
             gain_db: None,
             gain_kind: "off".into(),
+            studio: false,
+            guard_db: None,
         }
     }
 }
@@ -235,12 +293,21 @@ impl RenderState {
         self.channel = 0;
     }
     /// The crossfade in use: none for the end-of-song sleep timer (the song plays to its real
-    /// end) or in exclusive mode (songs are sent untouched, never mixed).
+    /// end), in exclusive mode (songs are sent untouched, never mixed) or in Studio mode (songs
+    /// begin and end the way the artist made them).
     fn effective_crossfade(&self) -> f64 {
-        if self.state.sleep_end_of_track || self.exclusive.is_some() {
+        if self.state.sleep_end_of_track || self.exclusive.is_some() || self.state.studio {
             0.
         } else {
             self.state.crossfade
+        }
+    }
+    /// The levelling in use: Studio mode leaves every song at its own mastered level.
+    fn effective_levelling(&self) -> String {
+        if self.state.studio {
+            "off".into()
+        } else {
+            self.state.levelling.clone()
         }
     }
     /// The loaded song was opened for another output rate (exclusive mode just ended) and must
@@ -322,6 +389,8 @@ impl RenderState {
             s.duration = d.duration;
             s.gain_db = d.gain_db;
             s.gain_kind = d.gain_kind.clone();
+            s.guard_db = (s.studio && s.volume > d.headroom)
+                .then(|| 20. * (d.headroom as f64 / s.volume as f64).log10());
         }
         s
     }
@@ -420,8 +489,9 @@ impl RenderState {
         if current.samples % 2 != channel {
             return 0.;
         }
-        if let Some(sample) = current.source.next() {
-            let mut sample = sample * current.gain;
+        if let Some(sample) = current.next_sample() {
+            let gain = if self.state.studio { 1. } else { current.gain };
+            let mut sample = sample * gain;
             let fade = if fades_into_next {
                 crossfade
                     .min(current.duration / 2.)
@@ -441,7 +511,7 @@ impl RenderState {
                     // The next song joins on a left sample and then keeps step, so its
                     // channels stay in order through the fade and after it.
                     if next.samples % 2 == current.samples % 2 {
-                        if let Some(n) = next.source.next() {
+                        if let Some(n) = next.next_sample() {
                             let ratio = (1. - remaining / fade).clamp(0., 1.) as f32;
                             sample = sample * (1. - ratio) + n * next.gain * ratio;
                             next.samples += 1;
@@ -450,8 +520,39 @@ impl RenderState {
                 }
             }
             current.samples += 1;
+            if self.state.studio {
+                // Nothing colours the sound; the volume stops where the song's peaks would clip.
+                let shaped = sample * self.state.volume.min(current.headroom);
+                return if shaped.is_finite() {
+                    shaped.clamp(-1., 1.)
+                } else {
+                    0.
+                };
+            }
             let shaped = self.eq.process(sample, self.channel) * self.state.volume;
             return shaped.clamp(-1., 1.);
+        }
+        // A converted song holds its last few milliseconds: the next song carries them on when
+        // it follows gaplessly at the same rate; otherwise they are finished against silence.
+        if current.holding() {
+            let seamless = !fades_into_next
+                && !self.state.sleep_end_of_track
+                && self.next.as_ref().is_some_and(|n| n.can_continue(current));
+            match self.next.as_mut().filter(|_| seamless) {
+                Some(next) => {
+                    if let (Some(from), Some(to)) =
+                        (current.resampler.as_mut(), next.resampler.as_mut())
+                    {
+                        to.adopt(from.take_tail());
+                    }
+                }
+                None => {
+                    if let Some(r) = current.resampler.as_mut() {
+                        r.release();
+                    }
+                    return self.render_sample();
+                }
+            }
         }
         if self.advance() {
             if self.state.sleep_end_of_track {
@@ -690,6 +791,7 @@ impl Engine {
         // When the snapshot was taken and what the output reports are not part of the session.
         s.at = 0;
         s.output_latency = 0.;
+        s.guard_db = None;
         let session = serde_json::to_value(s).unwrap();
         let mut saved = self.saved.lock().unwrap();
         if saved.as_ref() != Some(&session) && self.db.set("session", &session).is_ok() {
@@ -698,15 +800,18 @@ impl Engine {
     }
     /// Applies changed sound settings to the playing song and prepares the next one again.
     fn reshape(&self) {
-        let (current, levelling, queue) = {
+        let (current, levelling, studio, queue) = {
             let r = self.render.lock().unwrap();
             (
-                r.current.as_ref().map(|d| (d.id.clone(), d.index)),
-                r.state.levelling.clone(),
+                r.current
+                    .as_ref()
+                    .map(|d| (d.id.clone(), d.index, d.rate, d.native)),
+                r.effective_levelling(),
+                r.state.studio,
                 r.state.queue.clone(),
             )
         };
-        if let Some((id, index)) = current {
+        if let Some((id, index, rate, native)) = current {
             if let Ok(t) = self.db.track(&id) {
                 // Shape a stand-in deck, then copy its results onto the playing one.
                 let mut probe = Deck {
@@ -721,16 +826,19 @@ impl Engine {
                     audible_end: t.duration,
                     start_silence: 0.,
                     continues_album: false,
-                    rate: RATE,
-                    native: RATE,
+                    rate,
+                    native,
+                    resampler: None,
+                    headroom: f32::INFINITY,
                 };
-                self.shape(&mut probe, &t, &levelling, &queue);
+                self.shape(&mut probe, &t, &levelling, studio, &queue);
                 let mut r = self.render.lock().unwrap();
                 if let Some(d) = r.current.as_mut().filter(|d| d.id == id) {
                     d.gain = probe.gain;
                     d.gain_db = probe.gain_db;
                     d.gain_kind = probe.gain_kind;
                     d.audible_end = probe.audible_end.min(d.duration);
+                    d.headroom = probe.headroom;
                 }
             }
         }
@@ -840,16 +948,22 @@ impl Engine {
                 t.title
             ));
         }
-        let mut deck = Deck::load(&t, index, |native| {
-            self.render.lock().unwrap().deck_rate(native)
-        })?;
-        let levelling = self.render.lock().unwrap().state.levelling.clone();
-        self.shape(&mut deck, &t, &levelling, queue);
+        let (levelling, studio) = {
+            let r = self.render.lock().unwrap();
+            (r.effective_levelling(), r.state.studio)
+        };
+        let mut deck = Deck::load(
+            &t,
+            index,
+            |native| self.render.lock().unwrap().deck_rate(native),
+            studio,
+        )?;
+        self.shape(&mut deck, &t, &levelling, studio, queue);
         Ok(deck)
     }
-    /// Sets a deck's loudness gain, audible end and album continuity from the library's
-    /// measurements and its neighbours in the queue.
-    fn shape(&self, deck: &mut Deck, t: &Track, levelling: &str, queue: &[String]) {
+    /// Sets a deck's loudness gain, audible end, album continuity and Studio headroom from the
+    /// library's measurements and its neighbours in the queue.
+    fn shape(&self, deck: &mut Deck, t: &Track, levelling: &str, studio: bool, queue: &[String]) {
         let neighbour = |i: Option<usize>| {
             i.and_then(|i| queue.get(i))
                 .and_then(|id| self.db.track(id).ok())
@@ -909,6 +1023,24 @@ impl Engine {
         // Report what is really applied, after the boost limit and clip protection.
         deck.gain_db = gain.map(|_| 20. * (deck.gain as f64).log10());
         deck.gain_kind = kind.into();
+        deck.headroom = match (&own, studio) {
+            (Some(l), true) => {
+                // Converting the rate brings back the peaks between the file's samples (true
+                // peaks); sent at its own rate, the song's samples are all that can clip.
+                let peak = if deck.native != deck.rate {
+                    l.true_peak
+                        .unwrap_or(l.peak * crate::loudness::TRUE_PEAK_MARGIN)
+                } else {
+                    l.peak
+                };
+                if peak.is_finite() && peak > 0. {
+                    (1. / peak) as f32
+                } else {
+                    f32::INFINITY
+                }
+            }
+            _ => f32::INFINITY,
+        };
     }
     fn load(&self, index: usize, position: f64, playing: bool) -> Result<()> {
         // Opening a song takes a moment; if a song ended or the queue moved meanwhile, open it
@@ -1230,6 +1362,28 @@ impl Engine {
                     let mut r = self.render.lock().unwrap();
                     r.state.exclusive = on;
                     r.reopen = true;
+                }
+                "studio" => {
+                    let on = value.as_bool().ok_or("Missing Studio mode setting")?;
+                    let reload = {
+                        let mut r = self.render.lock().unwrap();
+                        if r.state.studio == on {
+                            return Ok(());
+                        }
+                        r.state.studio = on;
+                        // The equalizer comes back fresh, without filter memory from before.
+                        r.eq = crate::dsp::Equalizer::new(&r.state.eq, r.rate as f64);
+                        let s = r.snapshot();
+                        // A song being converted is opened again with the other converter.
+                        r.current
+                            .as_ref()
+                            .is_some_and(|d| d.native != d.rate)
+                            .then_some((s.cursor, s.position, s.playing))
+                    };
+                    self.reshape();
+                    if let Some((index, position, playing)) = reload {
+                        self.load(index, position, playing)?;
+                    }
                 }
                 "remove" => {
                     let index = value.as_u64().ok_or("Missing queue index")? as usize;
@@ -1664,6 +1818,8 @@ mod tests {
             continues_album: false,
             rate: RATE,
             native: RATE,
+            resampler: None,
+            headroom: f32::INFINITY,
         }
     }
     fn render() -> RenderState {
@@ -1762,7 +1918,7 @@ mod tests {
                 fallback: false,
                 formats: vec![(rate, layout)],
             });
-            let deck = Deck::load(&track, 0, |native| r.deck_rate(native)).unwrap();
+            let deck = Deck::load(&track, 0, |native| r.deck_rate(native), false).unwrap();
             assert_eq!(deck.rate, rate);
             r.current = Some(deck);
             r.next = None;
@@ -1819,7 +1975,7 @@ mod tests {
                 bit_depth: bits as u8,
                 ..Default::default()
             };
-            let deck = Deck::load(&track, index, |rate| rate).unwrap();
+            let deck = Deck::load(&track, index, |rate| rate, false).unwrap();
             if index == 0 {
                 r.current = Some(deck);
             } else {
@@ -2618,6 +2774,159 @@ mod tests {
         assert!(!deck.continues_album);
     }
     #[test]
+    fn studio_mode_plays_the_song_as_mastered() {
+        let mut r = render();
+        r.state.crossfade = 4.;
+        r.state.eq = crate::dsp::EqSettings {
+            enabled: true,
+            preamp: -6.,
+            bands: vec![0.; 10],
+            preset: "Custom".into(),
+        };
+        r.eq = crate::dsp::Equalizer::new(&r.state.eq, RATE as f64);
+        r.current.as_mut().unwrap().gain = 0.5;
+        r.state.studio = true;
+        assert_eq!(r.effective_crossfade(), 0.);
+        assert_eq!(r.effective_levelling(), "off");
+        // Neither the equalizer's −6 dB preamp nor the levelling gain touch the samples.
+        assert_eq!(r.sample(), 0.25);
+        assert_eq!(r.sample(), 0.25);
+        r.state.studio = false;
+        assert!(
+            (r.sample() - 0.25 * 0.5 * 0.501).abs() < 1e-3,
+            "both apply again"
+        );
+    }
+    #[test]
+    fn studio_mode_lowers_the_volume_only_where_a_peak_would_clip() {
+        let mut r = render();
+        r.state.studio = true;
+        r.current.as_mut().unwrap().headroom = 0.8;
+        assert!((r.sample() - 0.25 * 0.8).abs() < 1e-6);
+        let guard = r.snapshot().guard_db.unwrap();
+        assert!((guard - 20. * 0.8f64.log10()).abs() < 1e-4, "{guard}");
+        r.state.volume = 0.5;
+        assert!(
+            (r.sample() - 0.125).abs() < 1e-6,
+            "below the limit the volume is untouched"
+        );
+        assert_eq!(r.snapshot().guard_db, None);
+        assert_eq!(r.snapshot().gain_db, None);
+    }
+    /// A 44.1 kHz recording converted to 48 kHz by Studio mode's converter.
+    fn converted(id: &str, index: usize, samples: Vec<f32>) -> Deck {
+        let mut d = deck(id, index, 0., 1);
+        d.duration = (samples.len() / 2) as f64 / 44100.;
+        d.audible_end = d.duration;
+        d.source = Box::new(rodio::buffer::SamplesBuffer::new(2, 44100, samples));
+        d.native = 44100;
+        d.resampler = crate::resample::Resampler::new(44100, RATE);
+        d
+    }
+    fn tone(frames: usize) -> Vec<f32> {
+        (0..frames)
+            .flat_map(|i| {
+                let v = (0.6 * (std::f64::consts::TAU * 3000. * i as f64 / 44100.).sin()) as f32;
+                [v, v * 0.5]
+            })
+            .collect()
+    }
+    #[test]
+    fn a_converted_album_runs_on_without_a_seam_in_studio_mode() {
+        let whole = tone(30000);
+        let (a, b) = whole.split_at(2 * 14001);
+        let mut one = converted("x", 0, whole.clone());
+        one.resampler.as_mut().unwrap().release();
+        let reference: Vec<f32> = std::iter::from_fn(|| one.next_sample()).collect();
+        let mut r = render();
+        r.state.studio = true;
+        r.state.crossfade = 4.;
+        r.current = Some(converted("a", 0, a.to_vec()));
+        r.next = Some(converted("b", 1, b.to_vec()));
+        let out: Vec<f32> = (0..reference.len()).map(|_| r.sample()).collect();
+        let worst = out
+            .iter()
+            .zip(&reference)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0f32, f32::max);
+        assert!(worst < 1e-6, "the songs meet without a seam: {worst}");
+        assert_eq!(r.transition, 1);
+        assert_eq!(r.sample(), 0.);
+        assert!(!r.state.playing, "the queue ends after b");
+    }
+    #[test]
+    fn a_converted_song_with_nothing_after_it_finishes_against_silence() {
+        let samples = tone(9000);
+        let mut alone = converted("x", 0, samples.clone());
+        alone.resampler.as_mut().unwrap().release();
+        let expected: Vec<f32> = std::iter::from_fn(|| alone.next_sample()).collect();
+        let mut r = render();
+        r.state.studio = true;
+        r.state.queue = vec!["a".into()];
+        r.current = Some(converted("a", 0, samples));
+        r.next = None;
+        let out: Vec<f32> = (0..expected.len()).map(|_| r.sample()).collect();
+        assert_eq!(out, expected);
+        assert_eq!(r.sample(), 0.);
+        assert!(!r.state.playing);
+    }
+    #[test]
+    fn studio_mode_is_remembered_and_keeps_the_settings_it_sets_aside() {
+        let (_dir, engine) = test_engine();
+        let t = engine.db.track("a").unwrap();
+        engine
+            .db
+            .set_loudness(
+                &crate::loudness::key(&t),
+                &crate::loudness::Loudness {
+                    lufs: -8.,
+                    peak: 0.95,
+                    true_peak: Some(1.26),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        engine
+            .command("eq", serde_json::json!({"enabled": true, "preamp": -3, "bands": [6,3,0,0,0,0,0,0,2,4], "preset": "Bass boost"}))
+            .unwrap();
+        let state = engine
+            .command("queue", serde_json::json!({"ids":["a","b"],"index":0}))
+            .unwrap();
+        assert_eq!(state.gain_kind, "track");
+        let state = engine.command("studio", serde_json::json!(true)).unwrap();
+        assert!(state.studio);
+        assert_eq!((state.gain_kind.as_str(), state.gain_db), ("off", None));
+        assert_eq!(
+            state.levelling, "smart",
+            "levelling is set aside, not changed"
+        );
+        assert_eq!(state.eq.preset, "Bass boost", "so is the equalizer");
+        // The test songs are 48 kHz: sent at their own rate, only their samples can clip.
+        let headroom = engine
+            .render
+            .lock()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .headroom;
+        assert!((headroom - 1. / 0.95).abs() < 1e-4, "{headroom}");
+        // Converted, the peaks between the samples count.
+        let mut d = deck("a", 0, 0., 1);
+        d.native = 44100;
+        engine.shape(&mut d, &t, "off", true, &[]);
+        assert!((d.headroom - 1. / 1.26).abs() < 1e-4, "{}", d.headroom);
+        assert!(
+            Engine::new(engine.db.clone()).snapshot().studio,
+            "remembered"
+        );
+        let state = engine.command("studio", serde_json::json!(false)).unwrap();
+        assert!(!state.studio);
+        assert_eq!(state.gain_kind, "track");
+        assert!(engine.render.lock().unwrap().eq.active());
+        assert!(engine.command("studio", serde_json::json!("yes")).is_err());
+    }
+    #[test]
     fn equalizer_and_output_device_settings_are_checked_and_applied() {
         let (_dir, engine) = test_engine();
         assert!(engine
@@ -2729,6 +3038,7 @@ mod tests {
                 },
                 index,
                 |_| RATE,
+                false,
             )
             .unwrap()
         };
@@ -2750,6 +3060,67 @@ mod tests {
             "Decoded FLAC boundary differs: {maximum}"
         );
         assert_eq!(r.transition, 1);
+    }
+    #[test]
+    #[ignore = "Reads two consecutive album songs without modifying them; requires SLATE_STUDIO_PAIR=a|b"]
+    fn real_studio_album_seam_and_speed() {
+        let pair = std::env::var("SLATE_STUDIO_PAIR").expect("Set SLATE_STUDIO_PAIR");
+        let (a, b) = pair.split_once('|').unwrap();
+        let track = |id: &str, path: &str| Track {
+            id: id.into(),
+            path: path.into(),
+            duration: 1.,
+            ..Default::default()
+        };
+        let load = |id, path, index, studio| {
+            Deck::load(&track(id, path), index, |_| RATE, studio).unwrap()
+        };
+        let decoded = |path: &str| -> (u32, Vec<f32>) {
+            let d = open(path).unwrap();
+            let native = d.sample_rate();
+            (native, UniformSourceIterator::new(d, 2, native).collect())
+        };
+        let ((native, mut whole), (native_b, start_b)) = (decoded(a), decoded(b));
+        assert_eq!(native, native_b, "both songs at one rate");
+        let a_frames = whole.len() / 2;
+        let extra = native as usize * 10 * 2;
+        whole.extend_from_slice(&start_b[..extra.min(start_b.len())]);
+        let mut reference = crate::resample::Resampler::new(native, RATE).unwrap();
+        reference.release();
+        let mut it = whole.into_iter();
+        let reference: Vec<f32> = std::iter::from_fn(|| reference.next(&mut it)).collect();
+        let a_out = (a_frames as u64 * RATE as u64).div_ceil(native as u64) as usize * 2;
+        for studio in [false, true] {
+            let mut r = render();
+            r.state.studio = studio;
+            r.current = Some(load("a", a, 0, studio));
+            r.next = Some(load("b", b, 1, studio));
+            let n = a_out + RATE as usize * 2 * 5;
+            let started = std::time::Instant::now();
+            let out: Vec<f32> = (0..n).map(|_| r.sample()).collect();
+            let took = started.elapsed().as_secs_f64();
+            let audio = n as f64 / (RATE as f64 * 2.);
+            println!(
+                "{}: {:.1} s of music rendered in {:.2} s, {:.0}x real time, {:.2}% of one core",
+                if studio { "Studio" } else { "rodio " },
+                audio,
+                took,
+                audio / took,
+                100. * took / audio
+            );
+            let seam = (a_out - RATE as usize * 2)..(a_out + RATE as usize * 2);
+            let worst = out[seam.clone()]
+                .iter()
+                .zip(&reference[seam])
+                .map(|(x, y)| (x - y).abs())
+                .fold(0f32, f32::max);
+            println!(
+                "  largest difference from one continuous conversion around the seam: {worst:.2e}"
+            );
+            if studio {
+                assert!(worst < 1e-5, "Studio mode keeps the seam: {worst}");
+            }
+        }
     }
     #[test]
     #[ignore = "Reads a supplied library without modifying it; requires SLATE_TEST_LIBRARY"]

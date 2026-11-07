@@ -10,6 +10,7 @@ mod library;
 mod loudness;
 mod lyrics;
 mod opus;
+mod resample;
 mod scrobble;
 mod spotify;
 #[cfg(windows)]

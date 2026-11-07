@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { SlidersHorizontal } from 'lucide-react';
+import { AudioWaveform, SlidersHorizontal } from 'lucide-react';
 import type { EqSettings, Playback, Settings, Snapshot } from './types';
 import { Toggle } from './components';
 import { eqChanges } from './NowPlaying';
@@ -19,6 +19,47 @@ export const EQ_PRESETS: Record<string, { bands: number[]; preamp: number }> = {
   'Late night': { bands: [-3, -2, 0, 0, 1, 2, 2, 1, -1, -3], preamp: -2 },
 };
 export const flatEq = (): EqSettings => ({ enabled: false, preamp: 0, bands: EQ_PRESETS.Flat.bands, preset: 'Flat' });
+
+/** What Studio mode is doing right now, in a sentence. */
+export function studioStatus(pb: Playback) {
+  if (!pb.studio) return 'Off';
+  const guard = pb.guardDb != null ? ` Volume held at ${pb.guardDb.toFixed(1)} dB so this song’s peaks don’t clip.` : '';
+  return pb.output?.exclusive
+    ? `On, with exclusive mode: songs reach ${pb.output.device} untouched at their own rate.${guard}`
+    : `On: nothing in Slate Music colours the sound.${guard} For bit-perfect playback, also turn on exclusive mode.`;
+}
+
+/** Studio mode: the music equivalent of a TV's Filmmaker Mode. */
+export function StudioCard({ pb, onPlayback }: { pb: Playback; onPlayback: (action: string, value?: unknown) => unknown }) {
+  const on = !!pb.studio;
+  return (
+    <div className={`studio-card ${on ? 'on' : ''}`}>
+      <div className="studio-head">
+        <AudioWaveform size={17} />
+        <span>
+          <strong>Studio mode</strong>
+          <small>Every song exactly as the artist mastered it, like Filmmaker Mode on a TV.</small>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-label="Studio mode"
+          className={`switch ${on ? 'on' : ''}`}
+          onClick={() => onPlayback('studio', !on)}
+        >
+          <span />
+        </button>
+      </div>
+      <ul>
+        <li>No equalizer, levelling or crossfades. Your settings come back when you turn it off.</li>
+        <li>Sample rates are converted with mastering-grade filters: flat to 20 kHz, nothing folded back into what you hear.</li>
+        <li>Albums play gaplessly, and the volume never pushes a song’s peaks into clipping.</li>
+      </ul>
+      {on && <p className="studio-status">{studioStatus(pb)}</p>}
+    </div>
+  );
+}
 /** The equalizer to use for a device: its saved one, or flat. */
 export const eqFor = (settings: Settings, device: string | null) =>
   settings.eqByDevice?.[device ?? ''] ?? flatEq();
@@ -73,7 +114,9 @@ export default function SoundSettings({
     await onPlayback('eq', eqFor(settings, device));
   }
   /** Nothing in Slate Music changes the samples: full volume, flat EQ, no levelling. */
-  const untouched = pb.volume >= 1 && !eqChanges(pb) && pb.levelling === 'off';
+  const studio = !!pb.studio;
+  const untouched = pb.volume >= 1 && (studio || (!eqChanges(pb) && pb.levelling === 'off'));
+  const eqLive = eq.enabled && !studio;
   const total = data.tracks.filter((t) => !t.missing).length;
   const measured = Math.min(data.loudnessMeasured ?? 0, total);
   return (
@@ -136,21 +179,30 @@ export default function SoundSettings({
               : `On: ${pb.output.device} plays each song at its own rate and is let go a few seconds after you pause.${
                   untouched
                     ? ' Songs the device takes at their own rate reach it exactly as they are in the file; Now Playing → Signal path checks each song.'
-                    : ' For bit-perfect sound, set the volume to 100% and turn the equalizer and levelling off.'
+                    : studio
+                      ? ' For bit-perfect sound, set the volume to 100%.'
+                      : ' For bit-perfect sound, set the volume to 100% and turn the equalizer and levelling off, or turn on Studio mode.'
                 }`
         }
         checked={!!pb.exclusive}
         onChange={(v) => onPlayback('exclusive', v)}
       />
-      <label className="setting-row">
+      <label className={`setting-row ${studio ? 'disabled' : ''}`}>
         <span>
           <strong>Loudness levelling</strong>
           <small>
-            Plays quiet and loud songs at a similar volume. Smart keeps an album’s own dynamics
-            while you play it in order. {measured < total ? `Measuring songs: ${measured} of ${total}.` : `All ${total} songs measured.`}
+            {studio
+              ? 'Set aside while Studio mode is on: every song plays at its own mastered level. '
+              : 'Plays quiet and loud songs at a similar volume. Smart keeps an album’s own dynamics while you play it in order. '}
+            {measured < total ? `Measuring songs: ${measured} of ${total}.` : `All ${total} songs measured.`}
           </small>
         </span>
-        <select aria-label="Loudness levelling" value={pb.levelling ?? 'smart'} onChange={(e) => onPlayback('levelling', e.target.value)}>
+        <select
+          aria-label="Loudness levelling"
+          value={pb.levelling ?? 'smart'}
+          disabled={studio}
+          onChange={(e) => onPlayback('levelling', e.target.value)}
+        >
           <option value="smart">Smart (recommended)</option>
           <option value="album">By album</option>
           <option value="track">By song</option>
@@ -159,8 +211,13 @@ export default function SoundSettings({
       </label>
       <Toggle
         label="Smart crossfade"
-        description="Fades where the music actually ends, skips silence between songs, and never fades between songs that run into each other on an album."
+        description={
+          studio
+            ? 'Set aside while Studio mode is on: songs begin and end the way the artist made them.'
+            : 'Fades where the music actually ends, skips silence between songs, and never fades between songs that run into each other on an album.'
+        }
         checked={pb.smartCrossfade ?? true}
+        disabled={studio}
         onChange={(v) => onPlayback('smart_crossfade', v)}
       />
       <div className="eq">
@@ -168,11 +225,12 @@ export default function SoundSettings({
           <strong>
             <SlidersHorizontal size={15} />
             Equalizer
+            {studio && <small className="eq-paused">Set aside by Studio mode</small>}
           </strong>
           <select
             aria-label="Equalizer preset"
             value={EQ_PRESETS[eq.preset] ? eq.preset : 'Custom'}
-            disabled={!eq.enabled}
+            disabled={!eqLive}
             onChange={(e) => {
               const p = EQ_PRESETS[e.target.value];
               if (p) applyEq({ enabled: true, preamp: p.preamp, bands: p.bands, preset: e.target.value });
@@ -189,12 +247,13 @@ export default function SoundSettings({
             aria-checked={eq.enabled}
             aria-label="Equalizer"
             className={`switch ${eq.enabled ? 'on' : ''}`}
+            disabled={studio}
             onClick={() => applyEq({ ...eq, enabled: !eq.enabled })}
           >
             <span />
           </button>
         </div>
-        <div className={`eq-bands ${eq.enabled ? '' : 'off'}`}>
+        <div className={`eq-bands ${eqLive ? '' : 'off'}`}>
           <label className="eq-band preamp">
             <output>{eq.preamp > 0 ? '+' : ''}{eq.preamp}</output>
             <input
@@ -204,7 +263,7 @@ export default function SoundSettings({
               max={0}
               step={0.5}
               value={eq.preamp}
-              disabled={!eq.enabled}
+              disabled={!eqLive}
               style={{ '--fill': `${((eq.preamp + 12) / 12) * 100}%` } as React.CSSProperties}
               onChange={(e) => slide({ ...eq, preamp: Number(e.target.value), preset: 'Custom' })}
             />
@@ -220,7 +279,7 @@ export default function SoundSettings({
                 max={12}
                 step={0.5}
                 value={eq.bands[i]}
-                disabled={!eq.enabled}
+                disabled={!eqLive}
                 style={{ '--fill': `${((eq.bands[i] + 12) / 24) * 100}%` } as React.CSSProperties}
                 onChange={(e) =>
                   slide({

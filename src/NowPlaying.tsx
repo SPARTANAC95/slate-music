@@ -182,13 +182,17 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
   const out = pb.output;
   const kHz = (hz: number) => `${Math.round(hz / 100) / 10} kHz`;
   const exclusive = !!out?.exclusive;
+  const studio = !!pb.studio;
+  // Studio mode converts rates with its own mastering-grade filters.
+  const grade = studio ? ' with mastering-grade filters' : '';
   // What keeps the device from getting exactly what is in the file. A flat equalizer and an
   // unmeasured song leave the samples untouched; 32-bit files are decoded at 24-bit precision.
   const changes = [
     !q.lossless && 'a lossy file',
     pb.volume < 1 && `volume at ${Math.round(pb.volume * 100)}%`,
-    eqChanges(pb) && 'the equalizer',
-    (pb.gainKind === 'track' || pb.gainKind === 'album') && 'loudness levelling',
+    pb.guardDb != null && 'peak protection',
+    !studio && eqChanges(pb) && 'the equalizer',
+    !studio && (pb.gainKind === 'track' || pb.gainKind === 'album') && 'loudness levelling',
     !rate && 'an unknown sample rate',
     out && rate && out.sampleRate !== rate && 'a rate conversion',
     out?.bits && track.bitDepth > out.bits && `${out.bits}-bit output`,
@@ -196,28 +200,40 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
   ].filter(Boolean) as string[];
   const steps: [string, string][] = [
     ['Source', `${track.format}${q.detail ? ` · ${q.detail}` : ''}${q.label ? ` · ${q.label}` : ''}`],
+    ...(studio ? ([['Mode', 'Studio: as the artist mastered it']] as [string, string][]) : []),
     [
       'Loudness',
-      pb.gainKind === 'off'
-        ? 'Levelling off'
-        : pb.gainKind === 'unmeasured' || pb.gainDb == null
-          ? 'Not measured yet'
-          : `${pb.gainDb > 0 ? '+' : ''}${pb.gainDb.toFixed(1)} dB (${pb.gainKind === 'album' ? 'album' : 'song'})`,
+      studio
+        ? 'As mastered (levelling set aside)'
+        : pb.gainKind === 'off'
+          ? 'Levelling off'
+          : pb.gainKind === 'unmeasured' || pb.gainDb == null
+            ? 'Not measured yet'
+            : `${pb.gainDb > 0 ? '+' : ''}${pb.gainDb.toFixed(1)} dB (${pb.gainKind === 'album' ? 'album' : 'song'})`,
     ],
     [
       'Equalizer',
-      pb.eq?.enabled ? `${pb.eq.preset || 'Custom'}${pb.eq.preamp ? ` · preamp ${pb.eq.preamp} dB` : ''}` : 'Off',
+      studio
+        ? 'Set aside'
+        : pb.eq?.enabled
+          ? `${pb.eq.preset || 'Custom'}${pb.eq.preamp ? ` · preamp ${pb.eq.preamp} dB` : ''}`
+          : 'Off',
     ],
-    ['Volume', pb.volume >= 1 ? '100%' : `${Math.round(pb.volume * 100)}%`],
+    [
+      'Volume',
+      `${pb.volume >= 1 ? '100%' : `${Math.round(pb.volume * 100)}%`}${
+        pb.guardDb != null ? ` · held at ${pb.guardDb.toFixed(1)} dB so peaks don’t clip` : ''
+      }`,
+    ],
     [
       'Mixing',
       !rate
         ? 'Source rate unknown'
         : exclusive && out
           ? rate !== out.sampleRate
-            ? `Converted from ${kHz(rate)} to ${kHz(out.sampleRate)}; the device doesn’t take ${kHz(rate)}`
+            ? `Converted from ${kHz(rate)} to ${kHz(out.sampleRate)}${grade}; the device doesn’t take ${kHz(rate)}`
             : `${kHz(out.sampleRate)}, no conversion`
-          : `${rate !== 48000 ? `Converted from ${kHz(rate)} to 48 kHz` : '48 kHz, no conversion'}${
+          : `${rate !== 48000 ? `Converted from ${kHz(rate)} to 48 kHz${grade}` : '48 kHz, no conversion'}${
               out && out.sampleRate !== 48000 ? `, then by Windows to ${kHz(out.sampleRate)}` : ''
             }`,
     ],
@@ -229,10 +245,13 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
     ],
   ];
   const verdict = !exclusive
-    ? null
+    ? studio
+      ? 'Studio mode: nothing in Slate Music colours the sound.'
+      : null
     : changes.length
       ? `Not bit-perfect: ${changes.join(', ')}.`
       : 'Bit-perfect: the device receives exactly what is in the file.';
+  const good = exclusive ? !changes.length : studio;
   return (
     <ol className="np-path">
       {steps.map(([label, value]) => (
@@ -241,7 +260,7 @@ function SignalPath({ track, pb }: { track: Track; pb: Playback }) {
           <strong>{value}</strong>
         </li>
       ))}
-      {verdict && <li className={`np-verdict ${changes.length ? '' : 'perfect'}`}>{verdict}</li>}
+      {verdict && <li className={`np-verdict ${good ? 'perfect' : ''}`}>{verdict}</li>}
     </ol>
   );
 }

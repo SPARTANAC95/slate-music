@@ -66,6 +66,11 @@ export interface Playback {
   /** Levelling applied to the current song, in dB. */
   gainDb: number | null;
   gainKind: 'off' | 'track' | 'album' | 'unmeasured';
+  /** Studio mode: every song as mastered (no EQ, levelling or crossfades, mastering-grade
+   * rate conversion, peaks never clip). */
+  studio?: boolean;
+  /** Studio mode is holding the volume this many dB down so the song's peaks fit. */
+  guardDb?: number | null;
 }
 export interface EqSettings {
   enabled: boolean;

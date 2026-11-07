@@ -17,6 +17,9 @@ use std::{
 pub const TARGET_LUFS: f64 = -18.;
 /// Quieter than this counts as silence at a song's start or end (about −60 dBFS).
 const SILENCE: f32 = 0.001;
+/// How far above its highest sample a song's true peak is assumed to reach while it has not
+/// been measured: +1 dB, enough for all but the most heavily limited masters.
+pub const TRUE_PEAK_MARGIN: f64 = 1.122;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +28,9 @@ pub struct Loudness {
     pub lufs: f64,
     /// Highest sample, 1.0 = full scale.
     pub peak: f64,
+    /// Highest true peak (between samples, as a converter or DAC reconstructs it), 1.0 = full
+    /// scale. None for songs measured before Slate Music measured it.
+    pub true_peak: Option<f64>,
     /// Seconds of silence before the music starts and after it ends.
     pub start_silence: f64,
     pub end_silence: f64,
@@ -57,7 +63,7 @@ pub fn measure(path: &str) -> Result<Loudness> {
     let mut meter = ebur128::EbuR128::new(
         channels,
         rate,
-        ebur128::Mode::I | ebur128::Mode::SAMPLE_PEAK,
+        ebur128::Mode::I | ebur128::Mode::SAMPLE_PEAK | ebur128::Mode::TRUE_PEAK,
     )
     .map_err(err)?;
     let (mut frames, mut first, mut last, mut peak) = (0u64, None, 0u64, 0f32);
@@ -93,9 +99,14 @@ pub fn measure(path: &str) -> Result<Loudness> {
         Some(first) => (seconds(first), seconds(frames.saturating_sub(last + 1))),
         None => (0., 0.),
     };
+    let true_peak = (0..channels)
+        .filter_map(|c| meter.true_peak(c).ok())
+        .filter(|p| p.is_finite())
+        .fold(peak as f64, f64::max);
     Ok(Loudness {
         lufs: if lufs.is_finite() { lufs } else { -70. },
         peak: peak as f64,
+        true_peak: Some(true_peak),
         start_silence: start,
         end_silence: end,
         ..Default::default()
@@ -165,7 +176,11 @@ pub fn start(db: Arc<Database>) {
         return;
     }
     std::thread::spawn(move || {
-        let known = db.loudness_keys().unwrap_or_default();
+        let mut known = db.loudness_keys().unwrap_or_default();
+        // Measured before true peaks were: measure again, for Studio mode's headroom.
+        for k in db.loudness_without_true_peak().unwrap_or_default() {
+            known.remove(&k);
+        }
         let mut todo: HashMap<String, Track> = HashMap::new();
         for t in db
             .tracks()
@@ -215,6 +230,22 @@ mod tests {
             w.write_sample(v).unwrap();
         }
         w.finalize().unwrap();
+    }
+    #[test]
+    fn measures_the_true_peak_between_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("between.wav");
+        // A 12 kHz sine sampled 45° past each crossing: every sample sits at 0.707 of the
+        // wave's real height, which a converter or DAC brings back.
+        let height = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        let samples: Vec<f32> = (0..48000)
+            .map(|i| if i % 4 < 2 { height } else { -height })
+            .collect();
+        wav(&path, &samples);
+        let l = measure(path.to_str().unwrap()).unwrap();
+        assert!((l.peak - 0.3536).abs() < 0.001, "sample peak {}", l.peak);
+        let ratio = l.true_peak.unwrap() / l.peak;
+        assert!((1.3..1.5).contains(&ratio), "true peak {:?}", l.true_peak);
     }
     #[test]
     fn measures_loudness_peak_and_silence() {

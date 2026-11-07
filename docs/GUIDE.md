@@ -52,6 +52,14 @@ Tested decoding: FLAC, MP3, WAV, AAC/M4A, ALAC, Ogg Vorbis, Opus (.opus, and .og
 
 Normally the engine mixes decoded audio at 48 kHz in stereo and plays it through Windows' shared output, which allows gapless playback, crossfades and other apps' sounds at the same time.
 
+**Studio mode** plays every song exactly as the artist mastered it, like Filmmaker Mode on a TV. Turn it on with **Studio** in the player bar, at the top of Settings → Playback, or from the command bar (Ctrl+K). While it is on:
+
+- the equalizer, loudness levelling and crossfades are set aside, and come back as they were when you turn it off;
+- songs that aren't at the output's rate (most are 44.1 kHz; Windows' shared mode plays at 48 kHz, and hi-res files are often 96 or 192 kHz) are converted with a mastering-grade filter: flat to 20 kHz, with nothing folded back into the audible band. Songs that run into each other on an album still meet without a seam;
+- the volume never pushes a song's peaks past full scale. Each song's true peak (between the samples) is measured with its loudness; when the volume would clip it, it is held just below, for that song only, and Now Playing → Signal path says by how much.
+
+Studio mode and exclusive mode work together: with both on and the volume at 100%, songs the device takes at their own rate are bit-perfect.
+
 **Exclusive mode (bit-perfect)** in Settings → Playback gives Slate Music the chosen output device to itself. Each song is sent at its own sample rate (44.1, 48, 88.2, 96, 176.4 or 192 kHz and up, as the device allows) in whole-number samples with as many bits as the file has. Songs at the same rate play gaplessly; a song at another rate reopens the device between songs, with a short silence. Crossfades aren't used. With the volume at 100% and the equalizer and loudness levelling off, the device receives exactly the numbers in the file: Now Playing → Signal path confirms "Bit-perfect", or lists what changes the sound. When a device doesn't take a song's rate, the nearest rate it does take is used and the signal path says so.
 
 While exclusive mode plays, other apps can't make sound through that device. Slate Music lets it go a few seconds after you pause and takes it back when you press play. If Windows doesn't allow exclusive use (Sound settings → the device → Properties → Advanced → "Allow applications to take exclusive control of this device"), or another app holds it, Slate Music says so and plays through Windows instead.

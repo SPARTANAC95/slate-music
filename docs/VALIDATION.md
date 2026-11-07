@@ -1,3 +1,23 @@
+# Validation — 1.1.6
+
+## November 7 Studio mode and release checks
+
+The owner asked for a mode that plays songs "the way the director wanted", like the Filmmaker Mode on their TV. Measuring the existing path first showed that rodio's rate converter, used for every song not at 48 kHz in shared mode, interpolates linearly and drops samples when it lowers the rate.
+
+| Check | Result |
+|---|---|
+| Old converter, 44.1 → 48 kHz | 1 kHz −0.01 dB, 5 kHz −0.37, 10 kHz −1.49, 16 kHz −3.94, 19.5 kHz −6.01 dB; everything other than the tone 62, 34, 22, 13 and 10 dB below it |
+| Old converter, hi-res → 48 kHz | A 30 kHz tone in a 96 kHz file, 70 kHz in 192 kHz and 27 kHz in 88.2 kHz came back in the audible band at −9.0, −9.0 and −11.6 dBFS. The owner's library has 128 such files |
+| Studio converter | The same tones within 0.001 dB; everything else 145–152 dB below; the ultrasonic tones at −159, −169 and −149 dBFS (`resample::tests::compare_with_rodio`, ignored by default) |
+| Seams | Two songs cut from one recording, converted song by song through the engine, are identical to converting the recording in one piece (unit test); on the owner's real album, "!!!!!!!" into "bad guy" (44.1 kHz) was bit-identical around the seam (`real_studio_album_seam_and_speed`) |
+| Cost | Release build, decoding included: 0.7% of one core for a 44.1 kHz song, 2.6% for a 192 kHz one |
+| True peaks | Measured with EBU R128 4× oversampling alongside loudness, and existing measurements are taken again in the background. In the owner's library, 84 of the first 123 songs measured again had true peaks above full scale, the highest +3.5 dBTP on a song whose samples peak at 0 dBFS |
+| Native engine and services | 127 Rust tests passed, 14 of them new (converter response, alias and image rejection, exact length, seams, release, seek, broken input, true peak, Studio bypass, peak guard, the command and its persistence); `cargo clippy --all-targets` reports no warnings; formatting checked |
+| TypeScript and frontend | 85 tests passed; TypeScript and Vite production build passed; 24 Now Playing and 11 interface browser checks passed |
+| Native Studio mode | A release build under a separate identifier, on a disposable profile with generated songs and the volume at 0: Studio mode switched on through the engine with levelling and crossfade kept for later; a 44.1 kHz album song sought to its last seconds ran into the next one at its start with no crossfade; a 96 kHz song converted, played and sought; Signal path named Studio mode and the converter; the player-bar button turned it off (levelling back) and on; Settings showed the card with levelling disabled; the new songs' true peaks were measured; no page errors |
+
+Limits. The 28 scenarios in `tools/qa.mjs` were not run for this version; they play music aloud on the owner's devices. Studio mode was checked silently, so the peak guard was proven by tests rather than by ear. Rate pairs needing more than 2,048 filter phases (no real format does) fall back to rodio's converter.
+
 # Validation — 1.1.5
 
 ## October 7 favorites, smart playlists, defaults and release checks

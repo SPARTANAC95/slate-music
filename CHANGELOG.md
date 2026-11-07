@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.1.5 — 2026-10-07
+## 1.1.6 — 2026-11-07
+
+- **Studio mode: every song as the artist mastered it**, like Filmmaker Mode on a TV. One switch (Studio in the player bar, Settings → Playback, or the command bar) sets the equalizer, loudness levelling and crossfades aside, plays albums gaplessly, and brings them all back when you turn it off.
+- **Mastering-grade rate conversion in Studio mode.** Most songs are 44.1 kHz and Windows' shared mode plays at 48 kHz. The converter used until now draws straight lines between samples: measured from 44.1 to 48 kHz it lowers 10 kHz by 1.5 dB, 16 kHz by 3.9 dB and 19.5 kHz by 6 dB, and adds distortion only 13 to 22 dB below the music at 10 to 16 kHz. Lowering a hi-res song's rate, it dropped samples, so an inaudible 30 kHz tone in a 96 kHz file came back at 18 kHz only 9 dB down. Studio mode uses a polyphase Kaiser-windowed sinc filter instead: within 0.001 dB to 20 kHz, everything else at least 145 dB down, the 30 kHz tone 159 dB down. It adds no delay, keeps every song's exact length, and carries on across songs that run into each other on an album, so they meet without a seam.
+- **Peaks never clip in Studio mode.** Each song's true peak (between the samples, as a converter or DAC rebuilds it) is now measured with its loudness; songs measured before are measured again in the background. When the volume would push a song's peaks past full scale, Studio mode holds it just below, for that song only. Songs sent at their own rate in exclusive mode stay bit-perfect at 100%.
+- Now Playing → Signal path shows Studio mode, the conversion it uses and any volume it holds back.
 
 - **Hearts can be taken back.** Removing a favorite, or many at once from the selection bar, now shows **Undo**. Removed hearts are also remembered for 30 days, and when three or more are gone the Favorites page offers **Restore them**. Before, picking every song on the Favorites page and pressing Unfavorite removed every heart at once with no way back.
 - **New defaults for a new library:** a 4-second crossfade between songs (albums played in order stay gapless) and loudness levelling off. Libraries that already exist keep the settings they have.

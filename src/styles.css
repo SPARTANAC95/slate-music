@@ -3921,3 +3921,106 @@ details.advanced[open] summary {
   .np-line.active .np-word { --edge: 0px; transform: none; }
   .np-line.active .np-instrumental { animation: none; }
 }
+
+/* Studio mode: every song as mastered */
+.studio-card {
+  margin: 4px 0 10px;
+  padding: 13px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #121214;
+  transition:
+    border-color 160ms,
+    background 160ms;
+}
+.studio-card.on {
+  border-color: #4d3f5c;
+  background:
+    linear-gradient(135deg, #baa3e414, transparent 65%),
+    #121214;
+}
+.studio-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.studio-head > svg {
+  flex: none;
+  color: var(--muted);
+  transition: color 160ms;
+}
+.studio-card.on .studio-head > svg {
+  color: var(--accent);
+}
+.studio-head > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-right: auto;
+}
+.studio-head strong {
+  font-size: 12.5px;
+  font-weight: 520;
+  color: #e4dfea;
+}
+.studio-head small {
+  font-size: 10px;
+  color: #8a8494;
+}
+.studio-card ul {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0 29px;
+  padding: 0;
+  font-size: 10.5px;
+  color: #77717f;
+}
+.studio-card li::marker {
+  color: #4b4553;
+}
+.studio-status {
+  margin: 10px 0 0 29px;
+  font-size: 10.5px;
+  color: #cdbbe9;
+}
+.eq-paused {
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  color: #67616f;
+}
+.studio-pill {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 9px 0 8px;
+  gap: 5px;
+  border-radius: 13px;
+  background: transparent;
+  border: 1px solid #ffffff12;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 520;
+  letter-spacing: 0.02em;
+}
+.studio-pill:hover {
+  color: #e8e4ed;
+  background: #ffffff09;
+  border-color: #ffffff22;
+}
+.studio-pill.on {
+  color: var(--accent);
+  border-color: #6a557f;
+  background: #baa3e412;
+}
+.studio-pill.on:hover {
+  background: #baa3e41c;
+  border-color: #816498;
+}
+@media (max-width: 1000px) {
+  .studio-pill {
+    padding: 0 6px;
+  }
+  .studio-pill span {
+    display: none;
+  }
+}

@@ -208,6 +208,15 @@ impl Database {
         let rows = s.query_map([], |r| r.get(0)).map_err(err)?;
         rows.collect::<std::result::Result<_, _>>().map_err(err)
     }
+    /// Songs measured before true peaks were (Slate Music 1.1.5 and earlier), to measure again.
+    pub fn loudness_without_true_peak(&self) -> Result<std::collections::HashSet<String>> {
+        let c = self.conn.lock().unwrap();
+        let mut s = c
+            .prepare("SELECT key FROM loudness WHERE instr(data,'\"truePeak\"')=0")
+            .map_err(err)?;
+        let rows = s.query_map([], |r| r.get(0)).map_err(err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(err)
+    }
     /// Plays between two times (Unix ms), oldest first, as (track ID, time played).
     pub fn history(&self, from: i64, to: i64) -> Result<Vec<(String, i64)>> {
         let c = self.conn.lock().unwrap();

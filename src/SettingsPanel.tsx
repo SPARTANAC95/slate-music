@@ -14,7 +14,7 @@ import {
 import { Toggle, IconButton } from './components';
 import type { Snapshot, Settings, Playback } from './types';
 import type { useUpdater } from './updater';
-import SoundSettings from './SoundSettings';
+import SoundSettings, { StudioCard } from './SoundSettings';
 import SharingSettings from './SharingSettings';
 export default function SettingsPanel({
   data,
@@ -172,6 +172,7 @@ export default function SettingsPanel({
       </section>
       <section>
         <h3>Playback</h3>
+        <StudioCard pb={pb} onPlayback={onPlayback} />
         <div className="setting-row">
           <span>
             <strong>Gapless playback</strong>
@@ -187,18 +188,21 @@ export default function SettingsPanel({
             Enabled
           </span>
         </div>
-        <label className="setting-row">
+        <label className={`setting-row ${pb.studio ? 'disabled' : ''}`}>
           <span>
             <strong>Crossfade</strong>
             <small>
-              {pb.output?.exclusive
-                ? 'Not used in exclusive mode, which sends every song untouched.'
-                : 'Blend the end of one track into the next.'}
+              {pb.studio
+                ? 'Set aside while Studio mode is on: every song plays to its real end.'
+                : pb.output?.exclusive
+                  ? 'Not used in exclusive mode, which sends every song untouched.'
+                  : 'Blend the end of one track into the next.'}
             </small>
           </span>
           <select
             aria-label="Crossfade"
             value={pb.crossfade}
+            disabled={!!pb.studio}
             onChange={(e) => onPlayback('crossfade', Number(e.target.value))}
           >
             {[0, 2, 4, 6, 8, 12].map((n) => (

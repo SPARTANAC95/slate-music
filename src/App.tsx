@@ -57,6 +57,7 @@ import {
   ChartColumnBig,
   CalendarHeart,
   WandSparkles,
+  AudioWaveform,
 } from 'lucide-react';
 import type { Album, Collection, Playback, Scan, Settings, Snapshot, Track } from './types';
 import {
@@ -265,6 +266,17 @@ export default function App() {
     },
     [notify],
   );
+  /** Studio mode on or off, with a word about what changed. */
+  const toggleStudio = () =>
+    command('studio', !pb?.studio).then(
+      (next) =>
+        next &&
+        notify(
+          next.studio
+            ? 'Studio mode on: every song as the artist mastered it.'
+            : 'Studio mode off: your equalizer, levelling and crossfade are back.',
+        ),
+    );
   const toggleMute = () => {
     if (!pb) return;
     if (pb.volume > 0) unmuteVolume.current = pb.volume;
@@ -871,6 +883,12 @@ export default function App() {
       ? [{ label: 'Turn off sleep timer', icon: <Moon size={16} />, keywords: 'sleep', run: () => command('sleep', null) }]
       : []),
     { label: pb?.shuffle ? 'Turn shuffle off' : 'Turn shuffle on', icon: <Shuffle size={16} />, run: () => command('shuffle', !pb?.shuffle) },
+    {
+      label: pb?.studio ? 'Turn Studio mode off' : 'Turn Studio mode on',
+      icon: <AudioWaveform size={16} />,
+      keywords: 'studio as mastered artist intended reference quality audiophile filmmaker director bit-perfect',
+      run: toggleStudio,
+    },
     { label: 'Mini-player', hint: 'Ctrl+M', icon: <Minimize2 size={16} />, run: () => task(() => invoke('mini_player')) },
     { label: 'Settings', icon: <SettingsIcon size={16} />, keywords: 'preferences equalizer output device loudness', run: () => setDialog('settings') },
     { label: 'Rescan library', icon: <RefreshCw size={16} />, keywords: 'refresh folders', run: () => task(() => invoke('rescan')) },
@@ -2324,6 +2342,20 @@ export default function App() {
           {progress}
         </div>
         <div className="player-tools">
+          <button
+            type="button"
+            className={`studio-pill ${pb.studio ? 'on' : ''}`}
+            aria-pressed={!!pb.studio}
+            title={
+              pb.studio
+                ? 'Studio mode is on: every song as the artist mastered it. Click to turn it off.'
+                : 'Studio mode: hear every song as the artist mastered it'
+            }
+            onClick={toggleStudio}
+          >
+            <AudioWaveform size={14} />
+            <span>Studio</span>
+          </button>
           <button
             type="button"
             data-menu-anchor
