@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -198,6 +199,45 @@ const LIBRARY_SORTS: Record<string, SortMode> = {
   'Recently played': 'recent',
 };
 const LIST_PAGES = ['Songs', 'Favorites', 'Recently played', 'Album', 'Artist', 'Collection', 'Queue'];
+/** What an album card does when opened or right-clicked: always the app's latest handlers. */
+type AlbumActions = { current: { open: (a: Album) => void; menu: (a: Album, x: number, y: number) => void } };
+/** One album in a grid. It is drawn again only when its album changes: a large library has
+ * thousands of these on the Albums page, and the app itself redraws several times a second
+ * while a song plays. */
+const AlbumCard = memo(function AlbumCard({ album: a, actions }: { album: Album; actions: AlbumActions }) {
+  return (
+    <button
+      className="album-card"
+      onClick={() => actions.current.open(a)}
+      draggable
+      onDragStart={(e) =>
+        startDrag(
+          e,
+          { ids: a.tracks.filter((t) => !t.missing).map((t) => t.id), rows: [], source: 'album' },
+          a.name,
+        )
+      }
+      onDragEnd={endDrag}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        actions.current.menu(a, e.clientX, e.clientY);
+      }}
+    >
+      <div className="cover-wrap">
+        <Art hash={a.artwork} name={a.name} />
+        <span className="cover-play">
+          <Play size={22} fill="currentColor" />
+        </span>
+      </div>
+      <strong title={a.name}>{a.name}</strong>
+      <span title={a.artist}>{a.artist}</span>
+      <small>
+        {a.year || 'Unknown year'}
+        {a.tracks.every((t) => t.format === 'FLAC') && <em>FLAC</em>}
+      </small>
+    </button>
+  );
+});
 export default function App() {
   const [data, setData] = useState<Snapshot | null>(null),
     [pb, setPb] = useState<Playback | null>(null),
@@ -1192,39 +1232,9 @@ export default function App() {
     setPlaylistName('');
     setAdding([]);
   }
-  const albumCard = (a: Album) => (
-    <button
-      className="album-card"
-      key={a.key}
-      onClick={() => openAlbum(a)}
-      draggable
-      onDragStart={(e) =>
-        startDrag(
-          e,
-          { ids: a.tracks.filter((t) => !t.missing).map((t) => t.id), rows: [], source: 'album' },
-          a.name,
-        )
-      }
-      onDragEnd={endDrag}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        albumMenu(a, e.clientX, e.clientY);
-      }}
-    >
-      <div className="cover-wrap">
-        <Art hash={a.artwork} name={a.name} />
-        <span className="cover-play">
-          <Play size={22} fill="currentColor" />
-        </span>
-      </div>
-      <strong title={a.name}>{a.name}</strong>
-      <span>{a.artist}</span>
-      <small>
-        {a.year || 'Unknown year'}
-        {a.tracks.every((t) => t.format === 'FLAC') && <em>FLAC</em>}
-      </small>
-    </button>
-  );
+  const albumActions = useRef({ open: openAlbum, menu: albumMenu });
+  albumActions.current = { open: openAlbum, menu: albumMenu };
+  const albumCard = (a: Album) => <AlbumCard key={a.key} album={a} actions={albumActions} />;
   const allPickedFavorite = pickedTracks.every((t) => t.favorite);
   // Songs still in the library whose hearts were removed lately and have not come back.
   const lostHearts = useMemo(
@@ -1305,6 +1315,7 @@ export default function App() {
         }}
         compact={compact}
         queue={isQueue}
+        album={page === 'Album' && !compact && !isQueue && !deferredQuery}
         rowIndices={isQueue ? visibleQueue.map((entry) => entry.index) : undefined}
         currentIndex={isQueue ? pb?.cursor : undefined}
         queueLength={isQueue ? pb?.queue.length : undefined}
@@ -1940,7 +1951,7 @@ export default function App() {
                 <Art hash={album.artwork} name={album.name} />
                 <div>
                   <span className="detail-type">Local album</span>
-                  <h1>{album.name}</h1>
+                  <h1 title={album.name}>{album.name}</h1>
                   <button className="text-button" onClick={() => openArtist(album.artist)}>
                     {album.artist}
                   </button>
@@ -2239,8 +2250,8 @@ export default function App() {
           </div>
           <div className="listening-title">
             <div>
-              <h2>{current?.title || 'Ready when you are.'}</h2>
-              <p>{current?.artist || 'Your next favorite is already here.'}</p>
+              <h2 title={current?.title}>{current?.title || 'Ready when you are.'}</h2>
+              <p title={current?.artist}>{current?.artist || 'Your next favorite is already here.'}</p>
             </div>
             <IconButton
               label="Favorite current track"
@@ -2259,7 +2270,7 @@ export default function App() {
                 if (a) openAlbum(a);
               }}
             >
-              {current.album}
+              <span title={current.album}>{current.album}</span>
               <ChevronRight size={14} />
             </button>
           )}

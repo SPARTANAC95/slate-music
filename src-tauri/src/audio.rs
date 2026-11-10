@@ -187,9 +187,13 @@ impl Deck {
     /// Jumps forward, keeping the position count in whole stereo frames.
     fn skip_to(&mut self, seconds: f64) -> Result<()> {
         let target = seconds.min((self.duration - 0.1).max(0.));
+        // A file that ends before its own header says it does (a download cut short, a
+        // damaged disc) can't be sought past its real end. Said plainly, not as decoder terms.
         self.source
             .try_seek(Duration::from_secs_f64(target))
-            .map_err(err)?;
+            .map_err(|_| {
+                "Couldn't jump to that point: the file ends early or is damaged.".to_string()
+            })?;
         if let Some(r) = self.resampler.as_mut() {
             r.reset();
         }

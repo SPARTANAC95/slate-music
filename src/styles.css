@@ -366,6 +366,12 @@ kbd {
   padding: 12px 13px;
   line-height: 1.8;
 }
+/* In a short window there is no room for the hint: better gone than cut in half. */
+@media (max-height: 900px) {
+  .sidebar-playlists > p {
+    display: none;
+  }
+}
 .playlist-link {
   background: transparent;
   border: 0;
@@ -618,6 +624,12 @@ kbd {
   text-align: left;
   min-width: 0;
 }
+/* Cards far off the screen are not laid out or painted until they are scrolled near: the
+   Albums page of a large library holds thousands of them. */
+.album-grid:not(.home-albums) > .album-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 150px auto 215px;
+}
 .cover-wrap {
   position: relative;
   overflow: hidden;
@@ -774,6 +786,37 @@ kbd {
   min-height: 1px;
   max-height: 700px;
   contain: strict;
+}
+/* An album's own page: the cover and the album's name are in its header already, so the rows
+   carry only the songs. The year stays when the songs' years differ (a compilation). */
+.track-table.album-view .table-head,
+.track-table.album-view .track-row {
+  grid-template-columns: 30px minmax(140px, 1fr) 38px 45px 100px;
+}
+.track-table.album-view.same-year .table-head,
+.track-table.album-view.same-year .track-row {
+  grid-template-columns: 30px minmax(140px, 1fr) 45px 100px;
+}
+.track-table.album-view .table-head > span:nth-child(3),
+.track-table.album-view .album-cell,
+.track-table.album-view .track-title > .art,
+.track-table.album-view.same-year .table-head > span:nth-child(4),
+.track-table.album-view.same-year .year-cell {
+  display: none;
+}
+/* The first song of each disc of a set, with the disc named above it. */
+.track-row.disc-start {
+  padding-top: 26px;
+}
+.disc-label {
+  position: absolute;
+  top: 9px;
+  left: 8px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8d8799;
+  pointer-events: none;
 }
 .track-row {
   padding: 0 8px;
@@ -937,9 +980,21 @@ kbd {
   margin: 9px 0 10px;
   line-height: 1.16;
   overflow-wrap: anywhere;
+  /* A very long name keeps to three lines (the whole of it is in its tooltip), so the songs
+     below stay on the page. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
 }
 .detail-hero .text-button {
   font-size: 13px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
 }
 .detail-hero p {
   font-size: 11px;
@@ -967,8 +1022,12 @@ kbd {
   background: transparent;
   padding: 15px 0;
   gap: 16px;
+  /* A long name wraps inside its card instead of widening the page. */
+  min-width: 0;
 }
 .artist-card > .art {
+  /* A circle whatever is in it: a picture, or the placeholder, which would otherwise stretch. */
+  flex: 0 0 70px;
   width: 70px;
   height: 70px;
   border-radius: 50%;
@@ -980,6 +1039,11 @@ kbd {
 }
 .artist-card h2 {
   font-size: 14px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
 }
 .artist-card p {
   font-size: 10px;
@@ -1216,11 +1280,20 @@ kbd {
   letter-spacing: -0.5px;
   overflow-wrap: anywhere;
   font-weight: 500;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
 }
 .listening-title p {
   font-size: 11px;
   margin-top: 5px;
   color: #80808e;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
 }
 .listening-title > .icon-button {
   margin-top: 0;
@@ -1236,6 +1309,21 @@ kbd {
   min-height: 30px;
   margin-top: 9px;
   text-align: left;
+}
+.album-link > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.album-link > svg {
+  flex: none;
+}
+/* The panel scrolls when it is full; nothing in it is squeezed into what follows. */
+.listening-panel > * {
+  flex-shrink: 0;
 }
 .listening-divider {
   height: 1px;
@@ -1324,7 +1412,8 @@ kbd {
   border-top: 1px solid #ffffff0c;
   background: #111113;
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(320px, 460px) minmax(220px, 1fr);
+  /* The tools on the right always get the room they need; the song on the left gives way. */
+  grid-template-columns: minmax(200px, 1fr) minmax(320px, 460px) minmax(max-content, 1fr);
   align-items: center;
   padding: 10px 24px;
   gap: 24px;
@@ -1352,6 +1441,8 @@ kbd {
   cursor: default;
 }
 .player-open > .art {
+  /* Never squeezed by a long title. */
+  flex: none;
   width: 55px;
   height: 55px;
   border-radius: 4px;
@@ -2411,7 +2502,7 @@ details.advanced[open] summary {
     width: 27px;
   }
   .player-bar {
-    grid-template-columns: minmax(190px, 1fr) minmax(290px, 360px) minmax(170px, 1fr);
+    grid-template-columns: minmax(170px, 1fr) minmax(280px, 360px) minmax(max-content, 1fr);
     gap: 18px;
     padding: 10px 18px;
   }
@@ -2481,7 +2572,7 @@ details.advanced[open] summary {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .player-bar {
-    grid-template-columns: minmax(180px, 1fr) minmax(260px, 330px) 155px;
+    grid-template-columns: minmax(120px, 1fr) minmax(250px, 330px) max-content;
     gap: 12px;
   }
   .player-tools input {
@@ -2733,16 +2824,45 @@ details.advanced[open] summary {
   font-weight: 650;
   letter-spacing: -0.02em;
   overflow-wrap: anywhere;
+  /* A very long title keeps to three lines, so the artist, album and quality stay in view. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  /* Room for letters that hang below the last line (g, y), which the clamp would crop. */
+  padding-bottom: 0.08em;
 }
 .np-meta p {
   margin-top: 6px;
   font-size: 15px;
   color: #ffffffc4;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
 }
 .np-album {
   margin-top: 6px;
   font-size: 12px;
   color: var(--np-accent) !important;
+  text-align: left;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+}
+/* In a short window the cover takes most of the height: fewer lines of text, so the album
+   and the sound quality under them stay in view. */
+@media (max-height: 900px) {
+  .np-meta h1 {
+    -webkit-line-clamp: 2;
+  }
+  .np-meta p,
+  .np-album {
+    -webkit-line-clamp: 1;
+  }
 }
 .np-meta .icon-button {
   color: #fff;

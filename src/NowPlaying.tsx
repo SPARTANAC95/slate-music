@@ -98,8 +98,8 @@ export default function NowPlaying({
           </div>
           <div className="np-meta">
             <div>
-              <h1>{track?.title || 'Nothing playing'}</h1>
-              <p>{track?.artist || 'Choose a song to begin.'}</p>
+              <h1 title={track?.title}>{track?.title || 'Nothing playing'}</h1>
+              <p title={track?.artist}>{track?.artist || 'Choose a song to begin.'}</p>
               {track && (
                 <button className="text-button np-album" onClick={() => onAlbum(track)}>
                   {track.album}

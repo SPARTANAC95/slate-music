@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type DragEvent,
@@ -212,6 +213,7 @@ export function TrackTable({
   onContext,
   compact = false,
   queue = false,
+  album = false,
   rowIndices,
   currentIndex,
   queueLength,
@@ -238,6 +240,9 @@ export function TrackTable({
   onContext?: (t: Track, index: number, x: number, y: number, row: number) => void;
   compact?: boolean;
   queue?: boolean;
+  /** The list is one album on its own page: its cover and name are not repeated on every
+   * row, and in the album's own order songs carry their track numbers, disc by disc. */
+  album?: boolean;
   rowIndices?: number[];
   currentIndex?: number;
   queueLength?: number;
@@ -259,12 +264,25 @@ export function TrackTable({
 }) {
   const parent = useRef<HTMLDivElement>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
+  // In the album's own order: track numbers as printed on it, and where each disc starts.
+  const numbered = album && (!sort || sort.mode === 'custom');
+  const discStarts = useMemo(
+    () =>
+      numbered && new Set(tracks.map((t) => t.disc)).size > 1
+        ? new Set(tracks.flatMap((t, i) => (i === 0 || tracks[i - 1].disc !== t.disc ? [i] : [])))
+        : null,
+    [numbered, tracks],
+  );
+  const sameYear =
+    album && tracks.every((t) => (t.originalYear || t.year) === (tracks[0].originalYear || tracks[0].year));
   const virtual = useVirtualizer({
     count: tracks.length,
     getScrollElement: () => parent.current,
-    estimateSize: () => 64,
+    estimateSize: (i) => (discStarts?.has(i) ? 90 : 64),
     overscan: 8,
   });
+  // Rows are laid out again when the discs' headings come or go.
+  useLayoutEffect(() => virtual.measure(), [discStarts]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const saved = listId ? (scrollMemory.get(listId) ?? 0) : 0;
     if (parent.current && listId && Math.abs(parent.current.scrollTop - saved) > 1)
@@ -308,7 +326,9 @@ export function TrackTable({
     return !!onReorder && !!d && d.source === listId;
   };
   return (
-    <div className={`track-table ${compact ? 'compact' : ''} ${queue ? 'queue-table' : ''}`}>
+    <div
+      className={`track-table ${compact ? 'compact' : ''} ${queue ? 'queue-table' : ''} ${album ? 'album-view' : ''} ${sameYear ? 'same-year' : ''}`}
+    >
       <div className="table-head">
         {heading('#', 'custom')}
         {heading('Title', 'title')}
@@ -347,7 +367,7 @@ export function TrackTable({
             return (
               <div
                 key={`${t.id}-${row.index}`}
-                className={`track-row ${active ? 'selected' : ''} ${isPicked ? 'picked' : ''} ${t.missing ? 'unavailable' : ''} ${drop}`}
+                className={`track-row ${active ? 'selected' : ''} ${isPicked ? 'picked' : ''} ${t.missing ? 'unavailable' : ''} ${discStarts?.has(row.index) ? 'disc-start' : ''} ${drop}`}
                 draggable={!!onDragRows}
                 onDragStart={(e) => onDragRows?.(row.index, e)}
                 onDragEnd={() => {
@@ -390,6 +410,7 @@ export function TrackTable({
                   onContext(t, index, e.clientX, e.clientY, row.index);
                 }}
               >
+                {discStarts?.has(row.index) && <span className="disc-label">Disc {t.disc}</span>}
                 <button
                   className="row-number"
                   disabled={t.missing}
@@ -404,7 +425,7 @@ export function TrackTable({
                     </span>
                   ) : (
                     <>
-                      <span>{String(index + 1).padStart(2, '0')}</span>
+                      <span>{String(numbered && t.track > 0 ? t.track : index + 1).padStart(2, '0')}</span>
                       <Play className="row-play" size={15} />
                     </>
                   )}

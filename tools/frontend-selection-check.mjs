@@ -34,6 +34,8 @@ try {
         added: 0, size: 1, originalYear: 0,
       });
       const tracks = [track('a'), track('b', 'WAV'), track('c', 'M4A'), track('d', 'M4A', 0)];
+      // One album on two discs, numbered as printed: 1, 2 and 1, 2.
+      tracks.forEach((t, i) => Object.assign(t, { disc: i < 2 ? 1 : 2, track: (i % 2) + 1 }));
       const state = {
         tracks,
         collections: [{
@@ -267,6 +269,56 @@ try {
     await page.locator('.notice', { hasText: '4 songs lost their hearts' }).getByRole('button', { name: 'Restore them' }).click();
     await page.waitForFunction(() => window.__selectionFixture.state.tracks.every((t) => t.favorite));
     assert.equal(await hearted(), 'abcd');
+    await page.close();
+  });
+
+  await test('An album page lists its songs disc by disc, without repeating the album', async () => {
+    const page = await fixture();
+    await page.getByRole('button', { name: 'Albums', exact: true }).click();
+    await page.locator('.album-card', { hasText: 'Fixture Album' }).click();
+    await page.locator('.track-table.album-view').waitFor();
+    assert.deepEqual(await page.locator('main .disc-label').allTextContents(), ['Disc 1', 'Disc 2']);
+    assert.deepEqual(await page.locator('main .row-number > span:first-child').allTextContents(), ['01', '02', '01', '02']);
+    assert.equal(await page.locator('main .album-cell').first().isVisible(), false, 'the album is named once, in the header');
+    assert.equal(await page.locator('main .track-title .art').first().isVisible(), false, 'and its cover shown once');
+    // The second disc's first row is taller by its heading, and nothing overlaps.
+    const tops = await page.locator('main .track-row').evaluateAll((rows) => rows.map((r) => Math.round(r.getBoundingClientRect().top)));
+    assert.deepEqual(tops.slice(1).map((top, i) => top - tops[i]), [90, 64, 90]);
+    // Sorted another way, it is a plain list again.
+    await page.getByRole('button', { name: 'Sort by Title' }).click();
+    await page.waitForFunction(() => !document.querySelector('main .disc-label'));
+    assert.deepEqual(await page.locator('main .row-number > span:first-child').allTextContents(), ['01', '02', '03', '04']);
+    // On Songs, rows keep their covers and albums.
+    await page.getByRole('button', { name: 'Songs', exact: true }).click();
+    await page.locator('main .track-row').first().waitFor();
+    assert.equal(await page.locator('main .album-cell').first().isVisible(), true);
+    await page.close();
+  });
+
+  await test('Very long names stay inside their places', async () => {
+    const page = await fixture();
+    const long = 'A Very Long Name That Goes On And On '.repeat(8).trim();
+    await page.evaluate((long) => {
+      const f = window.__selectionFixture;
+      Object.assign(f.state.tracks[2], { title: long, artist: long, album: long, albumArtist: long });
+      f.state.playback = { ...f.state.playback, queue: ['c'], cursor: 0, currentId: 'c' };
+      f.state.settings = { ...f.state.settings, showListening: true };
+      f.emit('library-changed', null);
+    }, long);
+    await page.locator('.listening-title h2', { hasText: 'A Very Long Name' }).waitFor();
+    const box = async (selector) => page.locator(selector).first().evaluate((el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, width: r.width, height: r.height }; });
+    const title = await box('.listening-title h2');
+    assert.ok(title.height < 90, 'the title in the listening panel keeps to three lines, was ' + title.height);
+    const artist = await box('.listening-title p');
+    const album = await box('.album-link');
+    assert.ok(album.top >= artist.bottom - 1, 'the album sits below the artist, not over it');
+    const art = await box('.player-open .art');
+    assert.ok(Math.abs(art.width - art.height) < 1 && art.width > 40, 'the cover in the player bar stays square');
+    await page.getByRole('button', { name: 'Artists', exact: true }).click();
+    await page.locator('.artist-card').first().waitFor();
+    const avatars = await page.locator('.artist-card > .art').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }));
+    assert.ok(avatars.every(([w, h]) => w === h), 'artists without a photo are circles too: ' + JSON.stringify(avatars));
+    assert.equal(await page.evaluate(() => { const m = document.querySelector('main'); return m.scrollWidth > m.clientWidth + 1; }), false, 'no sideways scrolling');
     await page.close();
   });
   assert.deepEqual(errors, [], 'no browser errors');
