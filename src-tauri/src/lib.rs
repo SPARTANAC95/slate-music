@@ -113,19 +113,15 @@ async fn favorite(
 #[tauri::command]
 async fn favorite_many(
     ids: Vec<String>,
+    value: Option<bool>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<()> {
-    let mut done = Vec::with_capacity(ids.len());
-    let result = ids.into_iter().try_for_each(|id| {
-        state.db.favorite(&id, true)?;
-        done.push(id);
-        Ok(())
-    });
-    if !done.is_empty() {
-        favorites_changed(&app, &done, true);
-    }
-    result
+    // Hearts unless told to take them away; all together, in one write to the disk.
+    let value = value.unwrap_or(true);
+    state.db.favorite_many(&ids, value)?;
+    favorites_changed(&app, &ids, value);
+    Ok(())
 }
 #[tauri::command]
 async fn save_collection(collection: Value, state: tauri::State<'_, AppState>) -> Result<()> {
@@ -206,10 +202,13 @@ async fn remove_folder(
         let mut folders = db.folders();
         folders.retain(|f| f != &folder);
         db.set("folders", &json!(folders))?;
-        for t in db.tracks()?.iter().filter(|t| t.folder == folder) {
-            db.missing(&t.id, true)?;
-        }
-        Ok(())
+        let gone: Vec<String> = db
+            .tracks()?
+            .into_iter()
+            .filter(|t| t.folder == folder)
+            .map(|t| t.id)
+            .collect();
+        db.missing_many(&gone, true)
     })
     .await??;
     library::watch(state.db.clone(), state.library.clone(), app.clone());

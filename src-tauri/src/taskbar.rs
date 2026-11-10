@@ -166,7 +166,12 @@ fn click(app: &AppHandle, id: u32) {
             if let Some(current) = state.engine.listening().id {
                 if let Ok(track) = state.db.track(&current) {
                     if state.db.favorite(&current, !track.favorite).is_ok() {
-                        let _ = app.emit("library-changed", ());
+                        // Only the heart changed: the windows update it without reading the
+                        // whole library again.
+                        let _ = app.emit(
+                            "favorites-changed",
+                            serde_json::json!({"ids": [current], "value": !track.favorite}),
+                        );
                     }
                 }
             }

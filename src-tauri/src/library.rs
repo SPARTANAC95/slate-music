@@ -1,6 +1,6 @@
 use crate::db::{err, now, Database, Result, Track};
 use lofty::{
-    file::{AudioFile, TaggedFileExt},
+    file::{AudioFile, FileType, TaggedFile, TaggedFileExt},
     tag::{Accessor, ItemKey},
 };
 use serde::Serialize;
@@ -9,10 +9,10 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc, Arc, Condvar, Mutex,
     },
-    time::UNIX_EPOCH,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
 
@@ -74,6 +74,10 @@ pub fn supported(path: &Path) -> bool {
 pub fn store_art(data: &[u8], db: &Database) -> Option<String> {
     cache_art(data, db)
 }
+/// Covers being made right now. A scan reads songs on several threads, and the songs of an
+/// album share one cover: the first thread makes it and the others wait for that one.
+static COVERS_BEING_MADE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+static COVER_MADE: Condvar = Condvar::new();
 fn cache_art(data: &[u8], db: &Database) -> Option<String> {
     if data.len() > 24_000_000 {
         return None;
@@ -84,19 +88,40 @@ fn cache_art(data: &[u8], db: &Database) -> Option<String> {
         dir.join(format!("{hash}.jpg")),
         dir.join(format!("{hash}-xl.jpg")),
     );
-    if !file.exists() || !large.exists() {
+    {
+        let mut busy = COVERS_BEING_MADE.lock().unwrap();
+        while busy.get_or_insert_with(HashSet::new).contains(&hash) {
+            busy = COVER_MADE.wait(busy).unwrap();
+        }
+        if file.exists() && large.exists() {
+            return Some(hash);
+        }
+        busy.get_or_insert_with(HashSet::new).insert(hash.clone());
+    }
+    let made = (|| {
         let img = image::ImageReader::new(std::io::Cursor::new(data))
             .with_guessed_format()
             .ok()?
             .decode()
             .ok()?;
+        // Written under another name first, so a cover is never shown half-written.
+        let write = |image: image::RgbImage, to: &Path| {
+            let part = to.with_extension("part.jpg");
+            image.save(&part).ok()?;
+            std::fs::rename(&part, to).ok()
+        };
         if !file.exists() {
-            fit(&img, 640).save(&file).ok()?;
+            write(fit(&img, 640), &file)?;
         }
         // A sharper copy for full-screen views and large, high-DPI screens.
-        let _ = fit(&img, 1600).save(&large);
+        let _ = write(fit(&img, 1600), &large);
+        Some(())
+    })();
+    if let Some(busy) = COVERS_BEING_MADE.lock().unwrap().as_mut() {
+        busy.remove(&hash);
     }
-    Some(hash)
+    COVER_MADE.notify_all();
+    made.map(|_| hash)
 }
 /// Shrinks to fit `max` pixels, never enlarging a smaller image.
 fn fit(img: &image::DynamicImage, max: u32) -> image::RgbImage {
@@ -240,25 +265,117 @@ fn folder_covers(path: &Path) -> Vec<PathBuf> {
 fn folder_cover(path: &Path) -> Option<PathBuf> {
     folder_covers(path).into_iter().next()
 }
+/// Reads a file's tags, going by its name first and then by what it really holds: an Opus
+/// song in an .ogg file, an MP3 that was named .flac. The flag says the name was wrong.
+fn read_tags(path: &Path) -> std::result::Result<(TaggedFile, bool), String> {
+    let by_name = match lofty::read_from_path(path) {
+        Ok(tagged) => return Ok((tagged, false)),
+        Err(e) => e,
+    };
+    lofty::probe::Probe::open(path)
+        .ok()
+        .and_then(|probe| probe.guess_file_type().ok())
+        .and_then(|probe| probe.read().ok())
+        .map(|tagged| (tagged, true))
+        .ok_or_else(|| by_name.to_string())
+}
+/// What a file's name says about a song without tags: (track number, artist, title).
+/// "07 Title", "07 - Title", "7. Title" and "Artist - Title" are understood. A bare number
+/// before a space ("10 Years Gone", "99 Luftballons") is part of the name, unless the folder
+/// is `numbered`: its files are plainly numbered, so "10 Title" there is the tenth song.
+pub fn from_file_name(stem: &str, numbered: bool) -> (u32, Option<String>, String) {
+    let stem = stem.trim();
+    let digits = stem.chars().take_while(char::is_ascii_digit).count();
+    let (number, rest) = stem.split_at(digits);
+    let after = rest.trim_start();
+    let marked = after.strip_prefix(['.', '-', '_', ')']);
+    let spaced = after.len() < rest.len() && !after.is_empty();
+    let (track, name) = match (digits, marked) {
+        (1..=3, Some(name)) if !name.trim().is_empty() => (number.parse().unwrap_or(0), name),
+        (2..=3, None) if spaced && (numbered || number.starts_with('0')) => {
+            (number.parse().unwrap_or(0), after)
+        }
+        _ => (0, stem),
+    };
+    let name = name.trim().trim_start_matches(['-', '_']).trim();
+    match name.split_once(" - ") {
+        Some((artist, title)) if !artist.trim().is_empty() && !title.trim().is_empty() => {
+            (track, Some(artist.trim().into()), title.trim().into())
+        }
+        _ if name.is_empty() => (0, None, stem.into()),
+        _ => (track, None, name.into()),
+    }
+}
+/// Whether the files beside this one are numbered the way ripped albums are ("01 Title",
+/// "02 - Title"), which tells a track number from a title that starts with a number.
+fn in_numbered_folder(path: &Path) -> bool {
+    let numbered = |name: &str| {
+        let mut c = name.chars();
+        c.next() == Some('0')
+            && c.next().is_some_and(|d| d.is_ascii_digit())
+            && c.next().is_some_and(|sep| " .-_".contains(sep))
+    };
+    path.parent()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .is_some_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| numbered(&entry.file_name().to_string_lossy()))
+        })
+}
 pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
-    let tagged = lofty::read_from_path(path).map_err(err)?;
-    let props = tagged.properties();
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+    let tags = read_tags(path);
+    // The length and rate the player itself finds, asked for only when the tags can't say:
+    // a file whose tags can't be read at all (raw AAC), or one that ends early.
+    let played = |known: f64| {
+        (known <= 0.)
+            .then(|| crate::audio::open(&path.to_string_lossy()).ok())
+            .flatten()
+            .map(|song| {
+                (
+                    song.total_duration().map_or(0., |d| d.as_secs_f64()),
+                    song.sample_rate(),
+                )
+            })
+    };
+    let (tagged, misnamed) = match tags {
+        Ok((tagged, misnamed)) => (Some(tagged), misnamed),
+        // No tags to read, but if it plays it belongs in the library, named after its file.
+        Err(why) => match played(0.) {
+            Some(_) => (None, false),
+            None => return Err(why),
+        },
+    };
+    let props = tagged.as_ref().map(|t| t.properties());
+    let tag = tagged
+        .as_ref()
+        .and_then(|t| t.primary_tag().or_else(|| t.first_tag()));
     let stem = path
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let title = tag
+    let tagged_title = tag
         .and_then(|t| t.title())
         .map(|v| v.to_string())
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or(stem);
-    let artist = tag
+        .filter(|v| !v.trim().is_empty());
+    let tagged_track = tag.and_then(|t| t.track()).filter(|n| *n > 0);
+    // The folder is only looked at for a name that could go either way ("10 Something").
+    let ambiguous = (tagged_title.is_none() || tagged_track.is_none())
+        && stem.chars().take_while(char::is_ascii_digit).count() >= 2
+        && !stem.starts_with('0');
+    let (named_track, named_artist, named_title) =
+        from_file_name(&stem, ambiguous && in_numbered_folder(path));
+    let tagged_artist = tag
         .and_then(|t| t.artist())
         .map(|v| v.to_string())
-        .filter(|v| !v.trim().is_empty())
+        .filter(|v| !v.trim().is_empty());
+    // The file's name speaks only where the tags are silent: with a title in the tags, an
+    // "Artist - Title" file name is not taken apart.
+    let artist = tagged_artist
+        .or_else(|| named_artist.filter(|_| tagged_title.is_none()))
         .unwrap_or_else(|| "Unknown artist".into());
+    let title = tagged_title.unwrap_or(named_title);
     let album = tag
         .and_then(|t| t.album())
         .map(|v| v.to_string())
@@ -294,6 +411,30 @@ pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
         }
     }
     let meta = path.metadata().map_err(err)?;
+    let mut duration = props.map_or(0., |p| p.duration().as_secs_f64());
+    let mut sample_rate = props.and_then(|p| p.sample_rate()).unwrap_or(0);
+    if let Some((length, rate)) = played(duration) {
+        duration = length;
+        if sample_rate == 0 {
+            sample_rate = rate;
+        }
+    }
+    // Named for what the file holds when its name says something else.
+    let format = match tagged.as_ref().filter(|_| misnamed).map(|t| t.file_type()) {
+        Some(FileType::Flac) => "FLAC".into(),
+        Some(FileType::Mpeg) => "MP3".into(),
+        Some(FileType::Mp4) => "M4A".into(),
+        Some(FileType::Opus) => "OPUS".into(),
+        Some(FileType::Vorbis) => "OGG".into(),
+        Some(FileType::Wav) => "WAV".into(),
+        Some(FileType::Aiff) => "AIFF".into(),
+        Some(FileType::Aac) => "AAC".into(),
+        _ => path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_uppercase(),
+    };
     Ok(Track {
         id: id_for(path),
         path: path.to_string_lossy().into(),
@@ -307,21 +448,116 @@ pub fn read_track(path: &Path, folder: &str, db: &Database) -> Result<Track> {
             .and_then(|t| t.get_string(&ItemKey::OriginalReleaseDate))
             .and_then(|date| date.get(..4)?.parse().ok())
             .unwrap_or(0),
-        track: tag.and_then(|t| t.track()).unwrap_or(0),
+        track: tagged_track.unwrap_or(named_track),
         disc: tag.and_then(|t| t.disk()).unwrap_or(1),
-        duration: props.duration().as_secs_f64(),
-        format: path
-            .extension()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_uppercase(),
-        sample_rate: props.sample_rate().unwrap_or(0),
-        bit_depth: props.bit_depth().unwrap_or(0),
+        duration,
+        format,
+        sample_rate,
+        bit_depth: props.and_then(|p| p.bit_depth()).unwrap_or(0),
         artwork,
         added: now(),
         size: meta.len(),
         ..Default::default()
     })
+}
+/// A file a scan has to read: new, changed, or with a cover that has since appeared.
+struct ToRead {
+    path: PathBuf,
+    id: String,
+    mtime: i64,
+}
+/// Songs are saved this many at a time, or sooner when this long has passed.
+const WRITE_BATCH: usize = 200;
+const WRITE_EVERY: Duration = Duration::from_millis(400);
+/// Reads `files` on several threads (tags, and covers, which take the longest) while this one
+/// saves what they find, a batch at a time. Returns the IDs of songs the library did not know.
+fn read_files(
+    db: &Database,
+    folder: &str,
+    files: &[ToRead],
+    known: &HashMap<&str, &Track>,
+    status: &mut ScanStatus,
+    progress: &mut impl FnMut(ScanStatus),
+) -> HashSet<String> {
+    let mut new_ids = HashSet::new();
+    // One core is left for the music.
+    let readers = std::thread::available_parallelism()
+        .map_or(2, |n| n.get().saturating_sub(1))
+        .clamp(1, 6)
+        .min(files.len());
+    let next = AtomicUsize::new(0);
+    let (found, results) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..readers {
+            let found = found.clone();
+            let next = &next;
+            scope.spawn(move || {
+                while let Some((i, file)) = Some(next.fetch_add(1, Ordering::Relaxed))
+                    .and_then(|i| Some((i, files.get(i)?)))
+                {
+                    if found.send((i, read_track(&file.path, folder, db))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(found);
+        let mut batch: Vec<(Track, i64)> = Vec::new();
+        let mut written = Instant::now();
+        let write = |batch: &mut Vec<(Track, i64)>,
+                     status: &mut ScanStatus,
+                     new_ids: &mut HashSet<String>| {
+            if batch.is_empty() {
+                return;
+            }
+            // Together when possible; if one song can't be saved, the others still are.
+            if db.upsert_many(batch).is_ok() {
+                status.changed += batch.len();
+            } else {
+                for (t, mtime) in batch.iter() {
+                    match db.upsert(t, *mtime) {
+                        Ok(()) => status.changed += 1,
+                        Err(e) => {
+                            new_ids.remove(&t.id);
+                            status.errors.push(e)
+                        }
+                    }
+                }
+            }
+            batch.clear();
+        };
+        for (i, read) in results {
+            let file = &files[i];
+            status.processed += 1;
+            match read {
+                Ok(mut t) => {
+                    match known.get(file.id.as_str()) {
+                        Some(old) => t.added = old.added,
+                        None => {
+                            new_ids.insert(file.id.clone());
+                        }
+                    }
+                    batch.push((t, file.mtime));
+                }
+                Err(e) => {
+                    if status.errors.len() < 30 {
+                        status.errors.push(format!(
+                            "{}: {}",
+                            file.path.file_name().unwrap_or_default().to_string_lossy(),
+                            e
+                        ));
+                    }
+                }
+            }
+            if batch.len() >= WRITE_BATCH || written.elapsed() >= WRITE_EVERY {
+                write(&mut batch, status, &mut new_ids);
+                written = Instant::now();
+                progress(status.clone());
+            }
+        }
+        write(&mut batch, status, &mut new_ids);
+    });
+    new_ids
 }
 pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
     let mut status = ScanStatus {
@@ -340,13 +576,20 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
         let root = Path::new(&folder);
         let mut seen = HashSet::new();
         let mut complete = true;
+        let in_folder = |t: &&Track| t.folder == folder;
         if !root.exists() {
             status.errors.push(format!("Folder unavailable: {folder}"));
-            for t in known.iter().filter(|t| t.folder == folder) {
-                let _ = db.missing(&t.id, true);
-            }
+            let gone: Vec<String> = known
+                .iter()
+                .filter(in_folder)
+                .map(|t| t.id.clone())
+                .collect();
+            let _ = db.missing_many(&gone, true);
             continue;
         }
+        // First, a quick walk to see what is there; the files that need reading are read
+        // afterwards, several at a time.
+        let mut to_read = Vec::new();
         for entry in walkdir::WalkDir::new(root).follow_links(false) {
             let entry = match entry {
                 Ok(e) => e,
@@ -364,11 +607,11 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
             let path = entry.path();
             let id = id_for(path);
             seen.insert(id.clone());
-            status.processed += 1;
             let meta = match path.metadata() {
                 Ok(m) => m,
                 Err(e) => {
                     complete = false;
+                    status.processed += 1;
                     status.errors.push(e.to_string());
                     continue;
                 }
@@ -387,42 +630,35 @@ pub fn scan(db: &Database, mut progress: impl FnMut(ScanStatus)) -> ScanStatus {
                     .entry(path.parent().map(Path::to_path_buf).unwrap_or_default())
                     .or_insert_with(|| folder_cover(path).is_some());
             if new_cover || !db.unchanged(&id, mtime, meta.len()) {
-                match read_track(path, &folder, db) {
-                    Ok(mut t) => {
-                        if let Some(old) = known_by_id.get(id.as_str()) {
-                            t.added = old.added;
-                        }
-                        if let Err(e) = db.upsert(&t, mtime) {
-                            status.errors.push(e)
-                        } else {
-                            if !known_by_id.contains_key(id.as_str()) {
-                                new_ids.insert(id.clone());
-                            }
-                            status.changed += 1
-                        }
-                    }
-                    Err(e) => {
-                        if status.errors.len() < 30 {
-                            status.errors.push(format!(
-                                "{}: {}",
-                                path.file_name().unwrap_or_default().to_string_lossy(),
-                                e
-                            ));
-                        }
-                    }
+                to_read.push(ToRead {
+                    path: path.to_path_buf(),
+                    id,
+                    mtime,
+                });
+            } else {
+                status.processed += 1;
+                if status.processed.is_multiple_of(500) {
+                    progress(status.clone());
                 }
             }
-            if status.processed.is_multiple_of(12) {
-                progress(status.clone());
-            }
         }
+        progress(status.clone());
+        new_ids.extend(read_files(
+            db,
+            &folder,
+            &to_read,
+            &known_by_id,
+            &mut status,
+            &mut progress,
+        ));
         if complete {
-            for t in known
+            let gone: Vec<String> = known
                 .iter()
-                .filter(|t| t.folder == folder && !seen.contains(&t.id))
-            {
-                let _ = db.missing(&t.id, true);
-            }
+                .filter(in_folder)
+                .filter(|t| !t.missing && !seen.contains(&t.id))
+                .map(|t| t.id.clone())
+                .collect();
+            let _ = db.missing_many(&gone, true);
         }
     }
     match db.relink_moved(&new_ids) {
@@ -499,6 +735,153 @@ pub fn watch(db: Arc<Database>, lib: Arc<Library>, app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_file_without_tags_is_named_after_its_file() {
+        let read = |stem: &str, numbered: bool| {
+            let (track, artist, title) = from_file_name(stem, numbered);
+            (track, artist.unwrap_or_default(), title)
+        };
+        let name = |stem: &str| read(stem, false);
+        let is =
+            |track: u32, artist: &str, title: &str| (track, artist.to_string(), title.to_string());
+        assert_eq!(name("07 just a number"), is(7, "", "just a number"));
+        assert_eq!(name("07 - Title"), is(7, "", "Title"));
+        assert_eq!(name("7. Title"), is(7, "", "Title"));
+        assert_eq!(name("12_title"), is(12, "", "title"));
+        assert_eq!(name("Some Band - A Song"), is(0, "Some Band", "A Song"));
+        assert_eq!(
+            name("01 - Some Band - A Song - Live"),
+            is(1, "Some Band", "A Song - Live")
+        );
+        // Numbers that are part of the name stay in it.
+        assert_eq!(name("99 Luftballons"), is(0, "", "99 Luftballons"));
+        assert_eq!(name("7 Years"), is(0, "", "7 Years"));
+        assert_eq!(name("1979"), is(0, "", "1979"));
+        assert_eq!(name("2112 - Overture"), is(0, "2112", "Overture"));
+        assert_eq!(name("04 7 Years"), is(4, "", "7 Years"));
+        assert_eq!(name("Blink-182"), is(0, "", "Blink-182"));
+        assert_eq!(name("01 "), is(0, "", "01"));
+        assert_eq!(name("07 -"), is(0, "", "07 -"));
+        // Beside files numbered "01 ...", "02 ...", a bare number is a track number too.
+        assert_eq!(name("10 Years Gone"), is(0, "", "10 Years Gone"));
+        assert_eq!(read("10 Years Gone", true), is(10, "", "Years Gone"));
+        assert_eq!(read("1979", true), is(0, "", "1979"));
+        assert_eq!(read("7 Years", true), is(0, "", "7 Years"));
+        assert_eq!(name("夜に駆ける"), is(0, "", "夜に駆ける"));
+    }
+    /// Writes a one-second WAV file, which needs no encoder.
+    fn second_of_sound(path: &Path) {
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        for i in 0..88200 {
+            w.write_sample((i % 100) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+    #[test]
+    fn untagged_and_misnamed_files_are_still_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        std::fs::create_dir_all(music.join("Loose Songs")).unwrap();
+        let db = Database::open(&dir.path().join("profile")).unwrap();
+        let folder = music.to_string_lossy().to_string();
+        db.set("folders", &serde_json::json!([folder])).unwrap();
+        second_of_sound(&music.join("Loose Songs/03 Some Band - A Song.wav"));
+        // A WAV file that was named .flac: read for what it is.
+        second_of_sound(&music.join("Loose Songs/wrong name.flac"));
+        // Not music at all, whatever its name says.
+        std::fs::write(music.join("Loose Songs/notes.mp3"), "just some text").unwrap();
+        let status = scan(&db, |_| {});
+        assert_eq!((status.processed, status.changed), (3, 2));
+        assert_eq!(status.errors.len(), 1, "{:?}", status.errors);
+        assert!(status.errors[0].starts_with("notes.mp3"));
+        let tracks = db.tracks().unwrap();
+        let named = tracks.iter().find(|t| t.title == "A Song").unwrap();
+        assert_eq!(
+            (named.track, named.artist.as_str(), named.album.as_str()),
+            (3, "Some Band", "Loose Songs")
+        );
+        assert!((named.duration - 1.).abs() < 0.01);
+        let misnamed = tracks.iter().find(|t| t.title == "wrong name").unwrap();
+        assert_eq!(
+            (misnamed.format.as_str(), misnamed.sample_rate),
+            ("WAV", 44100)
+        );
+        // Nothing is read twice.
+        let again = scan(&db, |_| {});
+        assert_eq!((again.processed, again.changed), (3, 0));
+    }
+    #[test]
+    fn a_large_folder_is_read_on_several_threads_and_saved_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        let db = Database::open(&dir.path().join("profile")).unwrap();
+        db.set("folders", &serde_json::json!([music.to_string_lossy()]))
+            .unwrap();
+        // More songs than one batch of writes, sharing one cover per album.
+        for album in 0..5 {
+            let folder = music.join(format!("Album {album}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            image::RgbImage::from_pixel(64, 64, image::Rgb([album as u8 * 40, 90, 120]))
+                .save(folder.join("cover.jpg"))
+                .unwrap();
+            for song in 0..90 {
+                second_of_sound(&folder.join(format!("{song:02} Song {album}-{song}.wav")));
+            }
+        }
+        let mut reports = 0;
+        let status = scan(&db, |_| reports += 1);
+        assert_eq!((status.processed, status.changed), (450, 450));
+        assert!(status.errors.is_empty(), "{:?}", status.errors);
+        assert!(reports >= 4, "progress is reported as batches are saved");
+        let tracks = db.tracks().unwrap();
+        assert_eq!(tracks.len(), 450);
+        let covers: HashSet<_> = tracks.iter().map(|t| t.artwork.clone().unwrap()).collect();
+        assert_eq!(covers.len(), 5, "one cover per album, made once");
+        assert!(tracks
+            .iter()
+            .all(|t| t.track < 90 && t.title.starts_with("Song ")));
+        let left: Vec<_> = std::fs::read_dir(dir.path().join("profile/artwork"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".part"))
+            .collect();
+        assert!(left.is_empty(), "no half-written covers are left: {left:?}");
+        // A folder taken away marks every song of it unavailable at once.
+        std::fs::rename(&music, dir.path().join("elsewhere")).unwrap();
+        scan(&db, |_| {});
+        assert!(db.tracks().unwrap().iter().all(|t| t.missing));
+    }
+    /// How long a first scan and a rescan of a real folder take. The music is only read.
+    /// `SLATE_BENCH_LIBRARY=<folder> cargo test --release --lib real_folder -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn real_folder_scan_timings() {
+        let folder = std::env::var("SLATE_BENCH_LIBRARY").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.set("folders", &serde_json::json!([folder])).unwrap();
+        for pass in ["first scan", "rescan, nothing changed"] {
+            let started = std::time::Instant::now();
+            let status = scan(&db, |_| {});
+            println!(
+                "{pass}: {:?} for {} songs ({} changed, {} notices)",
+                started.elapsed(),
+                status.processed,
+                status.changed,
+                status.errors.len()
+            );
+        }
+        let covers = std::fs::read_dir(dir.path().join("artwork"))
+            .unwrap()
+            .count();
+        println!("{covers} cover files written");
+    }
     #[test]
     fn scan_requests_arriving_during_a_scan_are_not_dropped() {
         let library = Library::new();

@@ -27,9 +27,69 @@ pub fn open(path: &str) -> Result<StreamSource> {
             return Ok(Box::new(opus));
         }
     }
-    Ok(Box::new(
-        Decoder::try_from(File::open(path).map_err(err)?).map_err(err)?,
-    ))
+    match Decoder::try_from(File::open(path).map_err(err)?) {
+        Ok(decoder) => Ok(Box::new(Primed::new(decoder))),
+        Err(e) => {
+            // A file named for another format can still hold Opus.
+            if !ogg {
+                if let Ok(Some(opus)) = crate::opus::OpusSource::open(path) {
+                    return Ok(Box::new(opus));
+                }
+            }
+            Err(err(e))
+        }
+    }
+}
+/// A rodio decoder with its first sample already in hand.
+///
+/// rodio's decoders say how long the block they decoded last is, and its rate converter takes
+/// that many samples before asking again. A decoder that has only just been opened reports
+/// the first block of the file, and in every Ogg Vorbis file that block decodes to nothing:
+/// the converter then takes nothing and the song is over before it starts. Asking for one
+/// sample makes the decoder move on to the first block with sound in it.
+pub struct Primed<S> {
+    inner: S,
+    held: Option<f32>,
+}
+impl<S: Source<Item = f32>> Primed<S> {
+    pub fn new(mut inner: S) -> Self {
+        let held = inner.next();
+        Self { inner, held }
+    }
+}
+impl<S: Source<Item = f32>> Iterator for Primed<S> {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        self.held.take().or_else(|| self.inner.next())
+    }
+}
+impl<S: Source<Item = f32>> Source for Primed<S> {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+    fn try_seek(
+        &mut self,
+        position: Duration,
+    ) -> std::result::Result<(), rodio::source::SeekError> {
+        // The decoder keeps left and right in step across a seek by counting what it has
+        // handed out. The sample held here was never passed on, so the rest of its frame is
+        // dropped too: the decoder then starts, as its listener expects, on a whole frame.
+        if self.held.take().is_some() {
+            for _ in 1..self.inner.channels() {
+                self.inner.next();
+            }
+        }
+        self.inner.try_seek(position)
+    }
 }
 pub struct Deck {
     pub id: String,
@@ -1799,6 +1859,90 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A stand-in for a rodio decoder: sound in blocks, where `current_span_len` is the
+    /// length of the block decoded last and blocks that decode to nothing are passed over
+    /// only when a sample is asked for. Samples count up from 0, alternating left and right.
+    struct Blocks {
+        blocks: Vec<usize>,
+        block: usize,
+        within: usize,
+        given: usize,
+        /// Counted by the decoder itself, as rodio's does, to keep the channels in step.
+        offset: usize,
+    }
+    impl Blocks {
+        fn new(blocks: &[usize]) -> Self {
+            Self {
+                blocks: blocks.to_vec(),
+                block: 0,
+                within: 0,
+                given: 0,
+                offset: 0,
+            }
+        }
+    }
+    impl Iterator for Blocks {
+        type Item = f32;
+        fn next(&mut self) -> Option<f32> {
+            while self.within >= self.blocks[self.block] {
+                if self.block + 1 == self.blocks.len() {
+                    return None;
+                }
+                self.block += 1;
+                self.within = 0;
+            }
+            self.within += 1;
+            self.given += 1;
+            self.offset += 1;
+            Some((self.given - 1) as f32)
+        }
+    }
+    impl Source for Blocks {
+        fn current_span_len(&self) -> Option<usize> {
+            Some(self.blocks[self.block])
+        }
+        fn channels(&self) -> u16 {
+            2
+        }
+        fn sample_rate(&self) -> u32 {
+            RATE
+        }
+        fn total_duration(&self) -> Option<Duration> {
+            None
+        }
+        fn try_seek(&mut self, _: Duration) -> std::result::Result<(), rodio::source::SeekError> {
+            // Lands on a frame, then steps to the channel it believes is due.
+            self.given = 1000 + self.offset % 2;
+            Ok(())
+        }
+    }
+    #[test]
+    fn a_song_whose_first_block_is_empty_still_plays() {
+        // Every Ogg Vorbis file starts with a block that decodes to nothing.
+        let total = 6 + 8 + 4;
+        let unprimed = UniformSourceIterator::new(Blocks::new(&[0, 6, 8, 0, 4]), 2, RATE);
+        assert_eq!(unprimed.count(), 0, "what rodio's converter makes of it");
+        let primed =
+            UniformSourceIterator::new(Primed::new(Blocks::new(&[0, 6, 8, 0, 4])), 2, RATE);
+        let played: Vec<f32> = primed.collect();
+        assert_eq!(played.len(), total);
+        assert!(played.iter().enumerate().all(|(i, s)| *s == i as f32));
+        // Nothing is lost or repeated when the first block has sound, or when there is none.
+        assert_eq!(Primed::new(Blocks::new(&[4, 6])).count(), 10);
+        assert_eq!(Primed::new(Blocks::new(&[0])).count(), 0);
+    }
+    #[test]
+    fn seeking_a_song_just_opened_keeps_left_and_right_in_place() {
+        // Resuming where you left off seeks before anything has played.
+        let mut fresh = Primed::new(Blocks::new(&[0, 6, 8]));
+        fresh.try_seek(Duration::from_secs(1)).unwrap();
+        assert_eq!(fresh.next(), Some(1000.), "a left sample comes first");
+        // Part-way through a frame, the decoder carries on with the channel that is due.
+        let mut playing = Primed::new(Blocks::new(&[6, 8]));
+        assert_eq!(playing.by_ref().take(3).count(), 3);
+        playing.try_seek(Duration::from_secs(1)).unwrap();
+        assert_eq!(playing.next(), Some(1001.), "the right sample that was due");
+    }
     fn deck(id: &str, index: usize, value: f32, frames: usize) -> Deck {
         Deck {
             id: id.into(),

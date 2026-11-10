@@ -1044,8 +1044,7 @@ export default function App() {
     if (!ids.length) return;
     await task(
       async () => {
-        if (value) await invoke('favorite_many', { ids });
-        else for (const id of ids) await invoke('favorite', { id, value: false });
+        await invoke('favorite_many', { ids, value });
         const changed = new Set(ids);
         setData((d) =>
           d

@@ -51,6 +51,7 @@ pub struct YearRequest {
     pub title: String,
     pub album_year: u32,
 }
+const UPSERT: &str = "INSERT INTO tracks(id,path,folder,mtime,size,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET path=excluded.path,folder=excluded.folder,mtime=excluded.mtime,size=excluded.size,data=excluded.data,missing=0";
 pub struct Database {
     pub conn: Mutex<Connection>,
     pub directory: PathBuf,
@@ -426,8 +427,65 @@ impl Database {
         Ok(t)
     }
     pub fn upsert(&self, t: &Track, mtime: i64) -> Result<()> {
-        self.conn.lock().unwrap().execute("INSERT INTO tracks(id,path,folder,mtime,size,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET path=excluded.path,folder=excluded.folder,mtime=excluded.mtime,size=excluded.size,data=excluded.data,missing=0",params![t.id,t.path,t.folder,mtime,t.size,serde_json::to_string(t).map_err(err)?]).map_err(err)?;
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                UPSERT,
+                params![
+                    t.id,
+                    t.path,
+                    t.folder,
+                    mtime,
+                    t.size,
+                    serde_json::to_string(t).map_err(err)?
+                ],
+            )
+            .map_err(err)?;
         Ok(())
+    }
+    /// Saves many songs with one write to the disk instead of one each: a first scan of a
+    /// large library spends most of its database time waiting for those writes.
+    pub fn upsert_many(&self, songs: &[(Track, i64)]) -> Result<()> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction().map_err(err)?;
+        {
+            let mut save = tx.prepare(UPSERT).map_err(err)?;
+            for (t, mtime) in songs {
+                save.execute(params![
+                    t.id,
+                    t.path,
+                    t.folder,
+                    mtime,
+                    t.size,
+                    serde_json::to_string(t).map_err(err)?
+                ])
+                .map_err(err)?;
+            }
+        }
+        tx.commit().map_err(err)
+    }
+    /// Marks many songs unavailable (or available again) with one write to the disk.
+    pub fn missing_many(&self, ids: &[String], value: bool) -> Result<()> {
+        self.set_many("UPDATE tracks SET missing=?1 WHERE id=?2", ids, value)
+    }
+    /// Hearts many songs (or takes their hearts away) with one write to the disk.
+    pub fn favorite_many(&self, ids: &[String], value: bool) -> Result<()> {
+        self.set_many("UPDATE tracks SET favorite=?1 WHERE id=?2", ids, value)
+    }
+    fn set_many(&self, sql: &str, ids: &[String], value: bool) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction().map_err(err)?;
+        {
+            let mut change = tx.prepare(sql).map_err(err)?;
+            for id in ids {
+                change.execute(params![value, id]).map_err(err)?;
+            }
+        }
+        tx.commit().map_err(err)
     }
     pub fn unchanged(&self, id: &str, mtime: i64, size: u64) -> bool {
         self.conn
@@ -698,6 +756,130 @@ mod tests {
             d.years_needed().unwrap().is_empty(),
             "a miss is not retried right away"
         );
+    }
+    /// How long the library's everyday work takes with many songs. Run with
+    /// `cargo test --release --lib large_library -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn large_library_timings() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Database::open(dir.path()).unwrap();
+        let count: usize = std::env::var("SLATE_BENCH_SONGS")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(20_000);
+        let song = |i: usize| Track {
+            id: format!("{i:064x}"),
+            path: format!(
+                "D:/Music/Artist {}/Album {}/{:02} Song number {i}.flac",
+                i / 120,
+                i / 12,
+                i % 12
+            ),
+            folder: "D:/Music".into(),
+            title: format!("Song number {i}"),
+            artist: format!("Artist {}", i / 120),
+            album: format!("Album {}", i / 12),
+            album_artist: format!("Artist {}", i / 120),
+            year: 1970 + (i % 50) as u32,
+            track: (i % 12) as u32 + 1,
+            disc: 1,
+            duration: 200.,
+            format: "FLAC".into(),
+            sample_rate: 44100,
+            bit_depth: 16,
+            artwork: Some(format!("{:064x}", i / 12)),
+            added: 1,
+            size: 30_000_000,
+            ..Default::default()
+        };
+        let time = |what: &str, work: &mut dyn FnMut()| {
+            let started = std::time::Instant::now();
+            work();
+            println!("{what}: {:?}", started.elapsed());
+        };
+        let songs: Vec<Track> = (0..count).map(song).collect();
+        time(
+            &format!("{count} songs written one at a time, as before"),
+            &mut || {
+                for t in &songs {
+                    d.upsert(t, 1).unwrap();
+                }
+            },
+        );
+        let batch: Vec<(Track, i64)> = songs.iter().map(|t| (t.clone(), 2)).collect();
+        time(
+            &format!("{count} songs written 200 at a time, as a scan does"),
+            &mut || {
+                for part in batch.chunks(200) {
+                    d.upsert_many(part).unwrap();
+                }
+            },
+        );
+        time("rescan asks whether each is unchanged", &mut || {
+            for t in &songs {
+                assert!(d.unchanged(&t.id, 2, t.size));
+            }
+        });
+        time("tracks()", &mut || {
+            assert_eq!(d.tracks().unwrap().len(), count);
+        });
+        time("snapshot() to a JSON string", &mut || {
+            let text = d.snapshot().unwrap().to_string();
+            println!("  {} MB", text.len() / 1_000_000);
+        });
+        time("one song by id", &mut || {
+            d.track(&songs[count / 2].id).unwrap();
+        });
+        let ids: Vec<String> = songs[..1000].iter().map(|t| t.id.clone()).collect();
+        time("heart 1,000 songs", &mut || {
+            d.favorite_many(&ids, true).unwrap();
+        });
+        time("mark 1,000 songs missing", &mut || {
+            d.missing_many(&ids, true).unwrap();
+        });
+        time("a play is recorded", &mut || {
+            d.played(&songs[5].id).unwrap();
+        });
+        time("album_tracks()", &mut || {
+            d.album_tracks("Album 7", "Artist 0").unwrap();
+        });
+    }
+    #[test]
+    fn many_songs_are_saved_and_changed_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Database::open(dir.path()).unwrap();
+        let song = |id: &str| Track {
+            id: id.into(),
+            path: format!("{id}.flac"),
+            title: id.into(),
+            ..Default::default()
+        };
+        d.upsert(&song("a"), 1).unwrap();
+        d.favorite("a", true).unwrap();
+        d.played("a").unwrap();
+        // Saved again in a batch, a song keeps its heart and plays, as with one at a time.
+        let mut changed = song("a");
+        changed.title = "A, retagged".into();
+        d.upsert_many(&[(changed, 2), (song("b"), 2), (song("c"), 2)])
+            .unwrap();
+        let a = d.track("a").unwrap();
+        assert_eq!(
+            (a.title.as_str(), a.favorite, a.play_count),
+            ("A, retagged", true, 1)
+        );
+        assert!(d.unchanged("b", 2, 0) && !d.unchanged("b", 1, 0));
+        let ids = ["b".to_string(), "c".to_string(), "not there".to_string()];
+        d.favorite_many(&ids, true).unwrap();
+        d.missing_many(&ids[..1], true).unwrap();
+        d.favorite_many(&[], true).unwrap();
+        let state = |id: &str| {
+            let t = d.track(id).unwrap();
+            (t.favorite, t.missing)
+        };
+        assert_eq!((state("b"), state("c")), ((true, true), (true, false)));
+        d.favorite_many(&ids, false).unwrap();
+        assert_eq!((state("a"), state("b")), ((true, false), (false, true)));
     }
     #[test]
     fn migration_persistence_and_scan_preserves_user_data() {
