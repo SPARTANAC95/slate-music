@@ -535,7 +535,12 @@ export default function App() {
     };
   }, [tracks, albums, plays, trackMap]);
   const songIndex = useMemo(
-    () => searchIndex(tracks, (t) => `${t.title} ${t.artist} ${t.album}`),
+    // The album's artist too, so a compilation's songs are found under "Various Artists".
+    () =>
+      searchIndex(
+        tracks,
+        (t) => `${t.title} ${t.artist} ${t.album}${t.albumArtist !== t.artist ? ' ' + t.albumArtist : ''}`,
+      ),
     [tracks],
   );
   const albumIndex = useMemo(

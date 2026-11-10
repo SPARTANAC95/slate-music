@@ -9,6 +9,19 @@ describe('half-typed words with a typo', () => {
     expect(search('beetl', index(['The Beatles'], (t) => t))).toEqual(['The Beatles']);
   });
 });
+describe('names with marks inside them', () => {
+  const names = index(['AC/DC', 'R.E.M.', 'Blink-182', "She's Lost Control", "Guns N' Roses", 'P!nk'], (t) => t);
+  it('are found typed straight through, and as written', () => {
+    expect(search('acdc', names)).toEqual(['AC/DC']);
+    expect(search('ac/dc', names)).toEqual(['AC/DC']);
+    expect(search('ac dc', names)).toEqual(['AC/DC']);
+    expect(search('rem', names)).toEqual(['R.E.M.']);
+    expect(search('blink182', names)).toEqual(['Blink-182']);
+    expect(search('blink 182', names)).toEqual(['Blink-182']);
+    expect(search('shes lost', names)).toEqual(["She's Lost Control"]);
+    expect(search('guns n roses', names)).toEqual(["Guns N' Roses"]);
+  });
+});
 describe('search', () => {
   it('ranks whole-phrase starts and exact words first', () => {
     expect(search('black', entries)).toEqual(['Black Hole Sun', 'Fell on Black Days', 'Blackbird']);

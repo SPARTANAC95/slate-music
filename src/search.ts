@@ -31,8 +31,19 @@ export interface Indexed<T> {
 }
 export function index<T>(items: T[], text: (item: T) => string): Indexed<T>[] {
   return items.map((item) => {
-    const t = normalize(text(item));
-    return { item, text: t, words: t.split(' ') };
+    const raw = text(item);
+    const t = normalize(raw);
+    const words = t.split(' ');
+    // Names written with marks inside them are also found typed straight through:
+    // "acdc" for AC/DC, "rem" for R.E.M., "blink182" for Blink-182, "shes" for She's.
+    for (const part of raw.split(/\s+/)) {
+      const pieces = normalize(part);
+      if (pieces.includes(' ')) {
+        const joined = pieces.replace(/ /g, '');
+        if (!words.includes(joined)) words.push(joined);
+      }
+    }
+    return { item, text: t, words };
   });
 }
 
